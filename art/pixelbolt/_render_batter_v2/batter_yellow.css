@@ -1,0 +1,41 @@
+/* Pixelbolt: atlas coordinates are pixels at the exported scale. */
+.pf-batter_yellow {
+  display: inline-block;
+  width: 64px; height: 80px;
+  background-image: url("batter_yellow.png");
+  background-repeat: no-repeat; image-rendering: pixelated;
+}
+.pf-batter_yellow-ready { background-position: -0px -0px; animation: pf-batter_yellow-ready 520ms steps(1, end) infinite; }
+@keyframes pf-batter_yellow-ready {
+  0% { background-position: -0px -0px; }
+  50% { background-position: -64px -0px; }
+  100% { background-position: -0px -0px; }
+}
+.pf-batter_yellow-load { background-position: -128px -0px; animation: pf-batter_yellow-load 130ms steps(1, end) 1 forwards; }
+@keyframes pf-batter_yellow-load {
+  0% { background-position: -128px -0px; }
+  100% { background-position: -128px -0px; }
+}
+.pf-batter_yellow-swing_early { background-position: -192px -0px; animation: pf-batter_yellow-swing_early 70ms steps(1, end) 1 forwards; }
+@keyframes pf-batter_yellow-swing_early {
+  0% { background-position: -192px -0px; }
+  100% { background-position: -192px -0px; }
+}
+.pf-batter_yellow-swing_contact { background-position: -256px -0px; animation: pf-batter_yellow-swing_contact 70ms steps(1, end) 1 forwards; }
+@keyframes pf-batter_yellow-swing_contact {
+  0% { background-position: -256px -0px; }
+  100% { background-position: -256px -0px; }
+}
+.pf-batter_yellow-follow_through { background-position: -320px -0px; animation: pf-batter_yellow-follow_through 230ms steps(1, end) 1 forwards; }
+@keyframes pf-batter_yellow-follow_through {
+  0% { background-position: -320px -0px; }
+  39.13043478% { background-position: -384px -0px; }
+  100% { background-position: -384px -0px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-batter_yellow-ready { animation: none; }
+  .pf-batter_yellow-load { animation: none; }
+  .pf-batter_yellow-swing_early { animation: none; }
+  .pf-batter_yellow-swing_contact { animation: none; }
+  .pf-batter_yellow-follow_through { animation: none; }
+}

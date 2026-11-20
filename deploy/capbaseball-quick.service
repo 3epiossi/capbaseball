@@ -1,0 +1,13 @@
+# Cloudflare quick tunnel (trycloudflare.com) -> http://127.0.0.1:8788
+[Unit]
+Description=Cap Baseball Cloudflare quick tunnel
+After=network-online.target capbaseball.service
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=%h/cloudflared/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8788
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

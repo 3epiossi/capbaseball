@@ -1,0 +1,16 @@
+# systemd user service. Copied by scripts/deploy.sh to ~/.config/systemd/user/
+[Unit]
+Description=Cap Baseball game server
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=%h/capbaseball/current
+ExecStart=%h/node/bin/node dist-server/index.mjs
+Environment=HOST=127.0.0.1 PORT=8788 NODE_ENV=production MATCH_LOG=%h/capbaseball/data/matches.jsonl DRAIN_SECONDS=300
+Restart=always
+RestartSec=2
+TimeoutStopSec=330
+
+[Install]
+WantedBy=default.target

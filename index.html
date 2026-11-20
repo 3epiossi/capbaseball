@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>fallen skywalker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=Silkscreen:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' fill='%230b101d' stroke='%23f4c41c' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='9' fill='%23f4c41c'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%230b101d'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <main id="app" class="game-viewport">
+      <!-- Pixel-Art 3D Stage & High-DPI Overlay -->
+      <canvas id="pixel-canvas" aria-label="fallen skywalker stadium view"></canvas>
+      <canvas id="overlay-canvas" aria-hidden="true"></canvas>
+
+      <!-- Unified Top Broadcast Region: Scorebug + Fixed 2-Row Utility Strip (Zero-overlap across all viewports) -->
+      <div class="hud-top-region" id="hud-top-region">
+        <!-- TOP-LEFT Broadcast HUD: Scorebug -->
+        <div class="top-left-hud">
+          <aside id="scoreboard" class="scorebug" hidden aria-label="Game scoreboard">
+            <div class="sb-main-row" id="sb-normal-row">
+              <div class="sb-teams">
+                <div class="sb-team-row away">
+                  <span class="sb-stripe black"></span>
+                  <span class="sb-team-name" id="away-name">中正黑</span>
+                  <strong class="sb-team-runs" id="away-score">0</strong>
+                </div>
+                <div class="sb-team-row home">
+                  <span class="sb-stripe yellow"></span>
+                  <span class="sb-team-name" id="home-name">中正黃</span>
+                  <strong class="sb-team-runs" id="home-score">0</strong>
+                </div>
+              </div>
+
+              <div class="sb-diamond-cell" aria-label="Base runners">
+                <div class="sb-diamond">
+                  <span class="base b2" id="base-2"></span>
+                  <span class="base b3" id="base-3"></span>
+                  <span class="base b1" id="base-1"></span>
+                </div>
+              </div>
+
+              <div class="sb-count-cell">
+                <div class="sb-inning-bs">
+                  <span class="sb-inning" id="sb-inning">▲1</span>
+                  <span class="sb-bs" id="sb-bs">0-0</span>
+                </div>
+                <div class="sb-pips-row">
+                  <span class="sb-outs" aria-label="Outs">
+                    <em>O</em>
+                    <i class="pip o" id="o1"></i>
+                    <i class="pip o" id="o2"></i>
+                  </span>
+                  <span class="sb-abs" title="ABS challenges remaining">
+                    <em>ABS</em>
+                    <i class="pip abs" id="abs-1"></i>
+                    <i class="pip abs" id="abs-2"></i>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sb-derby-row" id="sb-derby-row" hidden>
+              <span class="sb-derby-badge">HR DERBY</span>
+              <span id="sb-derby-text">5 LEFT · 中正黑 0 - 0 中正黃</span>
+            </div>
+
+            <div class="sb-ticker-row">
+              <span class="sb-matchup-item"><em class="sb-tag">AB</em><span id="sb-batter">NastYboY #99</span></span>
+              <span class="sb-div" aria-hidden="true"></span>
+              <span class="sb-matchup-item"><em class="sb-tag">P</em><span id="sb-pitcher">skywalker #18 · P:0</span></span>
+              <span class="sb-div sb-tel-div" aria-hidden="true"></span>
+              <span id="sb-telemetry" class="sb-telemetry-text" hidden>READY</span>
+            </div>
+          </aside>
+        </div>
+
+        <!-- Top-Right Fixed 2-Row Functional & Network Strip (MENU anchored on far right) -->
+        <header class="top-bar">
+          <div class="top-status">
+            <button type="button" class="nick-chip" id="btn-nick-chip" title="Change player name">
+              <span class="nick-dot"></span>
+              <span id="nick-chip-label">PLAYER</span>
+            </button>
+            <span id="net-speed-pill" class="net-pill" data-quality="offline" title="Live network latency & server health">
+              <i class="net-dot"></i><span id="net-speed-text">LOCAL</span>
+            </span>
+            <span id="top-online-pill" class="online-pill">LIVE 0</span>
+          </div>
+
+          <nav class="header-actions" aria-label="Game utility menu">
+            <button type="button" class="hdr-btn bat-opt" id="btn-hand" hidden title="Batter handedness">LHB</button>
+            <button type="button" class="hdr-btn bat-opt" id="btn-swing-type" aria-pressed="false" hidden title="Swing power mode">NORMAL</button>
+            <button type="button" class="hdr-btn" id="btn-rules">RULES</button>
+            <button type="button" class="hdr-btn" id="btn-settings">SET</button>
+            <button type="button" class="hdr-btn" id="btn-sound" aria-pressed="false">SFX</button>
+            <button type="button" class="hdr-btn menu-btn" id="btn-menu" hidden title="Game Menu (Esc)">MENU</button>
+          </nav>
+        </header>
+      </div>
+
+      <!-- Title / Lobby Screen (MLB The Show × 16-Bit Pixel Marquee) -->
+      <section id="title-screen" class="title-overlay" aria-label="Main menu">
+        <div class="title-card">
+          <div class="title-eyebrow">SHOW PIXEL EDITION · CAP BASEBALL</div>
+          <h1 class="game-title">
+            <span class="gt-top">FALLEN</span>
+            <span class="gt-main">SKYWALKER</span>
+          </h1>
+          <div class="title-matchup">
+            <span class="tm-team tm-black">中正黑</span>
+            <span class="tm-vs">VS</span>
+            <span class="tm-team tm-yellow">中正黃</span>
+          </div>
+
+          <div id="lobby-hub" class="hub-buttons">
+            <button type="button" class="hub-btn primary" id="btn-hub-play">
+              <span class="hub-tag">MATCH</span>
+              <strong>PLAY NOW</strong>
+            </button>
+            <button type="button" class="hub-btn" id="btn-hub-friend">
+              <span class="hub-tag">PRIVATE</span>
+              <strong>FRIEND ROOM</strong>
+            </button>
+            <button type="button" class="hub-btn" id="btn-hub-watch">
+              <span class="hub-tag">BROADCAST</span>
+              <strong>WATCH LIVE</strong>
+            </button>
+          </div>
+
+          <div id="queue-panel" class="queue-panel" hidden>
+            <p class="queue-timer" id="queue-status-text">FINDING OPPONENT 0:00...</p>
+            <div class="queue-radar" aria-hidden="true"><span></span></div>
+            <div class="queue-actions">
+              <button type="button" class="act-btn" id="btn-queue-cancel">CANCEL</button>
+              <button type="button" class="act-btn primary" id="btn-queue-cpu">PLAY CPU</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pitcher MLB The Show Left-of-Zone Pitch Diamond + Continuous Spring Pitch Meter -->
+      <section id="pitcher-dock" class="pitcher-wheel-dock" hidden aria-label="Pitching controls">
+        <div class="dock-header">
+          <span class="dock-label">PITCH MIX</span>
+          <span class="dock-sub" id="pitch-selected-name">FASTBALL</span>
+        </div>
+
+        <div class="pitch-diamond" id="pitch-buttons">
+          <button type="button" class="pitch-btn pos-top active" data-pitch="straight">
+            <kbd>1</kbd><strong>4SFB</strong><span>70 ↑</span>
+          </button>
+          <button type="button" class="pitch-btn pos-left" data-pitch="cutter">
+            <kbd>2</kbd><strong>CUT</strong><span>70 ↘</span>
+          </button>
+          <div class="diamond-crest" aria-hidden="true">#18</div>
+          <button type="button" class="pitch-btn pos-right" data-pitch="changeup">
+            <kbd>4</kbd><strong>CH</strong><span>50 ↙</span>
+          </button>
+          <button type="button" class="pitch-btn pos-bottom" data-pitch="fork">
+            <kbd>3</kbd><strong>FORK</strong><span>65 ↓</span>
+          </button>
+        </div>
+
+        <!-- Continuous Spring Pitch Launcher (Hold to compress -> Release to rebound & peak on NORMAL · BEST · OVER) -->
+        <div class="spring-meter" id="spring-meter" data-zone="IDLE" data-stage="idle">
+          <div class="sm-head">
+            <span class="sm-title" id="spring-title">SPRING</span>
+            <strong class="sm-readout" id="spring-readout">64–76 km/h</strong>
+          </div>
+
+          <div
+            class="spring-chamber"
+            id="spring-chamber"
+            role="button"
+            tabindex="0"
+            aria-label="Hold to compress pitch spring, release to launch and set peak power"
+          >
+            <svg id="spring-coil-svg" class="spring-coil-svg" viewBox="0 0 180 24" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="0" y="2" width="5" height="20" fill="#94a3b8" />
+              <rect id="spring-compress-fill" x="5" y="2" width="0" height="20" fill="rgba(56, 189, 248, 0.22)" />
+              <path
+                id="spring-coil-path"
+                d="M 5 12 L 10 4 L 15 20 L 20 4 L 25 20 L 30 4 L 35 20 L 40 4 L 45 20 L 50 4 L 54 12"
+                fill="none"
+                stroke="#38bdf8"
+                stroke-width="2.4"
+                stroke-linejoin="miter"
+                stroke-linecap="square"
+              />
+              <rect id="spring-plunger" x="54" y="2" width="7" height="20" fill="#f8fafc" />
+            </svg>
+
+            <div class="spring-rail" id="spring-rail">
+              <div class="spring-peak-trail" id="spring-peak-trail" aria-hidden="true"></div>
+              <div class="spring-best-ticks" aria-hidden="true"></div>
+              <div class="spring-needle" id="spring-needle"></div>
+            </div>
+          </div>
+
+          <div class="spring-zone-labels" aria-hidden="true">
+            <span class="sz-lbl sz-normal" id="sz-normal">NORMAL</span>
+            <span class="sz-lbl sz-best" id="sz-best">BEST</span>
+            <span class="sz-lbl sz-over" id="sz-over">OVER</span>
+          </div>
+        </div>
+
+        <div class="pitch-actions">
+          <button type="button" class="act-btn primary throw-btn" id="btn-throw">HOLD TO PITCH</button>
+          <button type="button" class="act-btn ibb-btn" id="btn-ibb">IBB</button>
+        </div>
+      </section>
+
+      <!-- Above-Strike-Zone Broadcast Stack: Play Call (FOUL / TOO LATE / SINGLE / DOUBLE) + ABS -->
+      <div id="zone-top-hud" class="zone-top-hud">
+        <aside id="swing-feedback-card" class="swing-feedback-card" hidden aria-live="polite">
+          <div class="sf-head" id="sf-head">PLAY CALL</div>
+          <div class="sf-body">
+            <div class="sf-grade" id="sf-grade">READY</div>
+            <div class="sf-metrics" id="sf-metrics">PLAY BALL</div>
+          </div>
+        </aside>
+
+        <button type="button" id="btn-abs-challenge" class="abs-challenge-btn" hidden>
+          <span class="abs-btn-top">ABS</span>
+          <span class="abs-btn-bar" aria-hidden="true"><i id="abs-timer-fill"></i></span>
+        </button>
+      </div>
+    </main>
+
+    <!-- Native <dialog> Modals (no role="dialog", no aria-modal) -->
+    <dialog id="menu-dialog" closedby="any" aria-labelledby="menu-title">
+      <div class="dlg-head">
+        <h2 id="menu-title">GAME MENU</h2>
+        <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
+      </div>
+      <div class="dlg-body menu-actions">
+        <button type="button" class="act-btn primary" id="btn-menu-back" autofocus>BACK</button>
+        <button type="button" class="act-btn" id="btn-menu-title">MAIN MENU</button>
+        <button type="button" class="act-btn danger-btn" id="btn-resign" hidden>FORFEIT</button>
+      </div>
+    </dialog>
+    <dialog id="cpu-dialog" closedby="any" aria-labelledby="cpu-title">
+      <div class="dlg-head">
+        <h2 id="cpu-title">CPU &amp; LOCAL PLAY</h2>
+        <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
+      </div>
+      <div class="dlg-body cpu-grid">
+        <button type="button" class="mode-btn primary" data-mode="quick3">CPU 3-INNING</button>
+        <button type="button" class="mode-btn" data-mode="hotseat2p">LOCAL 2P</button>
+        <button type="button" class="mode-btn" data-mode="practice_bat">BATTING PRACTICE</button>
+        <button type="button" class="mode-btn" data-mode="practice_pitch">PITCHING PRACTICE</button>
+      </div>
+    </dialog>
+
+    <dialog id="friend-dialog" closedby="any" aria-labelledby="friend-title">
+      <div class="dlg-head">
+        <h2 id="friend-title">FRIEND ROOM</h2>
+        <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
+      </div>
+      <div class="dlg-body online-form">
+        <div class="online-meta-bar">
+          <span id="friend-status-msg" class="online-status">READY</span>
+        </div>
+        <div class="friend-create">
+          <button type="button" class="act-btn primary" id="btn-room-create" autofocus>CREATE ROOM</button>
+          <div id="room-created-box" class="room-created-box" hidden>
+            <div class="room-code-big" id="room-code-display">----</div>
+            <div class="online-actions">
+              <button type="button" class="act-btn" id="btn-copy-code">COPY CODE</button>
+              <button type="button" class="act-btn" id="btn-copy-link">COPY LINK</button>
+            </div>
+          </div>
+        </div>
+        <div class="friend-join">
+          <input type="text" id="room-code-input" maxlength="4" placeholder="4-CHAR CODE" autocomplete="off" />
+          <button type="button" class="act-btn primary" id="btn-room-join">JOIN</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="watch-dialog" closedby="any" aria-labelledby="watch-title">
+      <div class="dlg-head">
+        <h2 id="watch-title">LIVE SPECTATE</h2>
+        <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
+      </div>
+      <div class="dlg-body watch-list" id="watch-list">
+        <p class="watch-empty">LOADING LIVE MATCHES...</p>
+      </div>
+      <form method="dialog" class="dlg-foot">
+        <button type="button" class="act-btn" id="btn-watch-refresh">REFRESH</button>
+        <button class="act-btn" value="close" autofocus>CLOSE</button>
+      </form>
+    </dialog>
+
+    <dialog id="rules-dialog" closedby="any" aria-labelledby="rules-title">
+      <div class="dlg-head">
+        <h2 id="rules-title">CAP BASEBALL RULES</h2>
+        <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
+      </div>
+      <div class="dlg-body">
+        <ul class="rules-list">
+          <li><strong>FIELD:</strong> 9.22m mound, 8m infield out-zone, 13m fence (0.75m tall), 2.334m pass line behind plate.</li>
+          <li><strong>HITTING:</strong> Fly catch or stopped in infield → OUT · Outfield landing → 1B · Bounce to/over fence → 2B · Direct off fence → 3B · Over fence → HR.</li>
+          <li><strong>SPRING PITCHING:</strong> Hold Pitch or Space to compress the spring, then release to launch it across the continuous <code>NORMAL</code> → <code>BEST</code> → <code>OVER</code> spectrum. Its apex sets velocity &amp; control!</li>
+          <li><strong>ABS HAWK-EYE:</strong> 2 challenges per team (retained if overturned). Tap inside the zone or press <code>C</code> within 3.0s of a taken pitch.</li>
+          <li><strong>EXTRA INNINGS:</strong> Tied after 3 → 4th-inning bases-loaded tie-breaker → still tied → 5-pitch HR Derby!</li>
+        </ul>
+      </div>
+      <form method="dialog" class="dlg-foot">
+        <button class="act-btn primary" value="ok" autofocus>CLOSE</button>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog" closedby="any" aria-labelledby="settings-title">
+      <div class="dlg-head">
+        <h2 id="settings-title">SETTINGS</h2>
+        <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
+      </div>
+      <div class="dlg-body settings-form">
+        <label class="setting-row">
+          <span>PLAYER NAME</span>
+          <input type="text" id="online-name" maxlength="16" placeholder="PLAYER" />
+        </label>
+        <label class="setting-row">
+          <span>CPU LEVEL</span>
+          <select id="set-difficulty">
+            <option value="1">LV 1 · ROOKIE</option>
+            <option value="2">LV 2 · AMATEUR</option>
+            <option value="3" selected>LV 3 · STANDARD</option>
+            <option value="4">LV 4 · ALL-STAR</option>
+            <option value="5">LV 5 · PRO</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span>TIMING RING</span>
+          <input type="checkbox" id="set-guide-ring" checked />
+        </label>
+        <label class="setting-row">
+          <span>PITCH TRAIL</span>
+          <input type="checkbox" id="set-break-preview" checked />
+        </label>
+        <label class="setting-row">
+          <span>RETRO SFX</span>
+          <input type="checkbox" id="set-sound" checked />
+        </label>
+      </div>
+      <form method="dialog" class="dlg-foot">
+        <button class="act-btn primary" value="save" autofocus>SAVE</button>
+      </form>
+    </dialog>
+
+    <dialog id="result-dialog" closedby="any" aria-labelledby="result-title">
+      <div class="dlg-head">
+        <h2 id="result-title">FINAL SCORE</h2>
+      </div>
+      <div class="dlg-body" id="result-body"></div>
+      <form method="dialog" class="dlg-foot">
+        <button class="act-btn" value="menu">MAIN MENU</button>
+        <button class="act-btn primary" value="rematch" autofocus>REMATCH</button>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,119 @@
+{
+  "format": "pixelforge-fx",
+  "version": 1,
+  "name": "fx_hit",
+  "width": 32,
+  "height": 32,
+  "palette": {
+    "k": "#1d1826",
+    "o": "#ff7a1a",
+    "y": "#f2c81e",
+    "g": "#ffe45e",
+    "w": "#ffffff",
+    "c": "#9ee8ff"
+  },
+  "symbols": {
+    "spark_w": ["w"],
+    "spark_g": ["g"],
+    "spark_o": ["o"]
+  },
+  "effects": {
+    "hit": {
+      "frames": 5,
+      "duration": { "from": 45, "to": 75, "ease": "in" },
+      "seed": 7,
+      "looks": {
+        "flash": { "colors": ["o", "g", "w"], "thresholds": [0.18, 0.48, 0.78] },
+        "ring": { "colors": ["c", "w"], "thresholds": [0.35, 0.75] }
+      },
+      "cleanup": { "corners": true, "strays": true },
+      "layers": [
+        {
+          "kind": "star",
+          "look": "flash",
+          "at": [16, 16],
+          "frames": [0, 3],
+          "radius": [11, 3],
+          "width": [3, 1],
+          "points": 6,
+          "ratio": 0.42,
+          "power": [1.3, 0.6],
+          "cue": "hit"
+        },
+        {
+          "kind": "ring",
+          "look": "ring",
+          "at": [16, 16],
+          "frames": [1, 4],
+          "radius": [4, 12],
+          "width": [3, 2, 1],
+          "noise": 0.6,
+          "scale": 4,
+          "power": [1.2, 0.8, 0.3]
+        }
+      ],
+      "emitters": [
+        {
+          "at": [16, 16],
+          "burst": 10,
+          "start": 1,
+          "angle": [0, 360],
+          "speed": [1.4, 2.8],
+          "gravity": [0, 0.15],
+          "drag": 0.08,
+          "life": [3, 4],
+          "shapes": ["spark_w", "spark_g", "spark_o"],
+          "trail": { "color": "o", "length": 1 }
+        }
+      ]
+    },
+    "hr_burst": {
+      "frames": 6,
+      "duration": { "from": 50, "to": 85, "ease": "in" },
+      "seed": 19,
+      "looks": {
+        "gold": { "colors": ["o", "y", "g", "w"], "thresholds": [0.15, 0.38, 0.65, 0.86] }
+      },
+      "cleanup": { "corners": true, "strays": true },
+      "layers": [
+        {
+          "kind": "star",
+          "look": "gold",
+          "at": [16, 16],
+          "frames": [0, 4],
+          "radius": [14, 4],
+          "width": [4, 1],
+          "points": 8,
+          "ratio": 0.45,
+          "power": [1.4, 0.7],
+          "cue": "hit"
+        },
+        {
+          "kind": "ring",
+          "look": "gold",
+          "at": [16, 16],
+          "frames": [1, 5],
+          "radius": [3, 14],
+          "width": [4, 3, 1],
+          "noise": 0.85,
+          "scale": 5,
+          "power": [1.3, 0.9, 0.35]
+        }
+      ],
+      "emitters": [
+        {
+          "at": [16, 16],
+          "burst": 16,
+          "start": 1,
+          "angle": [0, 360],
+          "speed": [1.6, 3.2],
+          "gravity": [0, 0.12],
+          "drag": 0.06,
+          "life": [4, 5],
+          "shapes": ["spark_w", "spark_g", "spark_o"],
+          "trail": { "color": "y", "length": 1 }
+        }
+      ]
+    }
+  }
+}

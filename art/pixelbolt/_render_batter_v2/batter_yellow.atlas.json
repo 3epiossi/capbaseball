@@ -1,0 +1,233 @@
+{
+  "frames": {
+    "ready_0": {
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 80
+      },
+      "duration": 260
+    },
+    "ready_1": {
+      "frame": {
+        "x": 64,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 80
+      },
+      "duration": 260
+    },
+    "load_0": {
+      "frame": {
+        "x": 128,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 80
+      },
+      "duration": 130
+    },
+    "swing_early_0": {
+      "frame": {
+        "x": 192,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 80
+      },
+      "duration": 70
+    },
+    "swing_contact_0": {
+      "frame": {
+        "x": 256,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 80
+      },
+      "duration": 70
+    },
+    "follow_through_0": {
+      "frame": {
+        "x": 320,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 80
+      },
+      "duration": 90
+    },
+    "follow_through_1": {
+      "frame": {
+        "x": 384,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 80
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 80
+      },
+      "duration": 140
+    }
+  },
+  "animations": {
+    "ready": {
+      "frames": [
+        "ready_0",
+        "ready_1"
+      ],
+      "loop": true,
+      "duration": 520
+    },
+    "load": {
+      "frames": [
+        "load_0"
+      ],
+      "loop": false,
+      "duration": 130
+    },
+    "swing_early": {
+      "frames": [
+        "swing_early_0"
+      ],
+      "loop": false,
+      "duration": 70
+    },
+    "swing_contact": {
+      "frames": [
+        "swing_contact_0"
+      ],
+      "loop": false,
+      "duration": 70
+    },
+    "follow_through": {
+      "frames": [
+        "follow_through_0",
+        "follow_through_1"
+      ],
+      "loop": false,
+      "duration": 230
+    }
+  },
+  "meta": {
+    "app": "Pixelbolt",
+    "version": "1",
+    "image": "batter_yellow.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 448,
+      "h": 80
+    },
+    "scale": "1",
+    "frameTags": [
+      {
+        "name": "ready",
+        "from": 0,
+        "to": 1,
+        "direction": "forward"
+      },
+      {
+        "name": "load",
+        "from": 2,
+        "to": 2,
+        "direction": "forward"
+      },
+      {
+        "name": "swing_early",
+        "from": 3,
+        "to": 3,
+        "direction": "forward"
+      },
+      {
+        "name": "swing_contact",
+        "from": 4,
+        "to": 4,
+        "direction": "forward"
+      },
+      {
+        "name": "follow_through",
+        "from": 5,
+        "to": 6,
+        "direction": "forward"
+      }
+    ]
+  }
+}

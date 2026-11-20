@@ -1,0 +1,32 @@
+/* Pixelbolt: atlas coordinates are pixels at the exported scale. */
+.pf-fielder_yellow {
+  display: inline-block;
+  width: 32px; height: 40px;
+  background-image: url("fielder_yellow.png");
+  background-repeat: no-repeat; image-rendering: pixelated;
+}
+.pf-fielder_yellow-idle { background-position: -0px -0px; animation: pf-fielder_yellow-idle 480ms steps(1, end) infinite; }
+@keyframes pf-fielder_yellow-idle {
+  0% { background-position: -0px -0px; }
+  50% { background-position: -32px -0px; }
+  100% { background-position: -0px -0px; }
+}
+.pf-fielder_yellow-run { background-position: -64px -0px; animation: pf-fielder_yellow-run 400ms steps(1, end) infinite; }
+@keyframes pf-fielder_yellow-run {
+  0% { background-position: -64px -0px; }
+  25% { background-position: -96px -0px; }
+  50% { background-position: -128px -0px; }
+  75% { background-position: -160px -0px; }
+  100% { background-position: -64px -0px; }
+}
+.pf-fielder_yellow-dive { background-position: -192px -0px; animation: pf-fielder_yellow-dive 360ms steps(1, end) 1 forwards; }
+@keyframes pf-fielder_yellow-dive {
+  0% { background-position: -192px -0px; }
+  38.88888889% { background-position: -224px -0px; }
+  100% { background-position: -224px -0px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-fielder_yellow-idle { animation: none; }
+  .pf-fielder_yellow-run { animation: none; }
+  .pf-fielder_yellow-dive { animation: none; }
+}

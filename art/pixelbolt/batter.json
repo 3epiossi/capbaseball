@@ -1,0 +1,260 @@
+{
+  "version": 1,
+  "name": "batter_yellow",
+  "width": 64,
+  "height": 80,
+  "palette": {
+    "k": "#1d1826",
+    "h": "#1a1a22",
+    "s": "#e0a37e",
+    "d": "#b87b58",
+    "y": "#f2c81e",
+    "g": "#b88a14",
+    "l": "#ffe26a",
+    "w": "#f2f4f8",
+    "c": "#cbd2de",
+    "b": "#1e1e24",
+    "n": "#34343e",
+    "p": "#d8f530",
+    "q": "#a8cc18",
+    "r": "#f4ff8a",
+    "z": "#e8ffb0"
+  },
+  "frames": [
+    {
+      "name": "ready_0",
+      "duration": 260,
+      "ops": [
+        { "op": "rect", "x": 14, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 14, "y": 50, "w": 2, "h": 14, "color": "d", "filled": true },
+        { "op": "rect", "x": 14, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 12, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 12, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 26, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 30, "y": 50, "w": 2, "h": 14, "color": "d", "filled": true },
+        { "op": "rect", "x": 26, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 25, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 25, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 13, "y": 38, "w": 9, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 23, "y": 38, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 13, "y": 38, "w": 20, "h": 3, "color": "n", "filled": true },
+        { "op": "rect", "x": 15, "y": 42, "w": 2, "h": 5, "color": "w", "filled": true },
+
+        { "op": "rect", "x": 13, "y": 21, "w": 19, "h": 18, "color": "y", "filled": true },
+        { "op": "rect", "x": 27, "y": 21, "w": 5, "h": 18, "color": "g", "filled": true },
+        { "op": "rect", "x": 14, "y": 22, "w": 5, "h": 14, "color": "l", "filled": true },
+        { "op": "rect", "x": 28, "y": 21, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 11, "y": 21, "w": 5, "h": 6, "color": "w", "filled": true },
+
+        { "op": "ellipse", "x": 17, "y": 7, "w": 12, "h": 13, "color": "h", "filled": true },
+        { "op": "rect", "x": 18, "y": 16, "w": 6, "h": 4, "color": "s", "filled": true },
+        { "op": "pixel", "x": 21, "y": 10, "color": "w" },
+        { "op": "pixel", "x": 22, "y": 10, "color": "w" },
+
+        { "op": "line", "x": 13, "y": 25, "x2": 18, "y2": 29, "color": "b" },
+        { "op": "line", "x": 13, "y": 26, "x2": 18, "y2": 30, "color": "b" },
+        { "op": "line", "x": 13, "y": 27, "x2": 18, "y2": 31, "color": "b" },
+        { "op": "rect", "x": 17, "y": 27, "w": 5, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 31, "y": 25, "x2": 25, "y2": 27, "color": "b" },
+        { "op": "line", "x": 31, "y": 26, "x2": 25, "y2": 28, "color": "b" },
+        { "op": "rect", "x": 21, "y": 26, "w": 5, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 21, "y": 28, "x2": 39, "y2": 10, "color": "q" },
+        { "op": "line", "x": 22, "y": 28, "x2": 40, "y2": 10, "color": "p" },
+        { "op": "line", "x": 22, "y": 27, "x2": 40, "y2": 9, "color": "p" },
+        { "op": "line", "x": 23, "y": 27, "x2": 41, "y2": 9, "color": "r" },
+        { "op": "line", "x": 35, "y": 14, "x2": 41, "y2": 8, "color": "p" },
+        { "op": "line", "x": 36, "y": 15, "x2": 42, "y2": 9, "color": "r" },
+
+        { "op": "outline", "color": "k", "position": "outside", "width": 1 }
+      ]
+    },
+    {
+      "name": "ready_1",
+      "duration": 260,
+      "from": "ready_0",
+      "translate": [0, 1]
+    },
+    {
+      "name": "load_0",
+      "duration": 130,
+      "ops": [
+        { "op": "rect", "x": 13, "y": 51, "w": 6, "h": 13, "color": "s", "filled": true },
+        { "op": "rect", "x": 13, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 11, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 11, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 28, "y": 51, "w": 6, "h": 13, "color": "s", "filled": true },
+        { "op": "rect", "x": 28, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 27, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 27, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 12, "y": 39, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 23, "y": 39, "w": 11, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 12, "y": 39, "w": 22, "h": 3, "color": "n", "filled": true },
+
+        { "op": "rect", "x": 12, "y": 22, "w": 20, "h": 18, "color": "y", "filled": true },
+        { "op": "rect", "x": 27, "y": 22, "w": 5, "h": 18, "color": "g", "filled": true },
+        { "op": "rect", "x": 13, "y": 23, "w": 5, "h": 14, "color": "l", "filled": true },
+        { "op": "rect", "x": 28, "y": 22, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 10, "y": 22, "w": 5, "h": 6, "color": "w", "filled": true },
+
+        { "op": "ellipse", "x": 16, "y": 8, "w": 12, "h": 13, "color": "h", "filled": true },
+        { "op": "rect", "x": 17, "y": 17, "w": 6, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 12, "y": 26, "x2": 19, "y2": 27, "color": "b" },
+        { "op": "line", "x": 12, "y": 27, "x2": 19, "y2": 28, "color": "b" },
+        { "op": "rect", "x": 18, "y": 25, "w": 5, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 31, "y": 25, "x2": 23, "y2": 25, "color": "b" },
+        { "op": "line", "x": 31, "y": 26, "x2": 23, "y2": 26, "color": "b" },
+        { "op": "rect", "x": 21, "y": 24, "w": 5, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 22, "y": 26, "x2": 44, "y2": 15, "color": "q" },
+        { "op": "line", "x": 22, "y": 25, "x2": 44, "y2": 14, "color": "p" },
+        { "op": "line", "x": 22, "y": 24, "x2": 45, "y2": 13, "color": "r" },
+        { "op": "line", "x": 38, "y": 16, "x2": 46, "y2": 12, "color": "r" },
+
+        { "op": "outline", "color": "k", "position": "outside", "width": 1 }
+      ]
+    },
+    {
+      "name": "swing_early_0",
+      "duration": 70,
+      "ops": [
+        { "op": "rect", "x": 14, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 14, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 12, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 12, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 28, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 28, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 27, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 27, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 13, "y": 38, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 24, "y": 38, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 13, "y": 38, "w": 21, "h": 3, "color": "n", "filled": true },
+
+        { "op": "rect", "x": 14, "y": 21, "w": 19, "h": 18, "color": "y", "filled": true },
+        { "op": "rect", "x": 28, "y": 21, "w": 5, "h": 18, "color": "g", "filled": true },
+        { "op": "rect", "x": 15, "y": 22, "w": 5, "h": 14, "color": "l", "filled": true },
+        { "op": "rect", "x": 29, "y": 21, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 12, "y": 21, "w": 5, "h": 6, "color": "w", "filled": true },
+
+        { "op": "ellipse", "x": 18, "y": 7, "w": 12, "h": 13, "color": "h", "filled": true },
+        { "op": "rect", "x": 20, "y": 16, "w": 6, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 14, "y": 26, "x2": 26, "y2": 27, "color": "b" },
+        { "op": "line", "x": 14, "y": 27, "x2": 26, "y2": 28, "color": "b" },
+        { "op": "line", "x": 32, "y": 25, "x2": 28, "y2": 27, "color": "b" },
+        { "op": "rect", "x": 25, "y": 25, "w": 5, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 28, "y": 28, "x2": 48, "y2": 32, "color": "q" },
+        { "op": "line", "x": 28, "y": 27, "x2": 49, "y2": 31, "color": "p" },
+        { "op": "line", "x": 28, "y": 26, "x2": 49, "y2": 30, "color": "r" },
+
+        { "op": "outline", "color": "k", "position": "outside", "width": 1 }
+      ]
+    },
+    {
+      "name": "swing_contact_0",
+      "duration": 70,
+      "ops": [
+        { "op": "rect", "x": 15, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 15, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 13, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 13, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 29, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 29, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 28, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 28, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 14, "y": 38, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 25, "y": 38, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 14, "y": 38, "w": 21, "h": 3, "color": "n", "filled": true },
+        { "op": "rect", "x": 16, "y": 42, "w": 2, "h": 5, "color": "w", "filled": true },
+
+        { "op": "rect", "x": 16, "y": 21, "w": 19, "h": 18, "color": "y", "filled": true },
+        { "op": "rect", "x": 30, "y": 21, "w": 5, "h": 18, "color": "g", "filled": true },
+        { "op": "rect", "x": 17, "y": 22, "w": 5, "h": 14, "color": "l", "filled": true },
+        { "op": "rect", "x": 31, "y": 21, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 14, "y": 21, "w": 5, "h": 6, "color": "w", "filled": true },
+
+        { "op": "ellipse", "x": 20, "y": 7, "w": 12, "h": 13, "color": "h", "filled": true },
+        { "op": "rect", "x": 22, "y": 16, "w": 6, "h": 4, "color": "s", "filled": true },
+        { "op": "pixel", "x": 24, "y": 10, "color": "w" },
+        { "op": "pixel", "x": 25, "y": 10, "color": "w" },
+
+        { "op": "line", "x": 16, "y": 25, "x2": 36, "y2": 26, "color": "b" },
+        { "op": "line", "x": 16, "y": 26, "x2": 36, "y2": 27, "color": "b" },
+        { "op": "rect", "x": 34, "y": 24, "w": 5, "h": 4, "color": "s", "filled": true },
+
+        { "op": "rect", "x": 38, "y": 25, "w": 22, "h": 3, "color": "p", "filled": true },
+        { "op": "rect", "x": 38, "y": 25, "w": 22, "h": 1, "color": "r", "filled": true },
+        { "op": "rect", "x": 38, "y": 27, "w": 22, "h": 1, "color": "q", "filled": true },
+
+        { "op": "outline", "color": "k", "position": "outside", "width": 1 },
+
+        { "op": "line", "x": 42, "y": 16, "x2": 57, "y2": 23, "color": "z" },
+        { "op": "line", "x": 46, "y": 19, "x2": 59, "y2": 23, "color": "r" },
+        { "op": "line", "x": 40, "y": 21, "x2": 54, "y2": 23, "color": "z" }
+      ]
+    },
+    {
+      "name": "follow_through_0",
+      "duration": 90,
+      "ops": [
+        { "op": "rect", "x": 15, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 15, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 13, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 13, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 28, "y": 50, "w": 6, "h": 14, "color": "s", "filled": true },
+        { "op": "rect", "x": 28, "y": 64, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 27, "y": 70, "w": 9, "h": 5, "color": "w", "filled": true },
+        { "op": "rect", "x": 27, "y": 73, "w": 9, "h": 2, "color": "c", "filled": true },
+
+        { "op": "rect", "x": 14, "y": 38, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 24, "y": 38, "w": 10, "h": 13, "color": "b", "filled": true },
+        { "op": "rect", "x": 14, "y": 38, "w": 20, "h": 3, "color": "n", "filled": true },
+
+        { "op": "rect", "x": 15, "y": 21, "w": 19, "h": 18, "color": "y", "filled": true },
+        { "op": "rect", "x": 29, "y": 21, "w": 5, "h": 18, "color": "g", "filled": true },
+        { "op": "rect", "x": 16, "y": 22, "w": 5, "h": 14, "color": "l", "filled": true },
+        { "op": "rect", "x": 30, "y": 21, "w": 6, "h": 6, "color": "w", "filled": true },
+        { "op": "rect", "x": 13, "y": 21, "w": 5, "h": 6, "color": "w", "filled": true },
+
+        { "op": "ellipse", "x": 19, "y": 7, "w": 12, "h": 13, "color": "h", "filled": true },
+        { "op": "rect", "x": 21, "y": 16, "w": 6, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 32, "y": 25, "x2": 19, "y2": 24, "color": "b" },
+        { "op": "line", "x": 32, "y": 26, "x2": 19, "y2": 25, "color": "b" },
+        { "op": "rect", "x": 16, "y": 22, "w": 5, "h": 4, "color": "s", "filled": true },
+
+        { "op": "line", "x": 18, "y": 24, "x2": 5, "y2": 10, "color": "q" },
+        { "op": "line", "x": 19, "y": 24, "x2": 6, "y2": 10, "color": "p" },
+        { "op": "line", "x": 19, "y": 23, "x2": 6, "y2": 9, "color": "r" },
+
+        { "op": "outline", "color": "k", "position": "outside", "width": 1 }
+      ]
+    },
+    {
+      "name": "follow_through_1",
+      "duration": 140,
+      "from": "follow_through_0",
+      "translate": [-1, 1]
+    }
+  ],
+  "animations": {
+    "ready": { "frames": ["ready_0", "ready_1"], "loop": true },
+    "load": { "frames": ["load_0"], "loop": false },
+    "swing_early": { "frames": ["swing_early_0"], "loop": false },
+    "swing_contact": { "frames": ["swing_contact_0"], "loop": false },
+    "follow_through": { "frames": ["follow_through_0", "follow_through_1"], "loop": false }
+  }
+}

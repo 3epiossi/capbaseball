@@ -1,0 +1,30 @@
+/* Pixelbolt: atlas coordinates are pixels at the exported scale. */
+.pf-fx_hit {
+  display: inline-block;
+  width: 32px; height: 32px;
+  background-image: url("fx_hit.png");
+  background-repeat: no-repeat; image-rendering: pixelated;
+}
+.pf-fx_hit-hit { background-position: -0px -0px; animation: pf-fx_hit-hit 272ms steps(1, end) 1 forwards; }
+@keyframes pf-fx_hit-hit {
+  0% { background-position: -0px -0px; }
+  16.54411765% { background-position: -32px -0px; }
+  33.08823529% { background-position: -64px -0px; }
+  51.10294118% { background-position: -96px -0px; }
+  72.42647059% { background-position: -128px -0px; }
+  100% { background-position: -128px -0px; }
+}
+.pf-fx_hit-hr_burst { background-position: -160px -0px; animation: pf-fx_hit-hr_burst 363ms steps(1, end) 1 forwards; }
+@keyframes pf-fx_hit-hr_burst {
+  0% { background-position: -160px -0px; }
+  13.77410468% { background-position: -192px -0px; }
+  27.54820937% { background-position: -224px -0px; }
+  41.87327824% { background-position: -0px -32px; }
+  57.85123967% { background-position: -32px -32px; }
+  76.58402204% { background-position: -64px -32px; }
+  100% { background-position: -64px -32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-fx_hit-hit { animation: none; }
+  .pf-fx_hit-hr_burst { animation: none; }
+}
