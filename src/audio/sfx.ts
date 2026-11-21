@@ -87,10 +87,14 @@ class RetroSfxEngine {
     this.tone(urgent ? 880 : 660, urgent ? 880 : 660, 0.045, 'square', urgent ? 0.08 : 0.05);
   }
 
-  playUmpireTone(kind: 'strike' | 'ball' | 'out'): void {
+  playUmpireTone(kind: 'strike' | 'ball' | 'out' | 'foul'): void {
     if (kind === 'strike') {
       this.tone(440, 440, 0.08, 'square', 0.1);
       this.tone(587, 587, 0.12, 'square', 0.11, 0.09);
+    } else if (kind === 'foul') {
+      // Distinct crisp dead-ball double-tap for foul balls (different from strike/ball/out)
+      this.tone(523, 466, 0.07, 'triangle', 0.11);
+      this.tone(415, 349, 0.11, 'triangle', 0.11, 0.085);
     } else if (kind === 'ball') {
       this.tone(330, 294, 0.12, 'triangle', 0.09);
     } else {

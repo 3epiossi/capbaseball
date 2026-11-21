@@ -103,6 +103,8 @@ export interface MatchState {
   home: TeamState;
   isGameOver: boolean;
   winner: 'away' | 'home' | 'tie' | null;
+  mercyRule?: boolean;
+  mercyTriggered?: boolean;
   lastEvent: string;
   stats: MatchStats;
   /** Batters faced in the current half-inning (for rule 5.01D checks) */
@@ -145,6 +147,7 @@ export function createMatch(
     awayLineup?: PlayerSlot[];
     homeLineup?: PlayerSlot[];
     maxBattersPerInning?: number;
+    mercyRule?: boolean;
   },
 ): MatchState {
   const regulationInnings = mode === 'quick3' ? 3 : 6;
@@ -161,6 +164,8 @@ export function createMatch(
     home: makeTeam(options?.homeName ?? 'Home', 'home', options?.homeLineup),
     isGameOver: false,
     winner: null,
+    mercyRule: options?.mercyRule ?? true,
+    mercyTriggered: false,
     lastEvent: 'Play ball!',
     stats: {
       totalPitches: 0,
@@ -288,16 +293,26 @@ function advanceAllRunnersOneBase(state: MatchState): number {
   return runs;
 }
 
+export const MERCY_RUN_DIFF = 10;
+
 function checkWalkOff(state: MatchState): boolean {
+  if (state.mode === 'practice_bat' || state.mode === 'practice_pitch' || state.half !== 'bottom') {
+    return false;
+  }
+  if (state.inning >= state.regulationInnings && state.home.totalRuns > state.away.totalRuns) {
+    state.isGameOver = true;
+    state.winner = 'home';
+    return true;
+  }
   if (
-    state.mode !== 'practice_bat' &&
-    state.mode !== 'practice_pitch' &&
-    state.inning >= state.regulationInnings &&
-    state.half === 'bottom' &&
-    state.home.totalRuns > state.away.totalRuns
+    state.mercyRule !== false &&
+    state.inning >= 2 &&
+    state.home.totalRuns - state.away.totalRuns >= MERCY_RUN_DIFF
   ) {
     state.isGameOver = true;
     state.winner = 'home';
+    state.mercyTriggered = true;
+    state.lastEvent = `Cold game! ${state.home.name} wins ${state.home.totalRuns}-${state.away.totalRuns}`;
     return true;
   }
   return false;
@@ -325,12 +340,34 @@ function transitionHalfInning(state: MatchState): void {
       state.lastEvent = `Game over! ${state.home.name} wins ${state.home.totalRuns}-${state.away.totalRuns}`;
       return;
     }
+    if (
+      state.mercyRule !== false &&
+      state.inning >= 2 &&
+      state.home.totalRuns - state.away.totalRuns >= MERCY_RUN_DIFF
+    ) {
+      state.isGameOver = true;
+      state.winner = 'home';
+      state.mercyTriggered = true;
+      state.lastEvent = `Cold game! ${state.home.name} wins ${state.home.totalRuns}-${state.away.totalRuns}`;
+      return;
+    }
     state.half = 'bottom';
   } else {
     if (state.inning >= state.regulationInnings && state.away.totalRuns !== state.home.totalRuns) {
       state.isGameOver = true;
       state.winner = state.home.totalRuns > state.away.totalRuns ? 'home' : 'away';
       state.lastEvent = `Game over! Final ${state.away.totalRuns}-${state.home.totalRuns}`;
+      return;
+    }
+    if (
+      state.mercyRule !== false &&
+      state.inning >= 2 &&
+      Math.abs(state.away.totalRuns - state.home.totalRuns) >= MERCY_RUN_DIFF
+    ) {
+      state.isGameOver = true;
+      state.winner = state.home.totalRuns > state.away.totalRuns ? 'home' : 'away';
+      state.mercyTriggered = true;
+      state.lastEvent = `Cold game! Final ${state.away.totalRuns}-${state.home.totalRuns}`;
       return;
     }
     // In 3-inning mode, if still tied after completing the 4th-inning bases-loaded tie-breaker, enter MLB All-Star HR Derby

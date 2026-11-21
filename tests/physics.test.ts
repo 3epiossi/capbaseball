@@ -9,6 +9,8 @@ import {
   simToField,
   simulateBattedCap,
 } from '../src/physics/batted';
+import { simulateOutfieldGroundBlock, type OutfielderInit } from '../src/physics/contact';
+import { judgeBattedCap } from '../src/rules/judge';
 
 describe('6-DOF Cap Flight Physics & Pitch Types', () => {
   const TARGET_Y = 0.0;
@@ -130,5 +132,52 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     });
     expect(grounder.bounces).toBeGreaterThanOrEqual(1);
     expect(grounder.stoppedPos[1]).toBeLessThan(0.05);
+  });
+
+  it('enforces per-pitch ceiling, floor, and lateral flight envelopes on extreme aims', () => {
+    const extremeAims: Array<[number, number]> = [
+      [0, 1.35],
+      [0, 0.12],
+      [-0.42, 0.72],
+      [0.42, 0.72],
+      [-0.4, 1.35],
+      [0.4, 0.15],
+    ];
+    for (const id of PITCH_IDS) {
+      const env = PITCH_SPECS[id].envelope;
+      const spd = PITCH_SPECS[id].defaultSpeedKmh;
+      for (const [tx, ty] of extremeAims) {
+        const res = solvePitchTrajectory(id, spd, tx, ty, { outputHz: 90, seed: 7 });
+        for (const f of res.frames) {
+          if (f.y[0] > 8.87) break; // mound-to-plate flight envelope
+          expect(f.y[2]).toBeLessThanOrEqual(env.maxFlightZ + 0.03);
+          expect(f.y[2]).toBeGreaterThanOrEqual(env.minFlightZ - 0.03);
+          expect(Math.abs(f.y[1])).toBeLessThanOrEqual(env.maxAbsFlightY + 0.03);
+        }
+      }
+    }
+  });
+
+  it('allows LF/RF outfielders to cutoff/block bouncing outfield grounders and hold them to 1B', () => {
+    const fielders: OutfielderInit[] = [
+      { id: 'LF', homePos: [-4.2, 0, -9.8], pos: [-4.2, 0, -9.8] },
+      { id: 'RF', homePos: [4.2, 0, -9.8], pos: [4.2, 0, -9.8] },
+    ];
+    // Hard bouncing grounder hit directly through LF zone toward the outfield wall
+    const sprayRad = (-22 * Math.PI) / 180;
+    const speed = 19.5;
+    const elevRad = (3 * Math.PI) / 180;
+    const horiz = speed * Math.cos(elevRad);
+    const raw = simulateBattedCap({
+      position: [0, 0.55, -0.2],
+      velocity: [horiz * Math.sin(sprayRad), speed * Math.sin(elevRad), -horiz * Math.cos(sprayRad)],
+      seed: 11,
+    });
+    expect(raw.bounces).toBeGreaterThanOrEqual(1);
+    const block = simulateOutfieldGroundBlock(raw, fielders);
+    expect(block.blocked).toBe(true);
+    expect(block.fielderId).toBe('LF');
+    expect(block.battedResult.hitFence).toBe(false);
+    expect(judgeBattedCap(block.battedResult, { caughtInAir: false })).toBe('1B');
   });
 });

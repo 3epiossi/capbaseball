@@ -39,7 +39,8 @@
 | `playFloorBounce()` | 瓶蓋落地反彈 | `triangle` 波由 `190` Hz 降至 `85` Hz（`0.06` s） |
 | `playFenceHit()` | 擊中全壘打牆 | `sawtooth` 波由 `140` Hz 降至 `62` Hz（`0.16` s） |
 | `playCatchPop()` | 捕手或野手接球 | `square` 波由 `320` Hz 升至 `580` Hz（`0.06` s） |
-| `playUmpireTone(kind)` | 好球／壞球／出局判決 | 好球雙音上揚（`440` → `587` Hz），壞球微降，出局下降長音 |
+| `playClockTick(urgent)` | 投球時鐘最後 5 秒提示 | `square` 波短促滴答聲（`660` Hz，最後 2 秒升至 `880` Hz） |
+| `playUmpireTone(kind)` | 好球／界外／壞球／出局判決 | 好球雙音上揚（`440` → `587` Hz），界外 `triangle` 雙響下滑（`523` → `349` Hz），壞球微降，出局下降長音 |
 | `playInningChange()` | 換局提示音 | C5–E5–G5–C6 四連音爬升（`square` 波） |
 | `playHomeRunFanfare()` | 全壘打慶祝號角 | 6 音階上行 Fanfare（結尾延長至 `0.32` s） |
 

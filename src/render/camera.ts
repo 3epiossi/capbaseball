@@ -90,6 +90,28 @@ export class GameCamera {
     }
   }
 
+  getRestCenterYRatio(): number {
+    return this.targetCenterYRatio;
+  }
+
+  /** True once followTarget is cleared and the camera has settled back near home plate. */
+  isNearRest(): boolean {
+    if (this.followTarget) return false;
+    const targetPos = this.isPortrait ? PORTRAIT_POS : BASE_POS;
+    const targetLook = this.isPortrait ? PORTRAIT_LOOK : BASE_LOOK;
+    const posErr = Math.hypot(
+      this.current.pos[0] - targetPos[0],
+      this.current.pos[1] - targetPos[1],
+      this.current.pos[2] - targetPos[2],
+    );
+    const lookErr = Math.hypot(
+      this.current.look[0] - targetLook[0],
+      this.current.look[1] - targetLook[1],
+      this.current.look[2] - targetLook[2],
+    );
+    return posErr < 0.14 && lookErr < 0.35;
+  }
+
   get isPortrait(): boolean {
     return this.height > this.width;
   }

@@ -259,7 +259,13 @@ export const MONITOR_JS = `(() => {
         'Version ' + (d.version || 'dev') + ' · Uptime ' + d.uptimeSec + 's · Updated ' + d.timestamp;
 
       const c = d.connections;
-      setText('c-active', c.activeClients + ' / ' + d.load.maxClients, c.activeClients >= d.load.maxClients * 0.8);
+      const pubCap = d.load.publicClientCap || d.load.maxClients;
+      const reserveTag = d.load.friendReserveActive ? ' [FRIEND RESERVE]' : '';
+      setText(
+        'c-active',
+        c.activeClients + ' / ' + pubCap + '+' + Math.max(0, d.load.maxClients - pubCap) + reserveTag,
+        c.activeClients >= pubCap
+      );
       setText('c-split', c.inMatch + ' / ' + c.queuing + ' / ' + c.spectating);
       setText('c-rooms', c.roomsActive + ' (' + c.matchmakingRooms + ' / ' + c.friendRooms + ')');
       setText('c-ips', c.uniqueIps + ' / ' + c.maxConnsSingleIp);

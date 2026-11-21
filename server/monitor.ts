@@ -67,6 +67,8 @@ export interface ServerSnapshotInput {
     maxRooms: number;
     clients: number;
     maxClients: number;
+    publicClientCap?: number;
+    friendReserveActive?: boolean;
   };
   queuesTotal: number;
   inMatchClients: number;

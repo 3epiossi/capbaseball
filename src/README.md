@@ -10,29 +10,31 @@
 
 | 檔案 | 職責 |
 |---|---|
-| [index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html) | 定義雙層 Canvas（`#pixel-canvas`、`#overlay-canvas`）、頂部 HUD（`.hud-top-region`）、漢堡選單、`#update-banner` 與各式原生 `<dialog>` 視窗。 |
-| [main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) | 管理遊戲階段狀態機、光譜整合彈簧投球、拖曳放開觸控打擊、線上揮棒時序佇列同步、投球時鐘、更新提示與零 `innerHTML` 安全 DOM 更新。 |
-| [styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) | 實作 16-bit 像素播報風格樣式、統一光譜彈簧軌道、桌機放大 HUD 與 `@container` 響應式規則。 |
-| [i18n/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/i18n/index.ts) | 依瀏覽器語系自動切換繁體中文（`zh-TW`）、日文（`ja`）與英文（`en`），並轉換伺服器裁判播報字串。 |
+| [index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html) | 定義雙層 Canvas（`#pixel-canvas`、`#overlay-canvas`）、頂部 HUD（`.hud-top-region`）、漢堡選單、右下角 Messenger 對話球（`#chat-hub`）、全螢幕轉場層（`#v2-transition-layer`）、`#update-banner` 與原生 `<dialog>` 視窗。 |
+| [main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) | 管理遊戲狀態機、循序呈現佇列（`PresentationQueue`）、光譜整合彈簧投球、下方游標觸控打擊、線上揮棒時序佇列同步、投球時鐘、行動版自動更新輪詢與零 `innerHTML` 安全 DOM 更新。 |
+| [styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) | 實作 16-bit 像素播報風格樣式、精簡放大 BSO 燈號計分板、單列右上狀態列、右下角 Messenger 對話球與 `@container` 響應式規則。 |
+| [i18n/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/i18n/index.ts) | 依瀏覽器語系自動切換繁體中文（`zh-TW`）、日文（`ja`）與英文（`en`），並保留國際通用棒球紀錄字母（`R`、`H`、`K`、`ꓘ`、`1B`、`2B`、`3B`、`AB`、`HR`、`BB`、`IBB`、`P`、`O`、`ABS`）。 |
+| [ui/emotes.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/emotes.ts) | 統一管理右下角 Messenger 圓形對話球、水平滑出橫條氣泡、近期紀錄與 8 組純文字三語快捷對話（前端 3 秒倒數冷卻）。 |
+| [ui/transitions.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/transitions.ts) | 驅動開賽、三振出局、全壘打／再見安打、攻守交換與比賽結束等全螢幕轉場動畫，以及擊球頓幀／慢動作／震動特效。 |
+| [ui/boxScore.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/boxScore.ts) | 繪製賽後各局得分表（`R`/`H`/`K`/`BB`）、提前結束標籤與本場 MVP 卡片（零 `innerHTML`）。 |
 
 ---
 
 ## 核心資料流／演算法
 
-### 1. 頂部統合播報區與 Play Call／ABS（`.hud-top-region`、`.zone-top-hud`）
+### 1. 頂部計分板、循序呈現佇列與 ABS 方案 B（`.hud-top-region`、`PresentationQueue`）
 
-- **零重疊頂部容器（`.hud-top-region`）**：將左上角計分板（`#scoreboard`）與右上角固定 2 排工具列（`.top-bar`）納入同一個 Flex 容器；寬螢幕左右並排，手機窄螢幕自動垂直堆疊，徹底避免文字換行或按鈕增減造成互遮。
-- **記分板（`#scoreboard`）**：顯示客主隊分數、壘包鑽石圖（`#base-1` 至 `#base-3`）、局數／球數、出局數與 ABS 剩餘挑戰次數燈號（`#abs-1`、`#abs-2`），底部跑馬燈顯示當前打者、投手用球數與遙測資訊；投球飛行中僅顯示 `IN FLIGHT`，**通過本壘板或擊中後才揭露實際球種與球速**。
-- **前景安全區 Play Call／ABS（`.zone-top-hud`）**：將 `FOUL`、`TOO LATE`、`SINGLE`、`DOUBLE` 等統一卡片與放大版 `ABS` 按鈕**釘死於螢幕前景安全區**（與 3D 好球帶投影脫鉤，追球運鏡時不再跟著移動），且揮棒落空時**直接顯示 timing 結果**（不再先閃紅色 `MISS`）；`ABS` 按鈕與卡片透過 `startAbsPromptWindow()` 同步淡出，雙方消散前鎖定投球。
+- **精簡放大 BSO 燈號計分板（`#scoreboard`）**：左欄客主隊名與比分、中欄壘包鑽石與 `▲/▼ 局數`／投球時鐘、右欄三列圓點燈號（`B` 綠 `#4ade80`、`S` 黃 `#f4c41c`、`O` 紅 `#f43f5e`）與 `ABS □□`（每隊每場 2 次）。移除冗餘球數與右側留白，球種／球速／變化量整合進側邊回饋卡，且全站保留國際通用棒球字母（`AB`、`P`、`R`、`H`、`K`、`ꓘ`、`1B`、`2B`、`3B`、`HR`、`BB`、`IBB`、`O`、`ABS`）。
+- **移除上方浮動消息框，統一由循序呈現佇列調度**：已完全移除舊版 `#swing-feedback-card` 浮動消息。擊出球飛行與鏡頭回拉期間畫面全淨空；待 `cam.isNearRest()` 回到本壘定點，側邊雙格卡才與裁判提示音（含界外球專屬 `'foul'` 雙響音）於同一幀同步出現。期間鎖定投球並暫停投球時鐘，卡片淡出後再依序接續 `strikeout` → `inning_change` → `game_over`（附 Box Score 與 MVP）或廣播 `next_batter`。
+- **ABS 方案 B 原地翻牌**：未揮棒且具挑戰資格時，側邊卡立即顯示主審判決與球種球速，但 3×3 區域以 `? ABS 可挑戰` 遮罩防劇透；2.2 秒未按 `[ABS]` 則原地閃光揭曉真實進壘點，按下則切入 3D 鷹眼重播。
 - **字體選擇**：一般介面與播報文字採用 `Chakra Petch` 提升小尺寸辨識度，主標題保留 `Silkscreen`。
 
-### 2. 右上角單列狀態與漢堡收折選單（`.top-bar`）
+### 2. 右上角單列狀態與右下角 Messenger 對話球（`.top-bar`、`#chat-hub`）
 
-桌機與行動裝置一律維持單列右對齊結構，不佔用垂直畫面：
-
-- **單列內容**：玩家暱稱晶片（`#btn-nick-chip`，手機自動隱藏）、即時網速狀態膠囊（`#net-speed-pill`）、線上人數膠囊（`#top-online-pill`），以及固定置右的三條線漢堡鈕（`#btn-menu` `☰`）；規則、設定、音效、棄權，以及打擊時的左右打切換（`#btn-hand`）／強振模式切換（`#btn-swing-type`，`#menu-bat-row`）統一收進可折疊 `#menu-dialog` 內，維持比賽主畫面單列極簡無遮擋。
-- **暫停與返回導航（`isGamePaused` / `navigateBack`）**：開啟選單、規則或設定對話框時，單機對戰會立即暫停物理與計時器；**線上對戰開啟選單時不停止比賽，且會於 `#menu-online-timer` 顯示 20 秒倒數，時間歸零即強制關閉選單恢復操作**；支援點擊與全域 `Escape`／`Backspace` 快捷鍵返回。
-- **伺服器版本漂移提醒（`#update-banner`）**：比對編譯注入的 `__BUILD__` 與伺服器 `welcome`／`/health` 版本號，若發現新版則提示玩家點擊刷新。
+- **右上單列狀態列（`.top-bar`）**：移除毫秒延遲膠囊，將伺服器負載與連線品質顏色（`good`/`fair`/`poor`/`busy`）直接反映在「在線人數（`#top-online-pill`）」上，桌機與手機一律與 `☰` 漢堡鈕橫向排成單列。
+- **右下角 Messenger 對話球（`#chat-hub`）**：採圓形藍底白邊雙對話框圖示，統一承載對手純文字快捷對話（8 組梗語錄三語自動對譯、3 秒冷卻）、賽事廣播（下一棒、`IBB`、投球超時）與線上系統通知（斷線重連、再戰請求、選單逾時、維護通知）。訊息從左側以單行圓角橫條滑出（`width: max-content; white-space: nowrap`）；直立手機投球時由 `updateSafeCameraFraming()` 自動抬升至投手面板上方避免遮擋。
+- **暫停與返回導航（`isGamePaused` / `navigateBack`）**：開啟選單、規則或 4 分頁設定對話框時，單機對戰會立即暫停物理與計時器；**線上對戰開啟選單時不停止比賽，且會於 `#menu-online-timer` 顯示 20 秒倒數，時間歸零即強制關閉選單恢復操作**；支援點擊與全域 `Escape`／`Backspace` 快捷鍵返回。
+- **行動版自動更新提示（`#update-banner`）**：採 `position: fixed; z-index: 140;` 避免被頂部容器裁切，於啟動、`visibilitychange`、`pageshow`、`focus`、`online` 與每 30 秒以 `./health?_t=...` 破除快取比對版本。
 
 ### 3. 光譜整合彈簧投球、投球時鐘與手機拖曳打擊
 

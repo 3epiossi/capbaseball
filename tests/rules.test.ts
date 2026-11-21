@@ -610,4 +610,47 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     expect(match.isGameOver).toBe(true);
     expect(match.winner).toBe('home');
   });
+
+  it('triggers Mercy Rule (Cold Game) at >=10 run differential from inning 2 onward when enabled', () => {
+    const m = createMatch('quick3', { mercyRule: true });
+    // Inning 1: 10-0 should NOT trigger mercy yet
+    m.away.totalRuns = 10;
+    m.away.runsByInning = [10];
+    for (let o = 0; o < 3; o++) applyBattedOutcome(m, 'OUT');
+    expect(m.half).toBe('bottom');
+    for (let o = 0; o < 3; o++) applyBattedOutcome(m, 'OUT');
+    expect(m.inning).toBe(2);
+    expect(m.isGameOver).toBe(false);
+
+    // End of inning 2 with away leading 10-0 -> Cold Game!
+    for (let o = 0; o < 3; o++) applyBattedOutcome(m, 'OUT');
+    expect(m.half).toBe('bottom');
+    for (let o = 0; o < 3; o++) applyBattedOutcome(m, 'OUT');
+    expect(m.isGameOver).toBe(true);
+    expect(m.mercyTriggered).toBe(true);
+    expect(m.winner).toBe('away');
+
+    // Bottom of inning 2 walk-off mercy (home goes up by 10 during bottom 2)
+    const mWalk = createMatch('quick3', { mercyRule: true });
+    mWalk.inning = 2;
+    mWalk.half = 'bottom';
+    mWalk.away.totalRuns = 0;
+    mWalk.home.totalRuns = 9;
+    mWalk.home.runsByInning = [5, 4];
+    applyBattedOutcome(mWalk, 'HR');
+    expect(mWalk.home.totalRuns).toBe(10);
+    expect(mWalk.isGameOver).toBe(true);
+    expect(mWalk.mercyTriggered).toBe(true);
+    expect(mWalk.winner).toBe('home');
+
+    // When mercyRule: false (friend room toggle off), 10-0 after inning 2 continues to inning 3
+    const mOff = createMatch('quick3', { mercyRule: false });
+    mOff.inning = 2;
+    mOff.half = 'bottom';
+    mOff.away.totalRuns = 10;
+    for (let o = 0; o < 3; o++) applyBattedOutcome(mOff, 'OUT');
+    expect(mOff.isGameOver).toBe(false);
+    expect(mOff.mercyTriggered).toBe(false);
+    expect(mOff.inning).toBe(3);
+  });
 });

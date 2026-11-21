@@ -10,8 +10,11 @@ import {
 import { sfx } from './audio/sfx';
 import {
   createTranslator,
+  formatInningHalf,
   getActiveLocale,
+  getPitchShortLabel,
   loadLocalePref,
+  localizeGradeOrTiming,
   localizeServerCallout,
   saveLocalePref,
   type DictKey,
@@ -36,7 +39,7 @@ import {
   type BattedCapResult,
   type FieldV3,
 } from './physics/batted';
-import { evaluateSwingResolution, type CatchInfo } from './physics/contact';
+import { evaluateSwingResolution, simulateOutfieldGroundBlock, type CatchInfo } from './physics/contact';
 import {
   PITCH_IDS,
   PITCH_SPECS,
@@ -51,7 +54,7 @@ import {
   drawStrikeZoneAndOverlay,
   HIT_PLANE_Z,
   type AbsReplayState,
-  type OverlayState,
+  type OnZoneFeedbackState,
 } from './render/overlay';
 import {
   drawWorldEntities,
@@ -86,6 +89,16 @@ import {
   type PlayerSlot,
 } from './rules/match';
 import './styles.css';
+import {
+  createCatcherReturnState,
+  drawCatcherReturnThrow,
+  startCatcherReturn,
+  stepCatcherReturn,
+} from './render/catcherReturn';
+import { renderBoxScore } from './ui/boxScore';
+import { EmoteController } from './ui/emotes';
+import type { SwingFeedbackPayload } from './ui/swingFeedback';
+import { TransitionDirector, type TransitionSpeed } from './ui/transitions';
 
 declare const __BUILD__: string;
 const CLIENT_BUILD_VERSION = typeof __BUILD__ !== 'undefined' ? __BUILD__ : '';
@@ -109,18 +122,14 @@ const sbDerbyRow = document.getElementById('sb-derby-row') as HTMLElement;
 const sbDerbyText = document.getElementById('sb-derby-text') as HTMLElement;
 const sbPitcherEl = document.getElementById('sb-pitcher') as HTMLElement;
 const sbPitchClockEl = document.getElementById('sb-pitch-clock') as HTMLElement;
-const sbBsEl = document.getElementById('sb-bs') as HTMLElement;
 
 const updateBanner = document.getElementById('update-banner') as HTMLElement;
 const btnUpdateRefresh = document.getElementById('btn-update-refresh') as HTMLButtonElement;
 const btnUpdateDismiss = document.getElementById('btn-update-dismiss') as HTMLButtonElement;
 
 const pitcherDock = document.getElementById('pitcher-dock') as HTMLElement;
+const chatHubEl = document.getElementById('chat-hub') as HTMLElement;
 const zoneTopHud = document.getElementById('zone-top-hud') as HTMLElement;
-const swingFeedbackCard = document.getElementById('swing-feedback-card') as HTMLElement;
-const sfHeadEl = document.getElementById('sf-head') as HTMLElement;
-const sfGradeEl = document.getElementById('sf-grade') as HTMLElement;
-const sfMetricsEl = document.getElementById('sf-metrics') as HTMLElement;
 const btnAbsChallenge = document.getElementById('btn-abs-challenge') as HTMLButtonElement;
 const absTimerFillEl = document.getElementById('abs-timer-fill') as HTMLElement;
 
@@ -133,9 +142,9 @@ const btnRules = document.getElementById('btn-rules') as HTMLButtonElement;
 const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
 const btnNickChip = document.getElementById('btn-nick-chip') as HTMLButtonElement;
 const nickChipLabel = document.getElementById('nick-chip-label') as HTMLElement;
-const netSpeedPill = document.getElementById('net-speed-pill') as HTMLElement;
-const netSpeedText = document.getElementById('net-speed-text') as HTMLElement;
 const topOnlinePill = document.getElementById('top-online-pill') as HTMLElement;
+const topOnlineText = document.getElementById('top-online-text') as HTMLElement;
+let lastOnlineCount = 0;
 const sbTelemetryEl = document.getElementById('sb-telemetry') as HTMLElement;
 
 const awayNameEl = document.getElementById('away-name') as HTMLElement;
@@ -195,14 +204,233 @@ const btnWatchRefresh = document.getElementById('btn-watch-refresh') as HTMLButt
 const onlineNameInput = document.getElementById('online-name') as HTMLInputElement;
 const setLanguage = document.getElementById('set-language') as HTMLSelectElement;
 const setTouchSwing = document.getElementById('set-touch-swing') as HTMLSelectElement;
+const setCursorOffset = document.getElementById('set-cursor-offset') as HTMLSelectElement;
+const setTransitionSpeed = document.getElementById('set-transition-speed') as HTMLSelectElement;
+const setFx = document.getElementById('set-fx') as HTMLInputElement;
 const setDifficulty = document.getElementById('set-difficulty') as HTMLSelectElement;
 const setGuideRing = document.getElementById('set-guide-ring') as HTMLInputElement;
 const setBreakPreview = document.getElementById('set-break-preview') as HTMLInputElement;
 const setSound = document.getElementById('set-sound') as HTMLInputElement;
+const setEmoteSfx = document.getElementById('set-emote-sfx') as HTMLInputElement;
+const btnMuteEmotes = document.getElementById('btn-mute-emotes') as HTMLButtonElement;
+const friendMercyRule = document.getElementById('friend-mercy-rule') as HTMLInputElement;
 
-// --- i18n & Touch Batting Preferences ---
+const catcherReturn = createCatcherReturnState();
+let onZoneFeedback: OnZoneFeedbackState | null = null;
+let pendingBattedFeedback: SwingFeedbackPayload | null = null;
+let pendingMissFeedback: SwingFeedbackPayload | null = null;
+let lastPitchCode = '4SFB';
+let lastPitchSpeedKmh = 70;
+let lastPitchBreakCm = 0;
+
+type PresentationStep =
+  | { kind: 'wait_camera_rest'; maxSec: number; elapsedSec: number }
+  | { kind: 'wait_abs' }
+  | { kind: 'wait_abs_replay' }
+  | { kind: 'brief_pause'; remainingSec: number }
+  | {
+      kind: 'show_feedback';
+      payload: SwingFeedbackPayload;
+      durationSec: number;
+      sfxTone?: 'strike' | 'ball' | 'out' | 'foul';
+      started?: boolean;
+    }
+  | { kind: 'big_hit'; title: string; sub: string; isWalkOff: boolean; started?: boolean }
+  | { kind: 'strikeout'; batterName: string; started?: boolean }
+  | { kind: 'inning_change'; inning: number; half: 'top' | 'bottom'; awayRuns: number; homeRuns: number; started?: boolean }
+  | { kind: 'game_over' }
+  | { kind: 'next_batter'; orderNum: number; batterName: string };
+
+let presentationQueue: PresentationStep[] = [];
+
+function getFeedbackDurationSec(): number {
+  return transitionDirector.config.speed === 'compact' ? 1.2 : 2.0;
+}
+
+function showOnZoneFeedback(
+  payload: SwingFeedbackPayload,
+  durationSec = getFeedbackDurationSec(),
+  absMasked = false,
+): void {
+  const brkVal = typeof payload.breakCm === 'number' ? payload.breakCm : lastPitchBreakCm;
+  const brkSuffix = brkVal > 0 ? ` · ${t('brkShort')} ${brkVal}cm` : '';
+  const pitchTxt = `${getPitchShortLabel(locale, payload.pitchCode)} ${Math.round(payload.speedKmh)} km/h${brkSuffix}`;
+  const locCall = localizeServerCallout(locale, payload.callLabel, payload.resultDetail ?? '');
+  const callTxt = locCall.title !== payload.callLabel ? locCall.title : localizeGradeOrTiming(locale, payload.callLabel);
+  const timingTxt = payload.timingLabel
+    ? localizeGradeOrTiming(locale, payload.timingLabel)
+    : payload.contact
+      ? t('gradeGood')
+      : t('gradeMiss');
+  lastCallLabel = locCall.subtitle ? `${callTxt} ${locCall.subtitle}` : callTxt;
+  onZoneFeedback = {
+    kind: payload.kind,
+    elapsedSec: 0,
+    durationSec,
+    batterHandedness,
+    pitchLabel: pitchTxt,
+    plateX: payload.plateX,
+    plateY: payload.plateY,
+    callLabel: callTxt,
+    callColor: payload.callColor,
+    resultDetail: locCall.subtitle || undefined,
+    dtTiming: payload.dtTiming,
+    timingLabel: timingTxt,
+    timingColor: payload.timingColor,
+    batX: payload.batX,
+    batY: payload.batY,
+    powerSwing: payload.powerSwing,
+    contact: payload.contact,
+    contactGrade: payload.contactGrade ? localizeGradeOrTiming(locale, payload.contactGrade) : undefined,
+    exitSpeedKmh: payload.exitSpeedKmh,
+    launchAngleDeg: payload.launchAngleDeg,
+    absMasked,
+    absMaskLabel: absMasked ? t('sfAbsMasked') : undefined,
+    pciTitle: t('sfPciTitle'),
+    pitchLocTitle: t('sfPitchLocTitle'),
+    timingTitle: t('sfTimingTitle'),
+    contactPrefix: t('sfContact'),
+    evPrefix: t('evShort'),
+    laPrefix: t('laShort'),
+  };
+  updateHudAndDocks();
+}
+
+function clearPresentationQueue(): void {
+  presentationQueue = [];
+  onZoneFeedback = null;
+  pendingBattedFeedback = null;
+  pendingMissFeedback = null;
+}
+
+function stepPresentationQueue(rawDt: number): void {
+  let changed = false;
+  while (presentationQueue.length > 0) {
+    const head = presentationQueue[0];
+    if (head.kind === 'wait_camera_rest') {
+      head.elapsedSec += rawDt;
+      if (cam.isNearRest() || head.elapsedSec >= head.maxSec) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'wait_abs') {
+      if (absPromptTimer <= 0 && !(absReplay && absReplay.active)) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'wait_abs_replay') {
+      if (!(absReplay && absReplay.active)) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'brief_pause') {
+      head.remainingSec -= rawDt;
+      if (head.remainingSec <= 0) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'show_feedback') {
+      if (!head.started) {
+        head.started = true;
+        if (head.sfxTone) {
+          sfx.playUmpireTone(head.sfxTone);
+        }
+        if (onZoneFeedback && onZoneFeedback.absMasked) {
+          // Scheme B (原地翻牌感): Unmask the exact same side card in-place with a reveal pop!
+          onZoneFeedback.absMasked = false;
+          onZoneFeedback.absRevealElapsed = 0;
+          onZoneFeedback.elapsedSec = 0;
+          onZoneFeedback.durationSec = head.durationSec;
+        } else {
+          showOnZoneFeedback(head.payload, head.durationSec, false);
+        }
+        changed = true;
+      }
+      if (onZoneFeedback === null) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'big_hit') {
+      if (!head.started) {
+        head.started = true;
+        transitionDirector.playBigHit(head.title, head.sub, head.isWalkOff);
+        changed = true;
+      }
+      if (!transitionDirector.isActive()) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'strikeout') {
+      if (!head.started) {
+        head.started = true;
+        transitionDirector.playStrikeout(head.batterName);
+        changed = true;
+      }
+      if (!transitionDirector.isActive()) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'inning_change') {
+      if (!head.started) {
+        head.started = true;
+        sfx.playInningChange();
+        transitionDirector.playInningChange(head.inning, head.half, head.awayRuns, head.homeRuns);
+        changed = true;
+      }
+      if (!transitionDirector.isActive()) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'game_over') {
+      presentationQueue.shift();
+      showGameOverModal();
+      changed = true;
+      break;
+    }
+    if (head.kind === 'next_batter') {
+      presentationQueue.shift();
+      emoteCtrl.showBroadcast(t('transAtBat'), `#${head.orderNum} ${head.batterName}`, '#f4c41c', 2200);
+      changed = true;
+      continue;
+    }
+  }
+  if (changed) {
+    updateHudAndDocks();
+  }
+}
+
+// --- i18n, Touch Batting & v2 Presentation Preferences ---
 type TouchSwingMode = 'drag_release' | 'instant_tap';
+type CursorOffsetLevel = 'low' | 'mid' | 'high';
 const TOUCH_SWING_KEY = 'capbaseball_touch_swing_v1';
+const CURSOR_OFFSET_KEY = 'capbaseball_cursor_offset_v1';
+const TRANS_SPEED_KEY = 'capbaseball_trans_speed_v1';
+const FX_ENABLED_KEY = 'capbaseball_fx_v1';
+const EMOTE_SFX_KEY = 'capbaseball_emote_sfx_v1';
 
 let localePref: LocalePref = loadLocalePref();
 let locale: Locale = getActiveLocale(localePref);
@@ -216,6 +444,80 @@ let touchSwingMode: TouchSwingMode = (() => {
   }
   return 'drag_release';
 })();
+let cursorOffsetLevel: CursorOffsetLevel = (() => {
+  try {
+    const v = localStorage.getItem(CURSOR_OFFSET_KEY);
+    if (v === 'low' || v === 'mid' || v === 'high') return v;
+  } catch {
+    // ignore
+  }
+  return 'mid';
+})();
+const initialTransSpeed: TransitionSpeed = (() => {
+  try {
+    return localStorage.getItem(TRANS_SPEED_KEY) === 'compact' ? 'compact' : 'normal';
+  } catch {
+    return 'normal';
+  }
+})();
+const initialFxEnabled: boolean = (() => {
+  try {
+    return localStorage.getItem(FX_ENABLED_KEY) !== '0';
+  } catch {
+    return true;
+  }
+})();
+const initialEmoteSfx: boolean = (() => {
+  try {
+    return localStorage.getItem(EMOTE_SFX_KEY) !== '0';
+  } catch {
+    return true;
+  }
+})();
+
+const transitionDirector = new TransitionDirector(
+  {
+    layer: document.getElementById('v2-transition-layer') as HTMLElement,
+    badge: document.getElementById('v2-trans-badge') as HTMLElement,
+    title: document.getElementById('v2-trans-title') as HTMLElement,
+    sub: document.getElementById('v2-trans-sub') as HTMLElement,
+    art: document.getElementById('v2-trans-art') as HTMLElement,
+  },
+  { speed: initialTransSpeed, fxEnabled: initialFxEnabled },
+);
+
+const emoteCtrl = new EmoteController(
+  {
+    dock: document.getElementById('chat-hub') as HTMLElement,
+    toggleBtn: document.getElementById('btn-chat-toggle') as HTMLButtonElement,
+    tray: document.getElementById('chat-tray') as HTMLElement,
+    bubble: document.getElementById('chat-bubble') as HTMLElement,
+  },
+  (id) => {
+    if (isOnline && !spectating) {
+      onlineClient.sendEmote(id);
+    }
+  },
+  () => sfx.playUmpireTone('ball'),
+);
+emoteCtrl.sfxEnabled = initialEmoteSfx;
+
+// Wire 4-tab Settings navigation
+const settingsTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-set-tab]'));
+const settingsPanes = Array.from(document.querySelectorAll<HTMLElement>('[data-set-pane]'));
+for (const tabBtn of settingsTabButtons) {
+  tabBtn.addEventListener('click', () => {
+    const target = tabBtn.dataset.setTab;
+    for (const b of settingsTabButtons) {
+      const active = b.dataset.setTab === target;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-selected', String(active));
+    }
+    for (const p of settingsPanes) {
+      p.hidden = p.dataset.setPane !== target;
+    }
+  });
+}
 
 function getLocalizedPitchName(pitchId: PitchId): string {
   const map: Record<PitchId, DictKey> = {
@@ -231,6 +533,10 @@ function applyLocaleToDom(): void {
   document.documentElement.lang = locale;
   setLanguage.value = localePref;
   setTouchSwing.value = touchSwingMode;
+  setCursorOffset.value = cursorOffsetLevel;
+  setTransitionSpeed.value = transitionDirector.config.speed;
+  setFx.checked = transitionDirector.config.fxEnabled;
+  setEmoteSfx.checked = emoteCtrl.sfxEnabled;
   for (const el of document.querySelectorAll<HTMLElement>('[data-i18n]')) {
     const key = el.dataset.i18n as DictKey | undefined;
     if (key) el.textContent = t(key);
@@ -242,11 +548,46 @@ function applyLocaleToDom(): void {
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
   btnSwingType.textContent = powerSwing ? t('btnPower') : t('btnNormal');
   btnSound.textContent = sfx.isMuted() ? t('btnMute') : t('btnSfx');
+  btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
   pitchSelectedNameEl.textContent = getLocalizedPitchName(selectedPitch);
   if (phase === 'idle') {
     btnThrow.textContent = isPlayCallActive() ? t('btnWait') : t('btnHoldToPitch');
   }
+  topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
+  transitionDirector.setLabels({
+    playBall: t('transPlayBall'),
+    changeSides: t('transChangeSides'),
+    out: t('transOut'),
+    strikeOut: t('callStrikeOut'),
+    walkOffBadge: t('transWalkOff'),
+    bigFlyBadge: t('transBigFly'),
+    coldGameBadge: t('labelColdGame'),
+    finalBadge: t('transFinal'),
+    atBatPrefix: t('transAtBat'),
+    formatInning: (half, inn) => formatInningHalf(locale, half, inn),
+  });
+  emoteCtrl.setLabels(
+    {
+      nice: t('emoteNice'),
+      wow: t('emoteWow'),
+      fire: t('emoteFire'),
+      sweat: t('emoteSweat'),
+      clap: t('emoteClap'),
+      gg: t('emoteGg'),
+      k: t('emoteK'),
+      hr: t('emoteHr'),
+    },
+    {
+      title: t('chatHubTitle'),
+      broadcastTag: t('chatBroadcastTag'),
+      systemTag: t('chatSystemTag'),
+      cooldownHint: t('chatCooldownHint'),
+      offlineNote: t('chatOfflineNote'),
+      emptyLog: t('chatEmptyLog'),
+    },
+  );
   renderSpringMeterUi();
+  updateHudAndDocks();
 }
 
 // --- Lineups ---
@@ -395,6 +736,9 @@ function handleServerVersion(serverVer: string | null | undefined): void {
   if (!serverVer || !CLIENT_BUILD_VERSION) return;
   if (IS_DEV_MODE) return;
   if (serverVer !== CLIENT_BUILD_VERSION) {
+    if (detectedServerVersion && serverVer !== detectedServerVersion) {
+      updateBannerDismissed = false;
+    }
     detectedServerVersion = serverVer;
     if (!updateBannerDismissed) {
       updateBanner.hidden = false;
@@ -403,10 +747,12 @@ function handleServerVersion(serverVer: string | null | undefined): void {
 }
 
 async function pollHealthVersion(): Promise<void> {
-  if (IS_DEV_MODE || !CLIENT_BUILD_VERSION || detectedServerVersion) return;
+  if (IS_DEV_MODE || !CLIENT_BUILD_VERSION) return;
   if (document.visibilityState === 'hidden') return;
   try {
-    const res = await fetch('./health', { cache: 'no-store' });
+    const url = new URL('./health', window.location.href);
+    url.searchParams.set('_t', String(Date.now()));
+    const res = await fetch(url.toString(), { cache: 'no-store' });
     if (!res.ok) return;
     const data = (await res.json()) as { version?: string | null };
     handleServerVersion(data.version);
@@ -427,7 +773,9 @@ function updatePitchClockUi(running: boolean): void {
   if (!enabled) return;
   const whole = Math.max(0, Math.ceil(pitchClockSec));
   sbPitchClockEl.textContent = String(whole);
-  sbPitchClockEl.dataset.urgent = String(running && whole <= 5);
+  const urgent = running && whole <= 5;
+  sbPitchClockEl.dataset.urgent = String(urgent);
+  sbPitchClockEl.classList.toggle('urgent', urgent);
   sbPitchClockEl.dataset.paused = String(!running);
 }
 
@@ -451,10 +799,6 @@ let capTrail: FieldV3[] = [];
 let capVisible = false;
 
 let hitFx: { active: boolean; pos: FieldV3; kind: 'hit' | 'hr_burst'; elapsedSec: number } | null = null;
-let swingFeedbackCardState: { grade: string; metrics: string; color: string; ttl: number } | null = null;
-let lastSwingTimingNote: string | null = null;
-let lastContactMetrics: string | null = null;
-let callout: OverlayState['callout'] = null;
 let resultDelayTimer = 0;
 let lastCallLabel = 'READY';
 let lastPitchTelemetry = 'READY';
@@ -635,15 +979,23 @@ function renderSpringMeterUi(): void {
 }
 
 function updateBreakPreview(): void {
+  const res = solvePitchTrajectory(selectedPitch, speedKmh, pitchTarget.x, pitchTarget.y, {
+    outputHz: 45,
+    seed: 1,
+  });
+
+  // Always couple aim crosshair tightly to the pitch's legal envelope endpoint so reticle & trajectory NEVER decouple!
+  const hitEndField = simToField(res.hitPlanePos);
+  if (Math.hypot(hitEndField[0] - pitchTarget.x, hitEndField[1] - pitchTarget.y) > 0.02) {
+    pitchTarget = { x: hitEndField[0], y: hitEndField[1] };
+  }
+
   if (!showBreakPreview) {
     breakDeltaField = null;
     previewPoints = [];
     return;
   }
-  const res = solvePitchTrajectory(selectedPitch, speedKmh, pitchTarget.x, pitchTarget.y, {
-    outputHz: 45,
-    seed: 1,
-  });
+
   breakDeltaField = { dx: res.breakDelta[1], dy: res.breakDelta[2] };
 
   // Sample ~22 evenly spaced points from release to hit plane for full 3D trajectory preview
@@ -677,48 +1029,20 @@ function isGamePaused(): boolean {
 }
 
 function isPlayCallActive(): boolean {
-  return swingFeedbackCardState !== null || isAbsChallengeAvailable() || Boolean(absReplay && absReplay.active);
+  return (
+    presentationQueue.length > 0 ||
+    onZoneFeedback !== null ||
+    isAbsChallengeAvailable() ||
+    Boolean(absReplay && absReplay.active) ||
+    transitionDirector.isActive()
+  );
 }
 
 function startAbsPromptWindow(): void {
-  const ttl = swingFeedbackCardState ? Math.max(2.2, swingFeedbackCardState.ttl) : 2.5;
+  const ttl = 2.2;
   absPromptMaxTimer = ttl;
   absPromptTimer = ttl;
   btnAbsChallenge.style.opacity = '1';
-}
-
-function showUnifiedPlayCall(
-  grade: string,
-  detail: string,
-  color: string,
-  ttl = 2.8,
-  header = 'PLAY CALL',
-): void {
-  const loc = localizeServerCallout(locale, grade, detail);
-  const locHeader =
-    header === 'PLAY CALL'
-      ? t('playCallHead')
-      : header === 'AUTO CPU'
-        ? t('autoCpuHead')
-        : header;
-  callout = { title: loc.title, subtitle: loc.subtitle, color, ttl, maxTtl: ttl };
-  lastCallLabel = loc.subtitle ? `${loc.title} ${loc.subtitle}` : loc.title;
-  swingFeedbackCardState = { grade: loc.title, metrics: loc.subtitle, color, ttl };
-  sfHeadEl.textContent = locHeader;
-  sfGradeEl.textContent = loc.title;
-  sfGradeEl.style.color = color;
-  sfMetricsEl.textContent = loc.subtitle;
-  swingFeedbackCard.style.borderLeftColor = color;
-  swingFeedbackCard.style.opacity = '1';
-  swingFeedbackCard.hidden = false;
-}
-
-function showCallout(title: string, subtitle: string, color: string, ttl = 2.6): void {
-  showUnifiedPlayCall(title, subtitle, color, Math.max(2.2, ttl), 'PLAY CALL');
-}
-
-function showSwingFeedback(grade: string, metrics: string, color: string): void {
-  showUnifiedPlayCall(grade, metrics, color, 2.8, 'PLAY CALL');
 }
 
 function isAbsChallengeEligibleForPlayer(): boolean {
@@ -743,6 +1067,7 @@ function triggerAbsChallenge(): void {
   if (!isAbsChallengeAvailable() || !match.lastChallenge) return;
   const lc = match.lastChallenge;
   absPromptTimer = 0;
+  clearPresentationQueue();
   btnAbsChallenge.hidden = true;
 
   if (isOnline) {
@@ -750,9 +1075,14 @@ function triggerAbsChallenge(): void {
     return;
   }
 
+  const prevInning = match.inning;
+  const prevHalf = match.half;
+  const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
+  const prevBatterName = getCurrentBatter(match).name;
+
   const res = applyAbsChallenge(match, lc.eligibleSide);
   if (!res.ok) return;
-  callout = null;
+
   absReplay = {
     active: true,
     plateX: res.plateX,
@@ -765,8 +1095,30 @@ function triggerAbsChallenge(): void {
     durationSec: 2.2,
   };
   sfx.playUmpireTone(res.overturned ? 'ball' : 'strike');
-  if (match.isGameOver) {
-    showGameOverModal();
+
+  // Queue post-ABS transitions cleanly after Hawk-Eye replay completes
+  presentationQueue.push({ kind: 'wait_abs_replay' });
+  const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+  const struckOut = match.strikes === 0 && match.lastEvent.includes('strikes out');
+  if (struckOut && !match.isGameOver) {
+    presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
+  }
+  if (inningChanged && !match.isGameOver) {
+    presentationQueue.push({
+      kind: 'inning_change',
+      inning: match.inning,
+      half: match.half,
+      awayRuns: match.away.totalRuns,
+      homeRuns: match.home.totalRuns,
+    });
+  } else if (match.isGameOver) {
+    presentationQueue.push({ kind: 'game_over' });
+  } else {
+    const curBatting = match.half === 'top' ? match.away : match.home;
+    if (curBatting.batterIndex !== prevBatterIdx) {
+      const nextB = getCurrentBatter(match);
+      presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+    }
   }
   updateHudAndDocks();
 }
@@ -778,24 +1130,24 @@ function updateHudAndDocks(): void {
   awayScoreEl.textContent = String(match.away.totalRuns);
   homeScoreEl.textContent = String(match.home.totalRuns);
   sbInningEl.textContent = `${match.half === 'top' ? '▲' : '▼'}${match.inning}`;
-  sbBsEl.textContent = `${match.balls}-${match.strikes}`;
 
   const batter = getCurrentBatter(match);
   const fielding = getFieldingTeam(match);
   const pitcherSlot = fielding.lineup.find((p) => p.position === 'P') ?? fielding.lineup[0];
   sbBatterEl.textContent = batter.name;
-  sbPitcherEl.textContent = `${pitcherSlot?.name ?? '--'} · P:${fielding.pitchesThrown}`;
+  sbPitcherEl.textContent = pitcherSlot?.name ?? '--';
 
-  sbTelemetryEl.hidden = onTitleScreen;
-  sbTelemetryEl.textContent = spectating
-    ? `WATCH ${onlineRoomCode ?? ''} · ${lastPitchTelemetry}`
-    : lastPitchTelemetry;
+  // Pitch type / speed / break now lives inside the side Pitch Location panel so Scorebug stays sleek & narrow
+  sbTelemetryEl.hidden = onTitleScreen || !spectating;
+  if (spectating) {
+    sbTelemetryEl.textContent = `${t('watchPrefix')} ${onlineRoomCode ?? ''}`;
+  }
 
   if (match.derby.active) {
     sbNormalRow.hidden = true;
     sbDerbyRow.hidden = false;
     const left = match.derby.half === 'away' ? match.derby.awayPitchesLeft : match.derby.homePitchesLeft;
-    sbDerbyText.textContent = `${left} LEFT · 中正黑 ${match.derby.awayHR} - ${match.derby.homeHR} 中正黃`;
+    sbDerbyText.textContent = `${left} ${t('derbyLeft')} · ${match.away.name} ${match.derby.awayHR} - ${match.derby.homeHR} ${match.home.name}`;
   } else {
     sbNormalRow.hidden = false;
     sbDerbyRow.hidden = true;
@@ -804,7 +1156,11 @@ function updateHudAndDocks(): void {
   for (let i = 0; i < 3; i++) {
     document.getElementById(`base-${i + 1}`)?.classList.toggle('on', match.bases[i] !== null);
   }
+  for (let i = 1; i <= 3; i++) {
+    document.getElementById(`b${i}`)?.classList.toggle('on', match.balls >= i);
+  }
   for (let i = 1; i <= 2; i++) {
+    document.getElementById(`s${i}`)?.classList.toggle('on', match.strikes >= i);
     document.getElementById(`o${i}`)?.classList.toggle('on', match.outs >= i);
   }
   const absSide = isOnline && onlineSide ? onlineSide : 'home';
@@ -863,10 +1219,15 @@ function updateSafeCameraFraming(immediate: boolean): void {
       ? (topSafe + (bottomSafe - topSafe) * 0.34) / vh
       : Math.min(0.5, (topSafe + (bottomSafe - topSafe) * 0.44) / vh);
     cam.setTargetCenterYRatio(ratio, immediate);
-    // Pin Play Call + ABS cleanly in screen-space below Top HUD (decoupled from 3D camera motion)
+    // Pin ABS cleanly in screen-space below Top HUD (decoupled from 3D camera motion)
     zoneTopHud.style.top = `${Math.round(hudRect.bottom + 10)}px`;
+    // Keep Messenger Chat Ball cleanly above Pitcher Dock on portrait phones, bottom-right otherwise
+    chatHubEl.style.bottom = !pitcherDock.hidden
+      ? `calc(${cachedPortraitDockHeight + 14}px + env(safe-area-inset-bottom, 0px))`
+      : '';
   } else {
     cam.setTargetCenterYRatio(0.5, immediate);
+    chatHubEl.style.bottom = '';
     // Pin Play Call + ABS in upper-center screen-space above the home-plate strike zone (decoupled from 3D camera)
     const pinnedTop = vh < 500
       ? Math.max(8, Math.round(vh * 0.04))
@@ -904,12 +1265,17 @@ function startMode(mode: GameMode): void {
   pitcherFrame = 0;
   batterAnim = 'ready';
   batterAnimTime = 0;
+  batCursor = { x: 0, y: 0.72 };
   capVisible = false;
   capTrail = [];
   hitFx = null;
-  callout = null;
-  swingFeedbackCardState = null;
-  swingFeedbackCard.hidden = true;
+  clearPresentationQueue();
+  catcherReturn.active = false;
+  transitionDirector.clear();
+  emoteCtrl.clearHistory();
+  emoteCtrl.setOnlineSendEnabled(false);
+  emoteCtrl.setVisible(true);
+  btnMuteEmotes.hidden = true;
   absPromptTimer = 0;
   absReplay = null;
   bounceRings = [];
@@ -918,7 +1284,7 @@ function startMode(mode: GameMode): void {
   fenceFlashAlpha = 0;
   resetSpringMeter();
   pendingPitchTelemetry = '';
-  lastPitchTelemetry = 'READY';
+  lastPitchTelemetry = t('telReady');
   cam.resetImmediate();
   resetOutfielders(outfielders);
   selectPitch('straight');
@@ -926,6 +1292,9 @@ function startMode(mode: GameMode): void {
   updateHudAndDocks();
   updateSafeCameraFraming(true);
 
+  if (mode !== 'practice_bat' && mode !== 'practice_pitch') {
+    transitionDirector.playMatchStart(match.away.name, match.home.name);
+  }
   if (getCurrentRole() === 'batter') {
     cpuAutoPitchTimer = 0.75;
   }
@@ -952,7 +1321,12 @@ function returnToTitle(): void {
   scoreboardEl.hidden = true;
   pitcherDock.hidden = true;
   menuBatRow.hidden = true;
-  swingFeedbackCard.hidden = true;
+  clearPresentationQueue();
+  catcherReturn.active = false;
+  transitionDirector.clear();
+  emoteCtrl.setOnlineSendEnabled(false);
+  emoteCtrl.setVisible(false);
+  btnMuteEmotes.hidden = true;
   btnAbsChallenge.hidden = true;
   resetSpringMeter();
   absPromptTimer = 0;
@@ -973,6 +1347,11 @@ function launchPitch(
   seed?: number,
 ): void {
   const spec = PITCH_SPECS[pitchId];
+  lastPitchCode = spec.code;
+  lastPitchSpeedKmh = spdKmh;
+  clearPresentationQueue();
+  transitionDirector.clear();
+  catcherReturn.active = false;
   activePitch = solvePitchTrajectory(pitchId, spdKmh, targetX, targetY, {
     errorY: errorX,
     errorZ: errorY,
@@ -991,8 +1370,9 @@ function launchPitch(
   }
 
   const breakCm = Math.round(Math.hypot(activePitch.breakDelta[1], activePitch.breakDelta[2]) * 100);
+  lastPitchBreakCm = breakCm;
   // Hold pitch telemetry until the cap reaches the plate/contact (no mid-flight spoiler!)
-  pendingPitchTelemetry = `${spec.code} ${Math.round(spdKmh)} km/h · BRK ${breakCm}cm`;
+  pendingPitchTelemetry = `${getPitchShortLabel(locale, spec.code)} ${Math.round(spdKmh)} km/h · ${t('brkShort')} ${breakCm}cm`;
   lastPitchTelemetry = t('telInFlight');
 
   queuedOnlinePitchResult = null;
@@ -1004,8 +1384,6 @@ function launchPitch(
   batterAnimTime = 0;
   batterSwungThisPitch = false;
   swingChecked = false;
-  lastSwingTimingNote = null;
-  lastContactMetrics = null;
   onlineNoSwingSentForSeq = 0;
   capVisible = false;
   capTrail = [];
@@ -1023,7 +1401,7 @@ function resetSpringMeter(): void {
   springMeter.peak = 0;
   springMeter.reboundTime = 0;
   springMeter.lockTimer = 0;
-  btnThrow.textContent = 'HOLD TO PITCH';
+  btnThrow.textContent = t('btnHoldToPitch');
   btnThrow.classList.remove('charging');
   renderSpringMeterUi();
 }
@@ -1043,7 +1421,7 @@ function startSpringCharge(): void {
   springMeter.reboundTime = 0;
   springMeter.lockTimer = 0;
   phase = 'pitch_meter';
-  btnThrow.textContent = 'RELEASE!';
+  btnThrow.textContent = t('btnRelease');
   btnThrow.classList.add('charging');
   renderSpringMeterUi();
 }
@@ -1074,7 +1452,7 @@ function commitSpringPitch(peakVal: number): void {
   if (isOnline) {
     resetSpringMeter();
     phase = 'awaiting_result';
-    lastPitchTelemetry = 'PITCHING...';
+    lastPitchTelemetry = t('btnThrowing');
     onlineClient.submitPitch({
       pitchSeq: onlinePitchSeq,
       pitchId: selectedPitch,
@@ -1107,7 +1485,7 @@ function releaseSpringThrow(overridePeak?: number): void {
   springMeter.reboundDur = 0.28 + 0.24 * springMeter.peak;
   springMeter.lockTimer = 0.36;
   springMeter.stage = 'rebounding';
-  btnThrow.textContent = 'LAUNCHING...';
+  btnThrow.textContent = t('btnLaunching');
   btnThrow.classList.remove('charging');
   renderSpringMeterUi();
 }
@@ -1134,9 +1512,24 @@ function resolveContact(dtTiming: number): void {
     outfielders,
   });
 
+  const plateFieldNow = simToField(activePitch.plateCrossPos);
   if (!resolution.contact) {
-    lastSwingTimingNote = resolution.detail || 'SWINGING STRIKE';
-    showSwingFeedback(lastSwingTimingNote, 'STRIKE', '#f4c41c');
+    pendingMissFeedback = {
+      kind: 'swing',
+      pitchCode: lastPitchCode,
+      speedKmh: lastPitchSpeedKmh,
+      plateX: plateFieldNow[0],
+      plateY: plateFieldNow[1],
+      callLabel: 'STRIKE',
+      callColor: '#f4c41c',
+      dtTiming,
+      timingLabel: resolution.label || 'MISS',
+      timingColor: resolution.color || '#f43f5e',
+      batX: batCursor.x,
+      batY: batCursor.y,
+      powerSwing,
+      contact: false,
+    };
     return;
   }
 
@@ -1151,14 +1544,37 @@ function resolveContact(dtTiming: number): void {
   const grade = resolution.outcome === 'FOUL' ? resolution.label : resolution.quality.toUpperCase();
   const ev = Math.round(resolution.exitSpeedKmh);
   const [bvx, bvy, bvz] = resolution.battedParams.velocity;
-  const la = Math.round((Math.atan2(bvy, Math.hypot(bvx, bvz)) * 180) / Math.PI);
-  lastSwingTimingNote = resolution.outcome === 'FOUL' ? resolution.label : null;
-  lastContactMetrics = `EV ${ev} km/h · LA ${la}°`;
-  showSwingFeedback(
-    grade,
-    resolution.outcome === 'FOUL' ? `${resolution.feedback} · EV ${ev} km/h` : lastContactMetrics,
-    resolution.color,
-  );
+  const la =
+    typeof resolution.launchAngleDeg === 'number'
+      ? resolution.launchAngleDeg
+      : Math.round((Math.atan2(bvy, Math.hypot(bvx, bvz)) * 180) / Math.PI);
+  // Defer showing dual feedback card until the batted play finishes & camera pulls back to home plate!
+  pendingBattedFeedback = {
+    kind: 'swing',
+    pitchCode: lastPitchCode,
+    speedKmh: lastPitchSpeedKmh,
+    plateX: plateFieldNow[0],
+    plateY: plateFieldNow[1],
+    callLabel: resolution.outcome,
+    callColor: resolution.color,
+    dtTiming,
+    timingLabel: resolution.label,
+    timingColor: resolution.color,
+    batX: batCursor.x,
+    batY: batCursor.y,
+    powerSwing,
+    contact: true,
+    contactGrade: grade,
+    exitSpeedKmh: ev,
+    launchAngleDeg: la,
+  };
+
+  if (activeBatted.overFence) {
+    transitionDirector.triggerHitStop(0.048);
+    transitionDirector.triggerSlowMo(0.62, 0.44);
+  } else if (resolution.rawQuality > 0.72) {
+    transitionDirector.triggerHitStop(0.04);
+  }
 
   sfx.playBatCrack(
     activeBatted.overFence
@@ -1202,6 +1618,9 @@ function finishPitchWithoutContact(): void {
 
   const prevInning = match.inning;
   const prevHalf = match.half;
+  const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
+  const prevBatterName = getCurrentBatter(match).name;
+  let struckOut = false;
 
   if (!batterSwungThisPitch) {
     const preSnap = captureAbsPreSnapshot(match);
@@ -1241,25 +1660,60 @@ function finishPitchWithoutContact(): void {
       reachesPassLine: activePitch.reachesPassLine,
     });
 
+    let callLbl = res.isStrike ? 'STRIKE' : 'BALL';
+    let callCol = res.isStrike ? '#f4c41c' : '#4ade80';
+    let callDetail = '';
+
     if (res.call === 'UNCAUGHT_THIRD_STRIKE') {
-      showCallout('UNCAUGHT 3RD', 'DROPPED 3RD · BATTER TO 1B', '#f97316', 1.7);
+      callLbl = 'UNCAUGHT 3RD';
+      callCol = '#f97316';
+      callDetail = 'DROPPED 3RD · BATTER TO 1B';
       sfx.playUmpireTone('out');
     } else if (res.isWildPitch) {
-      showCallout('WILD PITCH', 'WILD PITCH · RUNNERS ADVANCE', '#f97316', 1.5);
+      callLbl = 'WILD PITCH';
+      callCol = '#f97316';
+      callDetail = 'WILD PITCH · RUNNERS ADVANCE';
       sfx.playUmpireTone('ball');
     } else if (res.isStrike) {
       const isK = match.strikes === 0 && match.lastEvent.includes('strikes out');
-      showCallout(isK ? 'STRIKE OUT!' : 'STRIKE', isK ? 'CALLED STRIKE THREE' : 'CALLED STRIKE', '#f4c41c', 1.25);
+      struckOut = isK;
+      if (isK) {
+        callLbl = 'STRIKE OUT!';
+        callCol = '#f43f5e';
+        callDetail = 'CALLED STRIKE THREE';
+      }
       sfx.playUmpireTone(isK ? 'out' : 'strike');
     } else {
       const isBB = match.balls === 0 && match.lastEvent.includes('walks');
-      showCallout(isBB ? 'WALK (BB)' : 'BALL', isBB ? 'BASE ON BALLS' : 'OUTSIDE ZONE', '#4ade80', 1.25);
+      if (isBB) {
+        callLbl = 'WALK (BB)';
+        callDetail = 'BASE ON BALLS';
+      }
       sfx.playUmpireTone('ball');
     }
 
-    if (isAbsChallengeEligibleForPlayer()) {
-      startAbsPromptWindow();
+    if (caughtByCatcher) {
+      startCatcherReturn(catcherReturn, getPitchingTeamColor(), transitionDirector.config.speed === 'compact');
     }
+
+    const takePayload: SwingFeedbackPayload = {
+      kind: 'take',
+      pitchCode: lastPitchCode,
+      speedKmh: lastPitchSpeedKmh,
+      plateX: plateField[0],
+      plateY: plateField[1],
+      callLabel: callLbl,
+      callColor: callCol,
+      resultDetail: callDetail || undefined,
+    };
+
+    if (isAbsChallengeEligibleForPlayer()) {
+      // Scheme B (原地翻牌感): Immediately show side card with 3x3 masked as "? ABS 可挑戰", reveal dot in-place when timer ends!
+      showOnZoneFeedback(takePayload, getFeedbackDurationSec(), true);
+      startAbsPromptWindow();
+      presentationQueue.push({ kind: 'wait_abs' });
+    }
+    presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
   } else {
     match.lastChallenge = null;
     const res = judgePitch({
@@ -1282,23 +1736,77 @@ function finishPitchWithoutContact(): void {
       reachesPassLine: activePitch.reachesPassLine,
     });
 
+    if (caughtByCatcher) {
+      startCatcherReturn(catcherReturn, getPitchingTeamColor(), transitionDirector.config.speed === 'compact');
+    }
+
+    let missLbl = 'SWINGING STRIKE';
+    let missCol = '#f4c41c';
+    let missDetail = '';
+
     if (res.call === 'UNCAUGHT_THIRD_STRIKE') {
-      showCallout('UNCAUGHT 3RD', 'DROPPED 3RD · BATTER TO 1B', '#f97316', 1.7);
+      missLbl = 'UNCAUGHT 3RD';
+      missCol = '#f97316';
+      missDetail = 'DROPPED 3RD · BATTER TO 1B';
       sfx.playUmpireTone('out');
     } else if (res.isWildPitch) {
-      showCallout('WILD PITCH', 'WILD PITCH · RUNNERS ADVANCE', '#f97316', 1.5);
+      missLbl = 'WILD PITCH';
+      missCol = '#f97316';
+      missDetail = 'WILD PITCH · RUNNERS ADVANCE';
       sfx.playUmpireTone('ball');
     } else {
       const isK = match.strikes === 0 && match.lastEvent.includes('strikes out');
-      const timingTitle = lastSwingTimingNote || 'SWINGING STRIKE';
-      showCallout(timingTitle, isK ? 'STRIKE OUT!' : 'STRIKE', '#f4c41c', 2.4);
+      struckOut = isK;
+      if (isK) {
+        missLbl = 'STRIKE OUT!';
+        missCol = '#f43f5e';
+      }
       sfx.playUmpireTone(isK ? 'out' : 'strike');
     }
+
+    const missPayload: SwingFeedbackPayload = {
+      ...(pendingMissFeedback ?? {
+        kind: 'swing',
+        pitchCode: lastPitchCode,
+        speedKmh: lastPitchSpeedKmh,
+        plateX: plateField[0],
+        plateY: plateField[1],
+        dtTiming: 0,
+        timingLabel: 'MISS',
+        timingColor: '#f43f5e',
+        batX: batCursor.x,
+        batY: batCursor.y,
+        powerSwing,
+        contact: false,
+      }),
+      callLabel: missLbl,
+      callColor: missCol,
+      resultDetail: missDetail || undefined,
+    };
+    pendingMissFeedback = null;
+    presentationQueue.push({ kind: 'show_feedback', payload: missPayload, durationSec: getFeedbackDurationSec() });
   }
 
-  if (match.inning !== prevInning || match.half !== prevHalf) {
-    showCallout('INNING CHANGE', `${match.half === 'top' ? 'TOP' : 'BOT'} ${match.inning}`, '#38bdf8', 1.7);
-    sfx.playInningChange();
+  const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+  if (struckOut && !match.isGameOver) {
+    presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
+  }
+  if (inningChanged && !match.isGameOver) {
+    presentationQueue.push({
+      kind: 'inning_change',
+      inning: match.inning,
+      half: match.half,
+      awayRuns: match.away.totalRuns,
+      homeRuns: match.home.totalRuns,
+    });
+  } else if (match.isGameOver) {
+    presentationQueue.push({ kind: 'game_over' });
+  } else {
+    const curBatting = match.half === 'top' ? match.away : match.home;
+    if (curBatting.batterIndex !== prevBatterIdx) {
+      const nextB = getCurrentBatter(match);
+      presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+    }
   }
 
   enterResultPause();
@@ -1310,18 +1818,67 @@ function finishBattedPlay(): void {
   if ((isOnline || spectating) && pendingOnlineResult) {
     const msg = pendingOnlineResult;
     pendingOnlineResult = null;
+    const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
     match = msg.match;
     onlinePitchSeq = msg.nextPitchSeq;
     onlineTurnState = match.isGameOver ? 'game_over' : 'awaiting_pitch';
-    showCallout(msg.callout.title, msg.callout.subtitle, msg.callout.color, msg.callout.ttl);
     const outcome = msg.resolution?.outcome ?? 'OUT';
-    if (outcome === 'HR') sfx.playHomeRunFanfare();
-    else if (outcome === 'OUT') sfx.playUmpireTone('out');
-    else if (outcome === 'FOUL') sfx.playUmpireTone('strike');
-    else sfx.playUmpireTone('ball');
-    if (msg.inningChanged) {
-      showCallout('INNING CHANGE', `${match.half === 'top' ? 'TOP' : 'BOT'} ${match.inning}`, '#38bdf8', 1.7);
-      sfx.playInningChange();
+    const locCall = localizeServerCallout(locale, msg.callout.title, msg.callout.subtitle);
+    if (pendingBattedFeedback) {
+      pendingBattedFeedback.callLabel = msg.callout.title;
+      pendingBattedFeedback.callColor = msg.callout.color;
+      pendingBattedFeedback.resultDetail = msg.callout.subtitle || undefined;
+    }
+    let verdictSfx: 'strike' | 'ball' | 'out' | 'foul' | undefined;
+    if (outcome === 'HR') {
+      sfx.playHomeRunFanfare();
+      presentationQueue.push({
+        kind: 'big_hit',
+        title: t('callHr'),
+        sub: locCall.subtitle,
+        isWalkOff: Boolean(match.isGameOver && !match.mercyTriggered),
+      });
+    } else if (outcome === 'OUT') {
+      verdictSfx = 'out';
+    } else if (outcome === 'FOUL') {
+      verdictSfx = 'foul';
+    } else {
+      verdictSfx = 'ball';
+      if (match.isGameOver && !match.mercyTriggered) {
+        presentationQueue.push({ kind: 'big_hit', title: t('callWalkOff'), sub: locCall.title, isWalkOff: true });
+      }
+    }
+
+    // Wait for camera pullback to home plate BEFORE showing the side dual feedback card + verdict tone in lockstep!
+    presentationQueue.push({ kind: 'wait_camera_rest', maxSec: 1.0, elapsedSec: 0 });
+    if (pendingBattedFeedback) {
+      presentationQueue.push({
+        kind: 'show_feedback',
+        payload: pendingBattedFeedback,
+        durationSec: getFeedbackDurationSec(),
+        sfxTone: verdictSfx,
+      });
+      pendingBattedFeedback = null;
+    } else if (verdictSfx) {
+      sfx.playUmpireTone(verdictSfx);
+    }
+
+    if (msg.inningChanged && !match.isGameOver) {
+      presentationQueue.push({
+        kind: 'inning_change',
+        inning: match.inning,
+        half: match.half,
+        awayRuns: match.away.totalRuns,
+        homeRuns: match.home.totalRuns,
+      });
+    } else if (match.isGameOver) {
+      presentationQueue.push({ kind: 'game_over' });
+    } else if (outcome !== 'FOUL') {
+      const curBatting = match.half === 'top' ? match.away : match.home;
+      if (curBatting.batterIndex !== prevBatterIdx) {
+        const nextB = getCurrentBatter(match);
+        presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+      }
     }
     enterResultPause();
     return;
@@ -1329,6 +1886,7 @@ function finishBattedPlay(): void {
 
   const prevInning = match.inning;
   const prevHalf = match.half;
+  const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
 
   let outcome: ReturnType<typeof judgeBattedCap>;
   if (match.derby.active) {
@@ -1339,31 +1897,96 @@ function finishBattedPlay(): void {
   }
 
   const isBobbleHit = Boolean(activeCatchInfo?.bobbled && (outcome === '1B' || outcome === '2B' || outcome === '3B'));
+  const isBlockedSingle = Boolean(activeCatchInfo?.blocked && outcome === '1B');
+
+  let outTitle = 'OUT!';
+  let outColor = '#f43f5e';
+  let outDetail = '';
+  let verdictSfx: 'strike' | 'ball' | 'out' | 'foul' | undefined;
 
   if (outcome === 'HR') {
-    showCallout('HOME RUN!', `${activeBatted.maxDistanceM.toFixed(1)}m · ${lastContactMetrics ?? 'OVER WALL'}`, '#f4c41c', 3.0);
+    outTitle = 'HOME RUN!';
+    outColor = '#f4c41c';
+    outDetail = `${activeBatted.maxDistanceM.toFixed(1)}m`;
     sfx.playHomeRunFanfare();
+    presentationQueue.push({
+      kind: 'big_hit',
+      title: t('callHr'),
+      sub: outDetail,
+      isWalkOff: Boolean(match.isGameOver && !match.mercyTriggered),
+    });
   } else if (outcome === '3B') {
-    showCallout('TRIPLE!', isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : `${lastContactMetrics ?? 'OFF WALL · 3B'}`, '#38bdf8', 2.6);
-    sfx.playUmpireTone('ball');
+    outTitle = 'TRIPLE!';
+    outColor = '#38bdf8';
+    outDetail = isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : 'OFF WALL · 3B';
+    verdictSfx = 'ball';
   } else if (outcome === '2B') {
-    showCallout('DOUBLE!', isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : `${lastContactMetrics ?? 'OFF WALL · 2B'}`, '#4ade80', 2.5);
-    sfx.playUmpireTone('ball');
+    outTitle = 'DOUBLE!';
+    outColor = '#4ade80';
+    outDetail = isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : 'OFF WALL · 2B';
+    verdictSfx = 'ball';
   } else if (outcome === '1B') {
-    showCallout('SINGLE!', isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : `${lastContactMetrics ?? 'BASE HIT · 1B'}`, '#a3e635', 2.4);
-    sfx.playUmpireTone('ball');
+    outTitle = 'SINGLE!';
+    outColor = '#a3e635';
+    outDetail = isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : isBlockedSingle ? 'OF CUTOFF · HELD TO 1B' : '';
+    verdictSfx = 'ball';
   } else if (outcome === 'FOUL') {
-    const foulTitle = lastSwingTimingNote ?? 'FOUL';
-    showCallout(foulTitle, lastContactMetrics ? `FOUL · ${lastContactMetrics}` : 'FOUL BALL', '#fb923c', 2.4);
-    sfx.playUmpireTone('strike');
+    outTitle = 'FOUL';
+    outColor = '#fb923c';
+    verdictSfx = 'foul';
   } else {
-    showCallout('OUT!', battedCaughtInAir ? 'OUTFIELD CATCH!' : 'INFIELD OUT!', '#f43f5e', 2.4);
-    sfx.playUmpireTone('out');
+    outTitle = 'OUT!';
+    outColor = '#f43f5e';
+    outDetail = battedCaughtInAir ? 'OUTFIELD CATCH!' : 'INFIELD OUT!';
+    verdictSfx = 'out';
   }
 
-  if (match.inning !== prevInning || match.half !== prevHalf) {
-    showCallout('INNING CHANGE', `${match.half === 'top' ? 'TOP' : 'BOT'} ${match.inning}`, '#38bdf8', 2.4);
-    sfx.playInningChange();
+  if (pendingBattedFeedback) {
+    pendingBattedFeedback.callLabel = outTitle;
+    pendingBattedFeedback.callColor = outColor;
+    pendingBattedFeedback.resultDetail = outDetail || undefined;
+  }
+
+  if (match.isGameOver && outcome !== 'HR' && outcome !== 'OUT' && outcome !== 'FOUL' && !match.mercyTriggered) {
+    presentationQueue.push({
+      kind: 'big_hit',
+      title: t('callWalkOff'),
+      sub: `${match.home.totalRuns} — ${match.away.totalRuns}`,
+      isWalkOff: true,
+    });
+  }
+
+  // Wait until camera pulls back & settles at home plate BEFORE popping the dual feedback card + verdict tone in lockstep!
+  presentationQueue.push({ kind: 'wait_camera_rest', maxSec: 1.0, elapsedSec: 0 });
+  if (pendingBattedFeedback) {
+    presentationQueue.push({
+      kind: 'show_feedback',
+      payload: pendingBattedFeedback,
+      durationSec: getFeedbackDurationSec(),
+      sfxTone: verdictSfx,
+    });
+    pendingBattedFeedback = null;
+  } else if (verdictSfx) {
+    sfx.playUmpireTone(verdictSfx);
+  }
+
+  const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+  if (inningChanged && !match.isGameOver) {
+    presentationQueue.push({
+      kind: 'inning_change',
+      inning: match.inning,
+      half: match.half,
+      awayRuns: match.away.totalRuns,
+      homeRuns: match.home.totalRuns,
+    });
+  } else if (match.isGameOver) {
+    presentationQueue.push({ kind: 'game_over' });
+  } else if (outcome !== 'FOUL') {
+    const curBatting = match.half === 'top' ? match.away : match.home;
+    if (curBatting.batterIndex !== prevBatterIdx) {
+      const nextB = getCurrentBatter(match);
+      presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+    }
   }
 
   enterResultPause();
@@ -1377,6 +2000,12 @@ function showGameOverModal(): void {
         ? `${match.away.name} ${t('winsSuffix')}`
         : t('tieGame');
 
+  transitionDirector.playGameSet(
+    winLabel,
+    `${match.away.name} ${match.away.totalRuns} — ${match.home.totalRuns} ${match.home.name}`,
+    Boolean(match.mercyTriggered),
+  );
+
   // Safe DOM construction (zero innerHTML XSS exposure)
   resultBody.replaceChildren();
   const wrap = document.createElement('div');
@@ -1387,24 +2016,21 @@ function showGameOverModal(): void {
   winnerEl.textContent = winLabel;
   wrap.appendChild(winnerEl);
 
-  const linesEl = document.createElement('div');
-  linesEl.className = 'result-lines';
-  for (const team of [match.away, match.home]) {
-    const box = document.createElement('div');
-    box.className = 'result-team-box';
-    const nameEl = document.createElement('strong');
-    nameEl.textContent = team.name;
-    const statsEl = document.createElement('span');
-    statsEl.textContent = `${team.totalRuns} R · ${team.hits} H`;
-    box.append(nameEl, statsEl);
-    linesEl.appendChild(box);
-  }
-  wrap.appendChild(linesEl);
-
-  const metaEl = document.createElement('div');
-  metaEl.className = 'result-meta';
-  metaEl.textContent = `${t('statsPitches')}: ${match.stats.totalPitches} · ${t('statsHr')}: ${match.stats.homeRuns}`;
-  wrap.appendChild(metaEl);
+  const boxHost = document.createElement('div');
+  boxHost.className = 'result-boxscore-host';
+  renderBoxScore(boxHost, match, {
+    team: t('bsTeam'),
+    r: t('bsR'),
+    h: t('bsH'),
+    k: t('bsK'),
+    bb: t('bsBb'),
+    pitches: t('bsPitches'),
+    hr: t('bsHr'),
+    diff10: t('bsDiff10'),
+    coldGameLabel: t('labelColdGame'),
+    mvpLabel: t('labelMatchMvp'),
+  });
+  wrap.appendChild(boxHost);
 
   resultBody.appendChild(wrap);
   if (!resultDialog.open) resultDialog.showModal();
@@ -1412,14 +2038,14 @@ function showGameOverModal(): void {
 
 function enterResultPause(): void {
   phase = 'result';
-  resultDelayTimer = 1.25;
+  resultDelayTimer = 1.05;
   cam.setFollowTarget(null);
   if (match.isGameOver && isOnline) {
     saveSession(null);
   }
   updateHudAndDocks();
 
-  if (match.isGameOver) {
+  if (match.isGameOver && !presentationQueue.some((s) => s.kind === 'game_over')) {
     showGameOverModal();
   }
 }
@@ -1465,7 +2091,10 @@ function resizeCanvases(): void {
 // --- Pointer & Keyboard Controls ---
 function getBatTouchOffsetPx(): number {
   const rect = overlayCanvas.getBoundingClientRect();
-  return Math.max(76, Math.min(124, Math.round(rect.height * 0.16)));
+  const ratio = cursorOffsetLevel === 'low' ? 0.11 : cursorOffsetLevel === 'high' ? 0.21 : 0.16;
+  const minPx = cursorOffsetLevel === 'low' ? 54 : cursorOffsetLevel === 'high' ? 96 : 76;
+  const maxPx = cursorOffsetLevel === 'low' ? 92 : cursorOffsetLevel === 'high' ? 154 : 124;
+  return Math.max(minPx, Math.min(maxPx, Math.round(rect.height * ratio)));
 }
 
 function projectClientToHitPlane(clientX: number, clientY: number, yOffsetPx = 0): readonly [number, number, number] | null {
@@ -1711,8 +2340,17 @@ btnIbb.addEventListener('click', () => {
     return;
   }
   if (applyIntentionalWalk(match)) {
-    showCallout('INTENTIONAL WALK', 'INTENTIONAL WALK (5.01D)', '#38bdf8', 1.4);
+    lastCallLabel = t('callIbb');
+    emoteCtrl.showBroadcast(t('callIbb'), t('callIbbSub'), '#38bdf8', 2200);
     sfx.playUmpireTone('ball');
+    presentationQueue.push({ kind: 'brief_pause', remainingSec: 0.9 });
+    if (match.isGameOver) {
+      presentationQueue.push({ kind: 'game_over' });
+    } else {
+      const curBatting = match.half === 'top' ? match.away : match.home;
+      const nextB = getCurrentBatter(match);
+      presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+    }
     updateHudAndDocks();
   }
 });
@@ -1861,22 +2499,23 @@ function autoFallbackToCpu(title: string, detail: string): void {
   if (onlineClient.connected) onlineClient.unqueue();
   if (friendDialog.open) friendDialog.close();
   startMode('quick3');
-  showUnifiedPlayCall(title, detail, '#f97316', 3.4, 'AUTO CPU');
+  const loc = localizeServerCallout(locale, title, detail);
+  emoteCtrl.showSystem(loc.title, loc.subtitle, '#f97316', 3200);
 }
 
 onlineClient.onNetUpdate((m) => {
   if (!m.connected) {
-    netSpeedPill.dataset.quality = 'offline';
-    netSpeedText.textContent = 'LOCAL';
-    netSpeedPill.title = 'Offline / Local Mode';
+    topOnlinePill.dataset.quality = 'offline';
+    topOnlinePill.title = t('netLocal');
   } else if (m.serverLoad === 'red') {
-    netSpeedPill.dataset.quality = 'busy';
-    netSpeedText.textContent = `BUSY ${m.rttMs || '--'}ms`;
-    netSpeedPill.title = `Server load: ${m.serverLoad.toUpperCase()} (${m.serverLagMs}ms lag) · RTT ${m.rttMs}ms`;
+    topOnlinePill.dataset.quality = 'busy';
+    topOnlinePill.title = `${t('netBusy')} (${m.serverLagMs}ms) · RTT ${m.rttMs}ms`;
+  } else if (m.serverLoad === 'yellow') {
+    topOnlinePill.dataset.quality = 'fair';
+    topOnlinePill.title = `RTT ${m.rttMs}ms · Load YELLOW`;
   } else {
-    netSpeedPill.dataset.quality = m.quality;
-    netSpeedText.textContent = m.rttMs > 0 ? `${m.rttMs}ms` : 'SYNC';
-    netSpeedPill.title = `RTT ${m.rttMs}ms · Jitter ${m.jitterMs}ms · Server ${m.serverLoad.toUpperCase()}`;
+    topOnlinePill.dataset.quality = m.quality;
+    topOnlinePill.title = `RTT ${m.rttMs}ms · Jitter ${m.jitterMs}ms`;
   }
 
   // If queuing and connection drops/becomes unstable OR server reaches red overload -> auto-match CPU!
@@ -1906,7 +2545,7 @@ btnHubPlay.addEventListener('click', async () => {
   queuePanel.hidden = false;
   onlineWaitingQueue = true;
   queueElapsedSec = 0;
-  queueStatusText.textContent = 'FINDING OPPONENT 0:00...';
+  queueStatusText.textContent = `${t('queueFinding')} 0:00...`;
   updateHudAndDocks();
   try {
     await onlineClient.connect(getOnlinePlayerName(), 4500);
@@ -1943,13 +2582,13 @@ btnHubCpu.addEventListener('click', () => {
 btnHubFriend.addEventListener('click', async () => {
   sfx.unlock();
   roomCreatedBox.hidden = true;
-  friendStatusMsg.textContent = 'CONNECTING TO SERVER...';
+  friendStatusMsg.textContent = t('friendConnecting');
   if (!friendDialog.open) friendDialog.showModal();
   try {
     await onlineClient.connect(getOnlinePlayerName());
-    friendStatusMsg.textContent = 'CONNECTED · CREATE OR JOIN A ROOM';
+    friendStatusMsg.textContent = t('friendConnected');
   } catch {
-    friendStatusMsg.textContent = 'UNABLE TO REACH SERVER';
+    friendStatusMsg.textContent = t('friendUnreachable');
   }
 });
 
@@ -1963,13 +2602,13 @@ function setWatchMessage(text: string): void {
 
 btnHubWatch.addEventListener('click', async () => {
   sfx.unlock();
-  setWatchMessage('LOADING LIVE MATCHES...');
+  setWatchMessage(t('watchLoading'));
   if (!watchDialog.open) watchDialog.showModal();
   try {
     await onlineClient.connect(getOnlinePlayerName());
     onlineClient.listRooms();
   } catch {
-    setWatchMessage('UNABLE TO REACH SERVER');
+    setWatchMessage(t('friendUnreachable'));
   }
 });
 
@@ -1978,32 +2617,32 @@ btnWatchRefresh.addEventListener('click', async () => {
     await onlineClient.connect(getOnlinePlayerName());
     onlineClient.listRooms();
   } catch {
-    setWatchMessage('UNABLE TO REACH SERVER');
+    setWatchMessage(t('friendUnreachable'));
   }
 });
 
 btnRoomCreate.addEventListener('click', async () => {
   try {
     await onlineClient.connect(getOnlinePlayerName());
-    onlineClient.createRoom(onlineModeChoice, getOnlinePlayerName());
-    friendStatusMsg.textContent = 'CREATING ROOM...';
+    onlineClient.createRoom(onlineModeChoice, getOnlinePlayerName(), friendMercyRule.checked);
+    friendStatusMsg.textContent = t('friendCreating');
   } catch {
-    friendStatusMsg.textContent = 'CONNECTION FAILED';
+    friendStatusMsg.textContent = t('friendConnFailed');
   }
 });
 
 btnRoomJoin.addEventListener('click', async () => {
   const code = roomCodeInput.value.trim().toUpperCase();
   if (code.length !== 4) {
-    friendStatusMsg.textContent = 'ENTER A 4-CHAR ROOM CODE';
+    friendStatusMsg.textContent = t('friendEnterCode');
     return;
   }
   try {
     await onlineClient.connect(getOnlinePlayerName());
     onlineClient.joinRoom(code, getOnlinePlayerName());
-    friendStatusMsg.textContent = `JOINING ROOM ${code}...`;
+    friendStatusMsg.textContent = `${t('friendJoining')} ${code}...`;
   } catch {
-    friendStatusMsg.textContent = 'CONNECTION FAILED';
+    friendStatusMsg.textContent = t('friendConnFailed');
   }
 });
 
@@ -2011,7 +2650,7 @@ btnCopyCode.addEventListener('click', () => {
   const code = roomCodeDisplay.textContent?.trim() || '';
   if (code) {
     void navigator.clipboard?.writeText(code);
-    friendStatusMsg.textContent = `COPIED CODE ${code}`;
+    friendStatusMsg.textContent = `${t('friendCopiedCode')} ${code}`;
   }
 });
 
@@ -2020,7 +2659,7 @@ btnCopyLink.addEventListener('click', () => {
   if (code) {
     const url = `${window.location.origin}${window.location.pathname}?room=${code}`;
     void navigator.clipboard?.writeText(url);
-    friendStatusMsg.textContent = 'INVITE LINK COPIED';
+    friendStatusMsg.textContent = t('friendCopiedLink');
   }
 });
 
@@ -2029,20 +2668,20 @@ function renderWatchRooms(rooms: LiveRoomInfo[]): void {
   if (rooms.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'watch-empty';
-    empty.textContent = 'NO LIVE MATCHES RIGHT NOW';
+    empty.textContent = t('watchEmpty');
     watchListEl.appendChild(empty);
     return;
   }
   for (const r of rooms) {
     const row = document.createElement('div');
     row.className = 'watch-item';
-    const inningTxt = r.isDerby ? 'HR DERBY' : `${r.half === 'top' ? 'TOP' : 'BOT'} ${r.inning}`;
+    const inningTxt = r.isDerby ? t('derbyTitle') : formatInningHalf(locale, r.half, r.inning);
     const infoSpan = document.createElement('span');
-    infoSpan.textContent = `${r.awayName} ${r.awayScore}-${r.homeScore} ${r.homeName} · ${inningTxt} · ${r.spectators} LIVE`;
+    infoSpan.textContent = `${r.awayName} ${r.awayScore}-${r.homeScore} ${r.homeName} · ${inningTxt} · ${r.spectators} ${t('spectatorsLive')}`;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'act-btn primary';
-    btn.textContent = 'WATCH';
+    btn.textContent = t('watchBtn');
     btn.addEventListener('click', () => {
       onlineClient.watchRoom(r.code);
     });
@@ -2084,11 +2723,17 @@ function enterOnlineMatch(
   capVisible = false;
   capTrail = [];
   hitFx = null;
-  callout = null;
-  swingFeedbackCardState = null;
-  swingFeedbackCard.hidden = true;
+  clearPresentationQueue();
+  catcherReturn.active = false;
+  transitionDirector.clear();
+  emoteCtrl.clearHistory();
+  emoteCtrl.setOnlineSendEnabled(true);
+  emoteCtrl.setVisible(true);
+  btnMuteEmotes.hidden = false;
   absPromptTimer = 0;
   absReplay = null;
+  batterSwungThisPitch = false;
+  batCursor = { x: 0, y: 0.72 };
   cam.resetImmediate();
   resetOutfielders(outfielders);
   selectPitch('straight');
@@ -2097,6 +2742,9 @@ function enterOnlineMatch(
   resetPitchClock();
   updateHudAndDocks();
   updateSafeCameraFraming(true);
+  if (msg.type === 'match_start' && !match.isGameOver) {
+    transitionDirector.playMatchStart(match.away.name, match.home.name);
+  }
   if (match.isGameOver) {
     saveSession(null);
     showGameOverModal();
@@ -2130,9 +2778,17 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   capVisible = false;
   capTrail = [];
   hitFx = null;
-  callout = null;
+  clearPresentationQueue();
+  catcherReturn.active = false;
+  transitionDirector.clear();
+  emoteCtrl.clearHistory();
+  emoteCtrl.setOnlineSendEnabled(false);
+  emoteCtrl.setVisible(true);
+  btnMuteEmotes.hidden = true;
   absPromptTimer = 0;
   absReplay = null;
+  batterSwungThisPitch = false;
+  batCursor = { x: 0, y: 0.72 };
   cam.resetImmediate();
   resetOutfielders(outfielders);
   lastPitchTelemetry = t('telLiveSpectate');
@@ -2151,15 +2807,31 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
   lastPitchTelemetry = msg.telemetry;
 
   if (msg.ibb || msg.clockViolation) {
+    const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
     match = msg.match;
     onlinePitchSeq = msg.nextPitchSeq;
     onlineTurnState = match.isGameOver ? 'game_over' : 'awaiting_pitch';
     resetSpringMeter();
-    showCallout(msg.callout.title, msg.callout.subtitle, msg.callout.color, msg.callout.ttl);
+    const loc = localizeServerCallout(locale, msg.callout.title, msg.callout.subtitle);
+    lastCallLabel = loc.subtitle ? `${loc.title} ${loc.subtitle}` : loc.title;
+    emoteCtrl.showBroadcast(loc.title, loc.subtitle || loc.title, msg.callout.color, 2400);
     sfx.playUmpireTone('ball');
+    presentationQueue.push({ kind: 'brief_pause', remainingSec: 0.9 });
+    if (match.isGameOver) {
+      presentationQueue.push({ kind: 'game_over' });
+    } else {
+      const curBatting = match.half === 'top' ? match.away : match.home;
+      if (curBatting.batterIndex !== prevBatterIdx) {
+        const nextB = getCurrentBatter(match);
+        presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+      }
+    }
     enterResultPause();
     return;
   }
+
+  const plateX = msg.platePos ? msg.platePos[0] : activePitch ? simToField(activePitch.plateCrossPos)[0] : 0;
+  const plateY = msg.platePos ? msg.platePos[1] : activePitch ? simToField(activePitch.plateCrossPos)[1] : 0.72;
 
   if (msg.resolution && msg.resolution.contact) {
     // Defer applying msg.match until finishBattedPlay() so:
@@ -2169,11 +2841,47 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
     pendingOnlineResult = msg;
     activeBatted = simulateBattedCap(res.battedParams);
     activeCatchInfo = (res.catchInfo as CatchInfo | undefined) ?? null;
+    if (activeCatchInfo?.blocked) {
+      const blk = simulateOutfieldGroundBlock(activeBatted, outfielders);
+      if (blk.blocked) {
+        activeBatted = blk.battedResult;
+        activeCatchInfo.blockTimeSec = blk.blockTimeSec;
+        activeCatchInfo.blockPos = blk.blockPos;
+      }
+    }
     bobbledTriggered = false;
     const ev = Math.round(res.exitSpeedKmh);
     const [bvx, bvy, bvz] = res.battedParams.velocity;
-    const la = Math.round((Math.atan2(bvy, Math.hypot(bvx, bvz)) * 180) / Math.PI);
-    showSwingFeedback(res.quality.toUpperCase(), `EV ${ev} km/h · LA ${la}°`, res.color);
+    const la =
+      typeof res.launchAngleDeg === 'number'
+        ? res.launchAngleDeg
+        : Math.round((Math.atan2(bvy, Math.hypot(bvx, bvz)) * 180) / Math.PI);
+    // Defer showing dual feedback card until batted play finishes & camera pulls back to home plate!
+    pendingBattedFeedback = {
+      kind: 'swing',
+      pitchCode: lastPitchCode,
+      speedKmh: lastPitchSpeedKmh,
+      plateX,
+      plateY,
+      callLabel: res.outcome,
+      callColor: res.color,
+      dtTiming: res.dtTiming,
+      timingLabel: res.label,
+      timingColor: res.color,
+      batX: msg.swingData ? msg.swingData.batX : batCursor.x,
+      batY: msg.swingData ? msg.swingData.batY : batCursor.y,
+      powerSwing: msg.swingData ? msg.swingData.swingMode === 'power' : powerSwing,
+      contact: true,
+      contactGrade: res.quality.toUpperCase(),
+      exitSpeedKmh: ev,
+      launchAngleDeg: la,
+    };
+    if (activeBatted.overFence) {
+      transitionDirector.triggerHitStop(0.048);
+      transitionDirector.triggerSlowMo(0.62, 0.44);
+    } else if (res.quality === 'perfect') {
+      transitionDirector.triggerHitStop(0.04);
+    }
 
     if (getCurrentRole() === 'pitcher' || spectating) {
       batterAnim = 'swing_contact';
@@ -2212,6 +2920,8 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
   }
 
   // No contact (strike / ball / uncaught 3rd / wild pitch)
+  const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
+  const prevBatterName = getCurrentBatter(match).name;
   match = msg.match;
   onlinePitchSeq = msg.nextPitchSeq;
   onlineTurnState = match.isGameOver ? 'game_over' : 'awaiting_pitch';
@@ -2220,7 +2930,11 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
     batterAnimTime = 0;
     batterSwungThisPitch = true;
   }
-  showCallout(msg.callout.title, msg.callout.subtitle, msg.callout.color, msg.callout.ttl);
+  const isCatcherReturnable =
+    msg.outcome !== 'UNCAUGHT_THIRD_STRIKE' && msg.outcome !== 'WILD_PITCH';
+  if (isCatcherReturnable) {
+    startCatcherReturn(catcherReturn, getPitchingTeamColor(), transitionDirector.config.speed === 'compact');
+  }
   if (msg.outcome === 'BALL') {
     sfx.playUmpireTone('ball');
   } else if (msg.outcome === 'UNCAUGHT_THIRD_STRIKE') {
@@ -2228,27 +2942,90 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
   } else {
     sfx.playUmpireTone('strike');
   }
-  if (msg.inningChanged) {
-    showCallout('INNING CHANGE', `${match.half === 'top' ? t('callTop') : t('callBot')} ${match.inning}`, '#38bdf8', 1.7);
-    sfx.playInningChange();
-  }
-  if (!msg.swung && match.lastChallenge && !match.lastChallenge.challenged) {
-    if (!spectating && onlineSide === match.lastChallenge.eligibleSide && match.absChallenges[onlineSide] > 0) {
+
+  const isStrikeout =
+    match.strikes === 0 &&
+    match.lastEvent.includes('strikes out');
+
+  if (msg.swung) {
+    const missPayload: SwingFeedbackPayload = {
+      kind: 'swing',
+      pitchCode: lastPitchCode,
+      speedKmh: lastPitchSpeedKmh,
+      plateX,
+      plateY,
+      callLabel: msg.callout.title,
+      callColor: msg.callout.color,
+      resultDetail: msg.callout.subtitle || undefined,
+      dtTiming: msg.resolution?.dtTiming ?? 0,
+      timingLabel: msg.resolution?.label || 'MISS',
+      timingColor: msg.resolution?.color || '#f43f5e',
+      batX: msg.swingData ? msg.swingData.batX : batCursor.x,
+      batY: msg.swingData ? msg.swingData.batY : batCursor.y,
+      powerSwing: msg.swingData ? msg.swingData.swingMode === 'power' : powerSwing,
+      contact: false,
+    };
+    presentationQueue.push({ kind: 'show_feedback', payload: missPayload, durationSec: getFeedbackDurationSec() });
+  } else {
+    const takePayload: SwingFeedbackPayload = {
+      kind: 'take',
+      pitchCode: lastPitchCode,
+      speedKmh: lastPitchSpeedKmh,
+      plateX,
+      plateY,
+      callLabel: msg.callout.title,
+      callColor: msg.callout.color,
+      resultDetail: msg.callout.subtitle || undefined,
+    };
+    const canAbs =
+      !spectating &&
+      Boolean(match.lastChallenge && !match.lastChallenge.challenged) &&
+      onlineSide === match.lastChallenge?.eligibleSide &&
+      match.absChallenges[onlineSide] > 0;
+    if (canAbs) {
+      // Scheme B (原地翻牌感): Show side card immediately with 3x3 zone masked until ABS decision ends!
+      showOnZoneFeedback(takePayload, getFeedbackDurationSec(), true);
       startAbsPromptWindow();
+      presentationQueue.push({ kind: 'wait_abs' });
+    }
+    presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
+  }
+
+  if (isStrikeout && !match.isGameOver) {
+    presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
+  }
+  if (msg.inningChanged && !match.isGameOver) {
+    presentationQueue.push({
+      kind: 'inning_change',
+      inning: match.inning,
+      half: match.half,
+      awayRuns: match.away.totalRuns,
+      homeRuns: match.home.totalRuns,
+    });
+  } else if (match.isGameOver) {
+    presentationQueue.push({ kind: 'game_over' });
+  } else {
+    const curBatting = match.half === 'top' ? match.away : match.home;
+    if (curBatting.batterIndex !== prevBatterIdx) {
+      const nextB = getCurrentBatter(match);
+      presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
     }
   }
+
   enterResultPause();
 }
 
 onlineClient.onMessage((msg) => {
   switch (msg.type) {
     case 'welcome': {
-      topOnlinePill.textContent = `${t('livePrefix')} ${msg.stats.online}`;
+      lastOnlineCount = msg.stats.online;
+      topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
       handleServerVersion(msg.version);
       break;
     }
     case 'stats': {
-      topOnlinePill.textContent = `${t('livePrefix')} ${msg.stats.online}`;
+      lastOnlineCount = msg.stats.online;
+      topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
       break;
     }
     case 'room_created': {
@@ -2256,12 +3033,12 @@ onlineClient.onMessage((msg) => {
       roomCodeDisplay.textContent = msg.code;
       roomCreatedBox.hidden = false;
       if (!friendDialog.open) friendDialog.showModal(); // also after resuming a waiting room
-      friendStatusMsg.textContent = `ROOM ${msg.code} READY · WAITING FOR FRIEND...`;
+      friendStatusMsg.textContent = `${t('roomCodePrefix')} ${msg.code} · ${t('friendReady')}`;
       break;
     }
     case 'room_joined': {
       saveSession({ code: msg.code, token: msg.token });
-      friendStatusMsg.textContent = `JOINED ROOM ${msg.code}`;
+      friendStatusMsg.textContent = `${t('friendJoined')} ${msg.code}`;
       break;
     }
     case 'match_start': {
@@ -2329,11 +3106,16 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'abs_result': {
+      const prevInning = match.inning;
+      const prevHalf = match.half;
+      const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
+      const prevBatterName = getCurrentBatter(match).name;
       match = msg.match;
       onlinePitchSeq = msg.pitchSeq;
       onlineTurnState = match.isGameOver ? 'game_over' : 'awaiting_pitch';
       absPromptTimer = 0;
-      callout = null;
+      btnAbsChallenge.hidden = true;
+      clearPresentationQueue();
       absReplay = {
         active: true,
         plateX: msg.plateX,
@@ -2348,16 +3130,40 @@ onlineClient.onMessage((msg) => {
       sfx.playUmpireTone(msg.overturned ? 'ball' : 'strike');
       if (match.isGameOver) saveSession(null);
       else resetPitchClock();
+
+      // Queue post-ABS transitions cleanly after Hawk-Eye replay finishes
+      presentationQueue.push({ kind: 'wait_abs_replay' });
+      const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+      const struckOut = match.strikes === 0 && match.lastEvent.includes('strikes out');
+      if (struckOut && !match.isGameOver) {
+        presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
+      }
+      if (inningChanged && !match.isGameOver) {
+        presentationQueue.push({
+          kind: 'inning_change',
+          inning: match.inning,
+          half: match.half,
+          awayRuns: match.away.totalRuns,
+          homeRuns: match.home.totalRuns,
+        });
+      } else if (match.isGameOver) {
+        presentationQueue.push({ kind: 'game_over' });
+      } else {
+        const curBatting = match.half === 'top' ? match.away : match.home;
+        if (curBatting.batterIndex !== prevBatterIdx) {
+          const nextB = getCurrentBatter(match);
+          presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+        }
+      }
       updateHudAndDocks();
-      if (match.isGameOver) showGameOverModal();
       break;
     }
     case 'opponent_disconnected': {
-      showCallout(t('callOpponentOffline'), `${t('callWaitingReconnect')} (${msg.graceSec}s)...`, '#f97316', 3.0);
+      emoteCtrl.showSystem(t('callOpponentOffline'), `${t('callWaitingReconnect')} (${msg.graceSec}s)...`, '#f97316', 3200);
       break;
     }
     case 'opponent_reconnected': {
-      showCallout(t('callReconnected'), t('callPlayBall'), '#4ade80', 1.4);
+      emoteCtrl.showSystem(t('callReconnected'), t('callPlayBall'), '#4ade80', 2200);
       break;
     }
     case 'match_over': {
@@ -2373,12 +3179,18 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'rematch_requested': {
-      showCallout(t('rematchReqTitle'), t('rematchReqSub'), '#f4c41c', 2.0);
+      emoteCtrl.showSystem(t('rematchReqTitle'), t('rematchReqSub'), '#f4c41c', 2600);
+      break;
+    }
+    case 'emote': {
+      const senderTeam = msg.side === 'away' ? match.away.name : match.home.name;
+      const isOpp = !spectating && onlineSide !== null && msg.side !== onlineSide;
+      emoteCtrl.showBubble(msg.id, senderTeam, isOpp);
       break;
     }
     case 'notice': {
       if (msg.kind === 'draining') {
-        showCallout(t('callMaintenance'), t('callMaintenanceSub'), '#38bdf8', 3.0);
+        emoteCtrl.showSystem(t('callMaintenance'), t('callMaintenanceSub'), '#38bdf8', 3200);
       }
       break;
     }
@@ -2389,7 +3201,7 @@ onlineClient.onMessage((msg) => {
       } else if (msg.code === 'reconnect_failed') {
         saveSession(null);
       } else if (msg.code === 'opponent_left') {
-        showCallout(t('callOpponentLeft'), msg.message.toUpperCase(), '#f97316', 2.2);
+        emoteCtrl.showSystem(t('callOpponentLeft'), msg.message.toUpperCase(), '#f97316', 2800);
         saveSession(null);
       }
       break;
@@ -2435,6 +3247,46 @@ setSound.addEventListener('change', () => {
   btnSound.textContent = muted ? t('btnMute') : t('btnSfx');
   btnSound.setAttribute('aria-pressed', String(muted));
 });
+setCursorOffset.addEventListener('change', () => {
+  const v = setCursorOffset.value;
+  if (v === 'low' || v === 'mid' || v === 'high') {
+    cursorOffsetLevel = v;
+    try {
+      localStorage.setItem(CURSOR_OFFSET_KEY, v);
+    } catch {
+      // ignore
+    }
+  }
+});
+setTransitionSpeed.addEventListener('change', () => {
+  const v = setTransitionSpeed.value === 'compact' ? 'compact' : 'normal';
+  transitionDirector.config.speed = v;
+  try {
+    localStorage.setItem(TRANS_SPEED_KEY, v);
+  } catch {
+    // ignore
+  }
+});
+setFx.addEventListener('change', () => {
+  transitionDirector.config.fxEnabled = setFx.checked;
+  try {
+    localStorage.setItem(FX_ENABLED_KEY, setFx.checked ? '1' : '0');
+  } catch {
+    // ignore
+  }
+});
+setEmoteSfx.addEventListener('change', () => {
+  emoteCtrl.sfxEnabled = setEmoteSfx.checked;
+  try {
+    localStorage.setItem(EMOTE_SFX_KEY, setEmoteSfx.checked ? '1' : '0');
+  } catch {
+    // ignore
+  }
+});
+btnMuteEmotes.addEventListener('click', () => {
+  emoteCtrl.mutedOpponent = !emoteCtrl.mutedOpponent;
+  btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
+});
 
 // Dialog close & Safari closedby="any" fallback (modern-web-guidance 'dialog')
 for (const dlg of [menuDialog, cpuDialog, friendDialog, watchDialog, rulesDialog, settingsDialog, resultDialog]) {
@@ -2445,7 +3297,7 @@ for (const dlg of [menuDialog, cpuDialog, friendDialog, watchDialog, rulesDialog
       if (val === 'rematch') {
         if (isOnline && !spectating) {
           onlineClient.rematch();
-          showCallout('REMATCH SENT', 'WAITING FOR OPPONENT...', '#f4c41c', 2.0);
+          emoteCtrl.showSystem(t('rematchSent'), t('rematchWait'), '#f4c41c', 2400);
         } else {
           startMode(match.mode);
         }
@@ -2474,19 +3326,22 @@ if (!('closedBy' in HTMLDialogElement.prototype)) {
 
 // --- Main Simulation & Render Loop ---
 let lastTime = performance.now();
+let wasPresentationLocked = false;
 
 function step(now: number): void {
-  const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
+  const rawDt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
   lastTime = now;
   const timeSec = now / 1000;
+  const fx = transitionDirector.stepFx(rawDt);
+  const dt = fx.dt;
 
   resizeCanvases();
 
   // Matchmaking 10s fallback timer
   if (onTitleScreen && onlineWaitingQueue) {
-    queueElapsedSec += dt;
+    queueElapsedSec += rawDt;
     const secs = Math.floor(queueElapsedSec);
-    queueStatusText.textContent = `FINDING OPPONENT 0:${String(secs).padStart(2, '0')}...`;
+    queueStatusText.textContent = `${t('queueFinding')} 0:${String(secs).padStart(2, '0')}...`;
     if (queueElapsedSec >= 10) {
       cancelQueueToCpu();
     }
@@ -2495,24 +3350,47 @@ function step(now: number): void {
   // Smooth strike zone fade (fades to 0 as soon as pitch_flight begins)
   const targetSzAlpha =
     !onTitleScreen && (phase === 'idle' || phase === 'pitch_meter' || phase === 'windup') ? 1 : 0;
-  strikeZoneAlpha += (targetSzAlpha - strikeZoneAlpha) * Math.min(1, dt * 14);
+  strikeZoneAlpha += (targetSzAlpha - strikeZoneAlpha) * Math.min(1, rawDt * 14);
 
   const paused = isGamePaused();
 
   if (!paused) {
+    stepCatcherReturn(catcherReturn, rawDt);
+    if (onZoneFeedback) {
+      if (onZoneFeedback.absMasked) {
+        // Hold crisp & visible while ABS decision window is active (Scheme B: zero premature fade!)
+        onZoneFeedback.elapsedSec = 0;
+      } else {
+        if (typeof onZoneFeedback.absRevealElapsed === 'number') {
+          onZoneFeedback.absRevealElapsed += rawDt;
+        }
+        onZoneFeedback.elapsedSec += rawDt;
+        if (onZoneFeedback.elapsedSec >= onZoneFeedback.durationSec) {
+          onZoneFeedback = null;
+          updateHudAndDocks();
+        }
+      }
+    }
+    stepPresentationQueue(rawDt);
+    const nowLocked = isPlayCallActive();
+    if (nowLocked !== wasPresentationLocked) {
+      wasPresentationLocked = nowLocked;
+      updateHudAndDocks();
+    }
+
     // Online mode menu pause countdown: force-close menu/rules/settings when timer hits 0 so match resumes
     if (isOnlineMenuTimerActive() && (menuDialog.open || rulesDialog.open || settingsDialog.open)) {
       if (onlineMenuTimerSec <= 0) {
         onlineMenuTimerSec = ONLINE_MENU_TIMEOUT_SEC;
       }
-      onlineMenuTimerSec = Math.max(0, onlineMenuTimerSec - dt);
+      onlineMenuTimerSec = Math.max(0, onlineMenuTimerSec - rawDt);
       updateOnlineMenuTimerUi();
       if (onlineMenuTimerSec <= 0) {
         if (rulesDialog.open) rulesDialog.close();
         if (settingsDialog.open) settingsDialog.close();
         if (menuDialog.open) menuDialog.close();
         menuOnlineTimerEl.hidden = true;
-        showCallout(t('callMenuTimeout'), t('callResumingMatch'), '#f97316', 2.0);
+        emoteCtrl.showSystem(t('callMenuTimeout'), t('callResumingMatch'), '#f97316', 2400);
       }
     } else if (onlineMenuTimerSec > 0) {
       onlineMenuTimerSec = 0;
@@ -2521,7 +3399,7 @@ function step(now: number): void {
 
     // ABS prompt & replay decay (synchronized with Play Call card fade-out)
     if (absPromptTimer > 0) {
-      absPromptTimer = Math.max(0, absPromptTimer - dt);
+      absPromptTimer = Math.max(0, absPromptTimer - rawDt);
       if (absPromptTimer === 0) {
         btnAbsChallenge.hidden = true;
         btnAbsChallenge.style.opacity = '1';
@@ -2577,34 +3455,12 @@ function step(now: number): void {
       }
     }
 
-    // Decay UI callout & swing feedback card
-    if (callout) {
-      callout.ttl -= dt;
-      if (callout.ttl <= 0) callout = null;
-    }
-    if (swingFeedbackCardState) {
-      swingFeedbackCardState.ttl -= dt;
-      if (swingFeedbackCardState.ttl <= 0) {
-        swingFeedbackCardState = null;
-        swingFeedbackCard.hidden = true;
-        if (absPromptTimer > 0) {
-          absPromptTimer = 0;
-          btnAbsChallenge.hidden = true;
-          btnAbsChallenge.style.opacity = '1';
-        }
-        updateHudAndDocks();
-      } else if (swingFeedbackCardState.ttl < 0.4) {
-        swingFeedbackCard.style.opacity = String(swingFeedbackCardState.ttl / 0.4);
-      } else {
-        swingFeedbackCard.style.opacity = '1';
-      }
-    }
     if (hitFx && hitFx.active) {
       hitFx.elapsedSec += dt;
       if (hitFx.elapsedSec > 0.45) hitFx.active = false;
     }
 
-    // Pitch Clock tick (15s bases empty / 20s runners on base; paused during Play Call, ABS, or Menu pause)
+    // Pitch Clock tick (15s bases empty / 20s runners on base; paused during Feedback, ABS, Transitions, or Menu pause)
     if (isPitchClockEnabled()) {
       const clockPhaseActive =
         phase === 'idle' || (phase === 'pitch_meter' && springMeter.stage === 'charging');
@@ -2623,10 +3479,23 @@ function step(now: number): void {
         }
         if (pitchClockSec <= 0 && !isOnline && !spectating) {
           resetSpringMeter();
+          const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
           const res = applyPitchClockViolation(match);
           if (res.applied) {
             sfx.playUmpireTone('ball');
-            showCallout('PITCH CLOCK', res.walked ? 'WALK (BB)' : 'AUTO BALL', '#f97316', 2.2);
+            const detailTxt = res.walked ? t('callAutoWalk') : t('callAutoBall');
+            lastCallLabel = `${t('callPitchClock')} ${detailTxt}`;
+            emoteCtrl.showBroadcast(t('callPitchClock'), detailTxt, '#f97316', 2400);
+            presentationQueue.push({ kind: 'brief_pause', remainingSec: 0.9 });
+            if (match.isGameOver) {
+              presentationQueue.push({ kind: 'game_over' });
+            } else {
+              const curBatting = match.half === 'top' ? match.away : match.home;
+              if (curBatting.batterIndex !== prevBatterIdx) {
+                const nextB = getCurrentBatter(match);
+                presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+              }
+            }
             enterResultPause();
           }
         }
@@ -2860,7 +3729,7 @@ function step(now: number): void {
         });
       }
 
-      // Fence impact shockwave + flash + concise callout
+      // Fence impact shockwave + flash (keep batted flight 100% clean; verdict appears in side card after camera rest)
       if (!battedFencePlayed && activeBatted.hitFence && radialDist >= FENCE_DIST - 0.35) {
         battedFencePlayed = true;
         totalFenceHits += 1;
@@ -2868,8 +3737,6 @@ function step(now: number): void {
         fenceFlashAngle = Math.atan2(capPos[0], -capPos[2]);
         fenceFlashAlpha = 1.0;
         fenceImpact = { pos: [...capPos], ageSec: 0, maxAgeSec: 0.5 };
-        const tag = activeBatted.bouncesBeforeFence === 0 ? 'OFF THE WALL · 3B' : 'BOUNCE OFF WALL · 2B';
-        showCallout(tag, '', '#38bdf8', 1.1);
       }
 
       // Over-fence HR clearance burst + HR pixel FX + screen shake
@@ -2919,7 +3786,23 @@ function step(now: number): void {
           f.diveTimer = 0.6;
           f.flipX = capPos[0] < f.pos[0];
         }
-        showSwingFeedback('BOBBLE!', 'FIELDER DROPPED IT · HIT!', '#4ade80');
+      } else if (
+        activeCatchInfo?.blocked &&
+        !bobbledTriggered &&
+        typeof activeCatchInfo.blockTimeSec === 'number' &&
+        battedFlightTime >= activeCatchInfo.blockTimeSec - 0.04
+      ) {
+        bobbledTriggered = true;
+        const fIdx = activeCatchInfo.fielderIndex ?? (activeCatchInfo.fielderId === 'RF' ? 1 : 0);
+        const f = outfielders[fIdx];
+        if (f) {
+          f.anim = 'dive';
+          f.animTime = 0;
+          f.diveTimer = 0.55;
+          f.flipX = capPos[0] < f.pos[0];
+        }
+        sfx.playCatchPop();
+        finishBattedPlay();
       } else if (battedFlightTime >= activeBatted.flightTimeSec) {
         finishBattedPlay();
       }
@@ -2943,6 +3826,8 @@ function step(now: number): void {
           pitcherFrame = 0;
           batterAnim = 'ready';
           batterAnimTime = 0;
+          batterSwungThisPitch = false;
+          batCursor = { x: 0, y: 0.72 };
           capVisible = false;
           capTrail = [];
           resetOutfielders(outfielders);
@@ -3026,6 +3911,10 @@ function step(now: number): void {
     absTimerFillEl.style.width = `${pct.toFixed(1)}%`;
   }
 
+  overlayCtx.save();
+  if (fx.shakeX !== 0 || fx.shakeY !== 0) {
+    overlayCtx.translate(fx.shakeX * dpr, fx.shakeY * dpr);
+  }
   drawStrikeZoneAndOverlay(overlayCtx, cam, ow, oh, {
     showStrikeZone: !onTitleScreen && strikeZoneAlpha > 0.01,
     strikeZoneAlpha: onTitleScreen ? 0 : strikeZoneAlpha,
@@ -3037,6 +3926,7 @@ function step(now: number): void {
     previewPoints,
     showBreakPreview,
     batCursor,
+    showBatCursor: !batterSwungThisPitch && phase !== 'awaiting_result',
     powerSwing,
     showGuideRing,
     guideProgress,
@@ -3051,8 +3941,18 @@ function step(now: number): void {
       timeSec,
     },
     absReplay,
-    callout,
+    absLabels: {
+      strike: t('callStrike'),
+      ball: t('callBall'),
+      overturned: t('absOverturned'),
+      upheld: t('absUpheld'),
+      hawkEye: t('absHawkEye'),
+    },
+    pitchFeedback: onZoneFeedback,
+    hudBottomPx: hudTopRegion.getBoundingClientRect().bottom * dpr,
   });
+  drawCatcherReturnThrow(overlayCtx, cam, catcherReturn, dpr);
+  overlayCtx.restore();
 
   requestAnimationFrame(step);
 }
@@ -3094,9 +3994,10 @@ function step(now: number): void {
     rttMs: onlineClient.rttMs,
     netMetrics: onlineClient.getNetMetrics(),
     playCall: {
-      visible: !swingFeedbackCard.hidden,
-      grade: sfGradeEl.textContent,
-      detail: sfMetricsEl.textContent,
+      visible: onZoneFeedback !== null,
+      grade: onZoneFeedback?.callLabel ?? '',
+      detail: onZoneFeedback?.resultDetail ?? '',
+      absMasked: Boolean(onZoneFeedback?.absMasked),
     },
     absAvailable: isAbsChallengeAvailable(),
     absChallenges: { ...match.absChallenges },
@@ -3207,6 +4108,7 @@ onlineClient.onStatus((connected) => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     resumeSession();
+    void pollHealthVersion();
   }
 });
 
@@ -3214,6 +4116,15 @@ window.addEventListener('pageshow', (e) => {
   if (e.persisted) {
     resumeSession();
   }
+  void pollHealthVersion();
+});
+
+window.addEventListener('focus', () => {
+  void pollHealthVersion();
+});
+
+window.addEventListener('online', () => {
+  void pollHealthVersion();
 });
 
 // Connect silently on boot for live online counter + handle ?room=XXXX or reconnect
@@ -3233,6 +4144,7 @@ if (urlParams.has('room')) {
 const prevSession = loadSession();
 if (urlCode && (!prevSession || prevSession.code !== urlCode)) {
   roomCodeInput.value = urlCode;
+  friendStatusMsg.textContent = `${t('friendJoining')} ${urlCode}...`;
   if (!friendDialog.open) friendDialog.showModal();
   void onlineClient
     .connect(getOnlinePlayerName())
@@ -3240,7 +4152,7 @@ if (urlCode && (!prevSession || prevSession.code !== urlCode)) {
       onlineClient.joinRoom(urlCode, getOnlinePlayerName());
     })
     .catch(() => {
-      friendStatusMsg.textContent = 'UNABLE TO REACH SERVER';
+      friendStatusMsg.textContent = t('friendUnreachable');
     });
 } else {
   void onlineClient
@@ -3257,9 +4169,10 @@ if (urlCode && (!prevSession || prevSession.code !== urlCode)) {
     });
 }
 
+void pollHealthVersion();
 window.setInterval(() => {
   void pollHealthVersion();
-}, 60_000);
+}, 30_000);
 
 applyLocaleToDom();
 requestAnimationFrame(step);

@@ -88,18 +88,22 @@ export interface PitchResultMsg {
     };
     catchInfo: {
       caught: boolean;
+      bobbled?: boolean;
+      blocked?: boolean;
       fielderId: 'LF' | 'RF' | null;
       catchTimeSec: number | null;
       catchPos: readonly [number, number, number] | null;
     };
     outcome: 'FOUL' | 'OUT' | '1B' | '2B' | '3B' | 'HR';
     exitSpeedKmh: number;
+    launchAngleDeg?: number;
     distanceM: number;
   } | null;
   outcome: string;
   callout: { title: string; subtitle: string; color: string; ttl: number };
   inningChanged: boolean;
   telemetry: string;
+  platePos?: readonly [number, number];
   match: MatchState;
 }
 
@@ -171,6 +175,7 @@ export type ServerMessage =
       match: MatchState;
       pitchSeq: number;
     }
+  | { type: 'emote'; side: OnlineSide; id: string }
   | { type: 'notice'; kind: string }
   | { type: 'error'; code: string; message: string; load?: ServerLoadStatus };
 
@@ -490,8 +495,8 @@ export class OnlineClient {
     this.sendRaw({ t: 'uq' });
   }
 
-  createRoom(mode: OnlineMode, name: string): void {
-    this.sendRaw({ t: 'cr', m: mode === 'official6' ? 1 : 0, n: name });
+  createRoom(mode: OnlineMode, name: string, mercyRule = true): void {
+    this.sendRaw({ t: 'cr', m: mode === 'official6' ? 1 : 0, n: name, mr: mercyRule ? 1 : 0 });
   }
 
   joinRoom(code: string, name: string): void {
@@ -576,5 +581,9 @@ export class OnlineClient {
 
   sendAbsChallenge(pitchSeq: number): void {
     this.sendRaw({ t: 'ab', q: pitchSeq });
+  }
+
+  sendEmote(id: string): void {
+    this.sendRaw({ t: 'em', e: id });
   }
 }

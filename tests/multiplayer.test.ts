@@ -1059,4 +1059,101 @@ describe('Online Multiplayer Server Integration', () => {
       await anomSrv.close();
     }
   });
+
+  it('21. Tiered capacity (480 public + 20 friend reserve) blocks public queue while allowing friend rooms', async () => {
+    const capSrv = await startServer(0, {
+      maxClients: 4,
+      publicClientCap: 2,
+      graceMs: 3000,
+    });
+    const c1 = await connectClient(capSrv.port, 'P1');
+    const c2 = await connectClient(capSrv.port, 'P2');
+    const c3 = await connectClient(capSrv.port, 'P3'); // 3rd client > publicClientCap(2), inside friend reserve (<=4)
+    try {
+      // Public matchmaking queue is rejected with server_busy
+      c3.send({ type: 'queue', mode: 'quick3', name: 'P3' });
+      const err = await c3.nextMsg((m) => m.type === 'error');
+      expect(err.code).toBe('server_busy');
+
+      // Friend room create still succeeds inside the reserve buffer!
+      c3.send({ type: 'create', mode: 'quick3', name: 'P3', mercyRule: false });
+      const created = await c3.nextMsg((m) => m.type === 'room_created');
+      expect(typeof created.code).toBe('string');
+
+      // 4th client joins friend room and inherits mercyRule: false
+      const c4 = await connectClient(capSrv.port, 'P4');
+      try {
+        c4.send({ type: 'join', code: created.code, name: 'P4' });
+        const start = await c4.nextMsg((m) => m.type === 'match_start');
+        expect((start.match as { mercyRule?: boolean }).mercyRule).toBe(false);
+      } finally {
+        await c4.close();
+      }
+    } finally {
+      await c1.close();
+      await c2.close();
+      await c3.close();
+      await capSrv.close();
+    }
+  });
+
+  it('22. In-match Emotes broadcast across room and enforce 3s spam cooldown', async () => {
+    const home = await connectClient(srv.port, 'EmHome');
+    const away = await connectClient(srv.port, 'EmAway');
+    openClients.push(home, away);
+
+    home.send({ type: 'create', mode: 'quick3', name: 'EmHome' });
+    const created = await home.nextMsg((m) => m.type === 'room_created');
+    away.send({ type: 'join', code: created.code, name: 'EmAway' });
+    await home.nextMsg((m) => m.type === 'match_start');
+    await away.nextMsg((m) => m.type === 'match_start');
+
+    home.send({ type: 'emote', id: 'fire' });
+    // Immediate spam should be dropped by 3s cooldown
+    home.send({ type: 'emote', id: 'nice' });
+
+    const emH = await home.nextMsg((m) => m.type === 'emote');
+    const emA = await away.nextMsg((m) => m.type === 'emote');
+    expect(emH.side).toBe('home');
+    expect(emH.id).toBe('fire');
+    expect(emA.side).toBe('home');
+    expect(emA.id).toBe('fire');
+
+    // Wait briefly and ensure second spammed emote was NOT broadcast
+    await new Promise((r) => setTimeout(r, 120));
+    expect(away.queue.filter((m) => m.type === 'emote').length).toBe(0);
+  });
+
+  it('23. Mutual room creation deadlock recovery: host of empty waiting room can join friend room directly', async () => {
+    const p1 = await connectClient(srv.port, 'HostA');
+    const p2 = await connectClient(srv.port, 'HostB');
+    openClients.push(p1, p2);
+
+    // Both players accidentally create their own friend rooms
+    p1.send({ type: 'create', mode: 'quick3', name: 'HostA' });
+    const roomA = await p1.nextMsg((m) => m.type === 'room_created');
+    p2.send({ type: 'create', mode: 'quick3', name: 'HostB' });
+    const roomB = await p2.nextMsg((m) => m.type === 'room_created');
+    expect(roomA.code).not.toBe(roomB.code);
+
+    // Joining own room returns clean error without destroying roomB
+    p2.send({ type: 'join', code: roomB.code, name: 'HostB' });
+    const selfErr = await p2.nextMsg((m) => m.type === 'error');
+    expect(selfErr.code).toBe('already_in_room');
+
+    // Typo room code returns room_not_found without destroying roomB
+    p2.send({ type: 'join', code: 'ZZZZ', name: 'HostB' });
+    const typoErr = await p2.nextMsg((m) => m.type === 'error');
+    expect(typoErr.code).toBe('room_not_found');
+
+    // Now p2 joins p1's room -> server abandons empty roomB and starts match immediately!
+    p2.send({ type: 'join', code: roomA.code, name: 'HostB' });
+    const joined = await p2.nextMsg((m) => m.type === 'room_joined');
+    expect(joined.code).toBe(roomA.code);
+
+    const start1 = await p1.nextMsg((m) => m.type === 'match_start');
+    const start2 = await p2.nextMsg((m) => m.type === 'match_start');
+    expect(start1.code).toBe(roomA.code);
+    expect(start2.code).toBe(roomA.code);
+  });
 });

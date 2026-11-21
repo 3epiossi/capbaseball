@@ -1,7 +1,7 @@
 import type { FieldV3 } from '../physics/batted';
 import type { PitchId } from '../physics/pitches';
 import { PLATE_WIDTH, STRIKE_ZONE_HI, STRIKE_ZONE_LO } from '../rules/field';
-import type { GameCamera } from './camera';
+import { GameCamera } from './camera';
 import { drawTrue3DCap } from './cap3d';
 
 export const HIT_PLANE_Z = -0.22;
@@ -29,6 +29,41 @@ export interface AbsReplayState {
   durationSec: number;
 }
 
+export interface OnZoneFeedbackState {
+  kind: 'take' | 'swing';
+  elapsedSec: number;
+  durationSec: number;
+  batterHandedness: 'left' | 'right';
+  pitchLabel: string;
+  plateX: number;
+  plateY: number;
+  callLabel: string;
+  callColor: string;
+  resultDetail?: string;
+  // Swung-only fields
+  dtTiming?: number;
+  timingLabel?: string;
+  timingColor?: string;
+  batX?: number;
+  batY?: number;
+  powerSwing?: boolean;
+  contact?: boolean;
+  contactGrade?: string;
+  exitSpeedKmh?: number;
+  launchAngleDeg?: number;
+  // ABS in-place mystery mask (Scheme B: hide pitch dot until ABS decision window ends)
+  absMasked?: boolean;
+  absMaskLabel?: string;
+  absRevealElapsed?: number;
+  // Localized labels
+  pciTitle: string;
+  pitchLocTitle: string;
+  timingTitle: string;
+  contactPrefix: string;
+  evPrefix: string;
+  laPrefix: string;
+}
+
 export interface OverlayState {
   showStrikeZone: boolean;
   strikeZoneAlpha?: number;
@@ -42,22 +77,28 @@ export interface OverlayState {
   showBreakPreview: boolean;
   // Batter aim & timing
   batCursor: { x: number; y: number };
+  showBatCursor?: boolean;
   powerSwing: boolean;
   showGuideRing: boolean;
   guideProgress: number | null; // 0..1, ~0.85..1.0 is hit window
   // High-DPI Cap rendering
   cap?: OverlayCapState;
+  /** Exact bottom pixel (in physical canvas px) of top HUD region for zero-overlap layout */
+  hudBottomPx?: number;
   // ABS Hawk-Eye Replay
   absReplay?: AbsReplayState | null;
-  // Arcade callout banner
-  callout: {
-    title: string;
-    subtitle: string;
-    color: string;
-    ttl: number;
-    maxTtl: number;
-  } | null;
+  absLabels?: {
+    strike: string;
+    ball: string;
+    overturned: string;
+    upheld: string;
+    hawkEye: string;
+  };
+  // On-Zone Pitch Location + Batter-Side Swing Timing Overlay
+  pitchFeedback?: OnZoneFeedbackState | null;
 }
+
+const restCam = new GameCamera();
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -172,6 +213,13 @@ export function drawStrikeZoneAndOverlay(
   const hi = STRIKE_ZONE_HI;
 
   const dpr = state.dpr ?? 1;
+  const fb = state.pitchFeedback && state.pitchFeedback.elapsedSec < state.pitchFeedback.durationSec
+    ? state.pitchFeedback
+    : null;
+  const fbFadeAlpha = fb
+    ? Math.min(1, Math.max(0, (fb.durationSec - fb.elapsedSec) / 0.45))
+    : 0;
+  // Strike zone visibility is completely decoupled from the side feedback graphic
   const szAlpha = state.absReplay?.active
     ? 1
     : (state.strikeZoneAlpha ?? (state.showStrikeZone ? 1 : 0));
@@ -300,7 +348,11 @@ export function drawStrikeZoneAndOverlay(
   }
 
   // 3. Batter Turn: MLB The Show Bracket PCI ( • ) + Shrinking Timing Guide Ring
-  if (state.role === 'batter' && (state.phase === 'idle' || state.phase === 'windup' || state.phase === 'pitch_flight')) {
+  if (
+    state.role === 'batter' &&
+    state.showBatCursor !== false &&
+    (state.phase === 'idle' || state.phase === 'windup' || state.phase === 'pitch_flight')
+  ) {
     const bp = cam.project([state.batCursor.x, state.batCursor.y, HIT_PLANE_Z]);
     if (bp.depth > 0.2) {
       const rx = Math.max(12 * dpr, (state.powerSwing ? 0.068 : 0.098) * bp.scale);
@@ -370,7 +422,8 @@ export function drawStrikeZoneAndOverlay(
     const hitP = cam.project([abs.plateX, abs.plateY, HIT_PLANE_Z]);
     if (hitP.depth > 0.2) {
       const isStrike = abs.trueCall === 'strike';
-      const dotCol = isStrike ? '#22c55e' : '#ef4444';
+      // Unified BSO color language: Strike = Yellow (#f4c41c), Ball = Green (#4ade80)
+      const dotCol = isStrike ? '#f4c41c' : '#4ade80';
       const rDot = Math.max(7 * dpr, capRadiusAtDepth(hitP.scale, hitP.depth, dpr) * 1.15);
 
       ctx.save();
@@ -384,8 +437,15 @@ export function drawStrikeZoneAndOverlay(
       ctx.stroke();
 
       // Margin tag (±X.X cm)
+      const absL = state.absLabels ?? {
+        strike: 'STRIKE',
+        ball: 'BALL',
+        overturned: 'CALL OVERTURNED!',
+        upheld: 'CALL UPHELD',
+        hawkEye: 'ABS HAWK-EYE',
+      };
       const signStr = abs.marginCm <= 0 ? '' : '+';
-      const tag = `${isStrike ? 'STRIKE' : 'BALL'} (${signStr}${abs.marginCm.toFixed(1)} cm)`;
+      const tag = `${isStrike ? absL.strike : absL.ball} (${signStr}${abs.marginCm.toFixed(1)} cm)`;
       ctx.font = `700 ${Math.round(12 * dpr)}px "Chakra Petch", "Courier New", monospace`;
       const tw = ctx.measureText(tag).width + 16 * dpr;
       const th = 22 * dpr;
@@ -404,8 +464,8 @@ export function drawStrikeZoneAndOverlay(
       ctx.fillText(tag, tx + 9 * dpr, ty + th * 0.5);
 
       // Big ABS broadcast verdict banner (MLB The Show x Pixel Art)
-      const bannerTitle = abs.overturned ? 'CALL OVERTURNED!' : 'CALL UPHELD';
-      const bannerSub = `ABS HAWK-EYE · ${abs.trueCall === 'strike' ? 'STRIKE' : 'BALL'}`;
+      const bannerTitle = abs.overturned ? absL.overturned : absL.upheld;
+      const bannerSub = `${absL.hawkEye} · ${abs.trueCall === 'strike' ? absL.strike : absL.ball}`;
       const bannerCol = abs.overturned ? '#f4c41c' : '#38bdf8';
       const boxW = Math.min(width * 0.84, 340 * dpr);
       const boxH = 58 * dpr;
@@ -433,7 +493,475 @@ export function drawStrikeZoneAndOverlay(
     }
   }
 
+  // 5. Consolidated Responsive Feedback Card (Desktop/Tablet: Vertical Side Card; Portrait Phone: Above-Zone MLB Dual Card)
+  //    Uses stationary home-plate reference camera so it NEVER shifts when live camera pans or pulls back!
+  if (fb && !state.absReplay?.active && fbFadeAlpha > 0.01) {
+    drawStackedSideFeedback(ctx, cam, width, height, fb, fbFadeAlpha, state.role, state.hudBottomPx, dpr);
+  }
+
   // Note: Pitch/Swing play calls (STRIKE / BALL / FOUL / MISS / TOO LATE / HIT / HR)
   // are unified inside the top-left Play Call card beside the scoreboard so the
   // center strike-zone view stays completely unobstructed.
+}
+
+function drawPitchLocationSubPanel(
+  ctx: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  w: number,
+  h: number,
+  fb: OnZoneFeedbackState,
+  u: number,
+  dpr: number,
+): void {
+  const showPci = fb.kind === 'swing';
+  const headH = Math.round(22 * u);
+  const subH = Math.round(20 * u);
+  const plotY = oy + headH + subH;
+  const plotH = Math.max(48 * u, h - headH - subH);
+
+  ctx.save();
+  // Row 1: Sub-panel header
+  ctx.fillStyle = '#152039';
+  ctx.fillRect(ox, oy, w, headH);
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = `700 ${Math.round(11.5 * u)}px "Chakra Petch", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(showPci ? fb.pciTitle : fb.pitchLocTitle, ox + w / 2, oy + headH * 0.52, w - 10 * u);
+
+  // Row 2: Dedicated Pitch Type, Speed & Break Strip (strictly separated from the 3x3 zone plot!)
+  ctx.fillStyle = '#0b1222';
+  ctx.fillRect(ox, oy + headH, w, subH);
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(ox, plotY - Math.max(1, Math.round(dpr)), w, Math.max(1, Math.round(dpr)));
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = `800 ${Math.round(11 * u)}px "Chakra Petch", sans-serif`;
+  ctx.fillText(fb.pitchLabel, ox + w / 2, oy + headH + subH * 0.52, w - 10 * u);
+
+  // Row 3: Clipped 3x3 Zone Plot Area (high/low pitches NEVER collide with text strips!)
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(ox, plotY, w, plotH);
+  ctx.clip();
+
+  ctx.fillStyle = 'rgba(12, 19, 36, 0.96)';
+  ctx.fillRect(ox, plotY, w, plotH);
+
+  const zw = Math.round(Math.min(w * 0.44, plotH * 0.64));
+  const zh = Math.round(Math.min(plotH * 0.72, zw * 1.12));
+  const zx = Math.round(ox + (w - zw) * 0.5);
+  const zy = Math.round(plotY + (plotH - zh) * 0.5);
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.84)';
+  ctx.fillRect(zx, zy, zw, zh);
+  ctx.strokeStyle = 'rgba(226, 232, 240, 0.9)';
+  ctx.lineWidth = Math.max(1.4, 1.8 * u);
+  ctx.strokeRect(zx, zy, zw, zh);
+
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.44)';
+  ctx.lineWidth = Math.max(1, 1.1 * u);
+  for (let i = 1; i <= 2; i++) {
+    const gx = zx + (zw * i) / 3;
+    const gy = zy + (zh * i) / 3;
+    ctx.beginPath();
+    ctx.moveTo(gx, zy);
+    ctx.lineTo(gx, zy + zh);
+    ctx.moveTo(zx, gy);
+    ctx.lineTo(zx + zw, gy);
+    ctx.stroke();
+  }
+
+  if (fb.absMasked) {
+    // Scheme B (原地翻牌感): Dim the 3x3 strike zone and cover with a crisp ABS mystery shield
+    ctx.fillStyle = 'rgba(7, 11, 22, 0.78)';
+    ctx.fillRect(ox, plotY, w, plotH);
+
+    const shieldW = Math.round(w - 14 * u);
+    const shieldH = Math.round(Math.min(plotH - 12 * u, 68 * u));
+    const sx = Math.round(ox + (w - shieldW) * 0.5);
+    const sy = Math.round(plotY + (plotH - shieldH) * 0.5);
+
+    ctx.fillStyle = 'rgba(13, 24, 46, 0.94)';
+    ctx.fillRect(sx, sy, shieldW, shieldH);
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = Math.max(1.5, 1.8 * u);
+    ctx.strokeRect(sx, sy, shieldW, shieldH);
+
+    // Subtle top accent bar
+    ctx.fillStyle = '#38bdf8';
+    ctx.fillRect(sx, sy, shieldW, Math.max(2, Math.round(2.5 * u)));
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#f4c41c';
+    ctx.font = `800 ${Math.round(24 * u)}px "Chakra Petch", sans-serif`;
+    ctx.fillText('?', ox + w * 0.5, sy + shieldH * 0.42);
+
+    ctx.fillStyle = '#7dd3fc';
+    ctx.font = `700 ${Math.round(10.5 * u)}px "Chakra Petch", sans-serif`;
+    ctx.fillText(fb.absMaskLabel || 'ABS', ox + w * 0.5, sy + shieldH * 0.78, shieldW - 8 * u);
+  } else {
+    const halfW = PLATE_WIDTH * 0.5;
+    const mapX = (fx: number) => zx + ((fx + halfW) / PLATE_WIDTH) * zw;
+    const mapY = (fy: number) => zy + (1 - (fy - STRIKE_ZONE_LO) / (STRIKE_ZONE_HI - STRIKE_ZONE_LO)) * zh;
+    const dotR = 5.8 * u;
+    const clampX = (sx: number) => clamp(sx, ox + dotR + 5 * u, ox + w - dotR - 5 * u);
+    const clampY = (sy: number) => clamp(sy, plotY + dotR + 4 * u, plotY + plotH - dotR - 4 * u);
+
+    // Batter PCI bracket ( • ) when swung
+    if (showPci && typeof fb.batX === 'number' && typeof fb.batY === 'number') {
+      const bx = clampX(mapX(fb.batX));
+      const by = clampY(mapY(fb.batY));
+      const rx = (fb.powerSwing ? 14 : 20) * u;
+      const ry = (fb.powerSwing ? 11 : 15) * u;
+      const col = fb.powerSwing ? '#f97316' : '#f4c41c';
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(1.8, 2.2 * u);
+      ctx.beginPath();
+      ctx.ellipse(bx, by, rx, ry, 0, Math.PI * 0.68, Math.PI * 1.32);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(bx, by, rx, ry, 0, -Math.PI * 0.32, Math.PI * 0.32);
+      ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(bx, by, 2.5 * u, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Actual bottle cap crossing dot
+    const cx = clampX(mapX(fb.plateX));
+    const cy = clampY(mapY(fb.plateY));
+    const revealT =
+      typeof fb.absRevealElapsed === 'number' && fb.absRevealElapsed >= 0 && fb.absRevealElapsed < 0.32
+        ? fb.absRevealElapsed / 0.32
+        : null;
+    const popScale = revealT !== null ? 1.45 - 0.45 * revealT : 1;
+
+    if (revealT !== null) {
+      // Crisp in-place flip/scan flash when revealing real pitch location after ABS window ends
+      ctx.fillStyle = `rgba(56, 189, 248, ${(1 - revealT) * 0.32})`;
+      ctx.fillRect(ox, plotY, w, plotH);
+      ctx.strokeStyle = `rgba(125, 211, 252, ${1 - revealT})`;
+      ctx.lineWidth = Math.max(1.8, 2.4 * u);
+      ctx.beginPath();
+      ctx.arc(cx, cy, dotR * (1.2 + revealT * 2.1), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, dotR * popScale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = fb.callColor || '#38bdf8';
+    ctx.lineWidth = Math.max(2, 2.5 * u);
+    ctx.stroke();
+    ctx.fillStyle = fb.callColor || '#38bdf8';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2.2 * u * popScale, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore(); // end plot clip
+  ctx.restore();
+}
+
+function drawTimingSubPanel(
+  ctx: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  w: number,
+  h: number,
+  fb: OnZoneFeedbackState,
+  u: number,
+  dpr: number,
+  includeEvFooter: boolean,
+): void {
+  const hasEv = includeEvFooter && Boolean(fb.contact && typeof fb.exitSpeedKmh === 'number');
+  const headH = Math.round(22 * u);
+  const badgeH = Math.round(24 * u);
+  const evH = hasEv ? Math.round(22 * u) : 0;
+  const bodyY = oy + headH;
+  const bodyH = Math.max(52 * u, h - headH - badgeH - evH);
+
+  ctx.save();
+  // Row 1: Header
+  ctx.fillStyle = '#152039';
+  ctx.fillRect(ox, oy, w, headH);
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = `700 ${Math.round(11.5 * u)}px "Chakra Petch", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(fb.timingTitle, ox + w / 2, oy + headH * 0.52, w - 10 * u);
+
+  // Row 2: Strictly Clipped Dirt Box + MLB The Show Over-Home-Plate Bat & Annular Timing Fan
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(ox, bodyY, w, bodyH);
+  ctx.clip();
+
+  ctx.fillStyle = 'rgba(54, 36, 27, 0.97)';
+  ctx.fillRect(ox, bodyY, w, bodyH);
+
+  // Batter-box chalk lines framing home plate
+  const chalkInset = Math.round(w * 0.14);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
+  ctx.lineWidth = Math.max(1.4, 1.8 * u);
+  ctx.beginPath();
+  ctx.moveTo(ox + chalkInset, bodyY);
+  ctx.lineTo(ox + chalkInset, bodyY + bodyH);
+  ctx.moveTo(ox + w - chalkInset, bodyY);
+  ctx.lineTo(ox + w - chalkInset, bodyY + bodyH);
+  ctx.stroke();
+
+  // Prominent Home Plate Pentagon centered in the dirt box (MLB The Show style)
+  const plateCx = ox + w * 0.5;
+  const plateCy = bodyY + bodyH * 0.58;
+  const pHalfW = Math.min(w * 0.16, bodyH * 0.24);
+  const pTopH = pHalfW * 0.58;
+  const pBotH = pHalfW * 0.72;
+  ctx.fillStyle = 'rgba(241, 245, 249, 0.92)';
+  ctx.beginPath();
+  ctx.moveTo(plateCx - pHalfW, plateCy - pTopH);
+  ctx.lineTo(plateCx + pHalfW, plateCy - pTopH);
+  ctx.lineTo(plateCx + pHalfW, plateCy + pTopH * 0.25);
+  ctx.lineTo(plateCx, plateCy + pBotH);
+  ctx.lineTo(plateCx - pHalfW, plateCy + pTopH * 0.25);
+  ctx.closePath();
+  ctx.fill();
+
+  // Handedness-matched bat pivot reaching ALL THE WAY ACROSS home plate!
+  // LHB stands on RIGHT -> pivot near right chalk, barrel sweeps across center plate toward left.
+  // RHB stands on LEFT  -> pivot near left chalk, barrel sweeps across center plate toward right.
+  const isLefty = fb.batterHandedness === 'left';
+  const pivotX = isLefty ? ox + w * 0.86 : ox + w * 0.14;
+  const pivotY = bodyY + bodyH * 0.52;
+  const batLen = w * 0.72;
+  const innerR = batLen * 0.2;
+  const outerR = batLen * 0.94;
+  const dt = Math.max(-0.15, Math.min(0.15, fb.dtTiming ?? 0));
+  const norm = dt / 0.15; // -1 early, 0 perfect, +1 late
+
+  const baseAngle = isLefty ? Math.PI : 0;
+  const dirSign = isLefty ? -1 : 1;
+  // Annular Early -> Good -> Late timing band sweeping DIRECTLY OVER HOME PLATE
+  const offsets: Array<{ o0: number; o1: number; color: string }> = [
+    { o0: -0.24, o1: -0.14, color: 'rgba(239, 68, 68, 0.58)' },
+    { o0: -0.14, o1: -0.055, color: 'rgba(250, 204, 21, 0.68)' },
+    { o0: -0.055, o1: 0.055, color: 'rgba(34, 197, 94, 0.78)' },
+    { o0: 0.055, o1: 0.14, color: 'rgba(250, 204, 21, 0.68)' },
+    { o0: 0.14, o1: 0.24, color: 'rgba(239, 68, 68, 0.58)' },
+  ];
+  for (const s of offsets) {
+    const a0 = baseAngle + dirSign * s.o0 * Math.PI;
+    const a1 = baseAngle + dirSign * s.o1 * Math.PI;
+    const aMin = Math.min(a0, a1);
+    const aMax = Math.max(a0, a1);
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(pivotX, pivotY, outerR, aMin, aMax, false);
+    ctx.arc(pivotX, pivotY, innerR, aMax, aMin, true);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Bat sweeping directly over home plate!
+  const batAngle = baseAngle + dirSign * norm * 0.22 * Math.PI;
+  const cosA = Math.cos(batAngle);
+  const sinA = Math.sin(batAngle);
+  const handleEndX = pivotX + cosA * (batLen * 0.34);
+  const handleEndY = pivotY + sinA * (batLen * 0.34);
+  const tipX = pivotX + cosA * (batLen * 0.96);
+  const tipY = pivotY + sinA * (batLen * 0.96);
+
+  // Cream/white handle
+  ctx.strokeStyle = '#f8fafc';
+  ctx.lineWidth = Math.max(2.6, 3.8 * u);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(pivotX, pivotY);
+  ctx.lineTo(handleEndX, handleEndY);
+  ctx.stroke();
+
+  // Bold dark barrel with crisp light rim over home plate
+  ctx.strokeStyle = '#f8fafc';
+  ctx.lineWidth = Math.max(5.2, 7.2 * u);
+  ctx.beginPath();
+  ctx.moveTo(handleEndX, handleEndY);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#0f172a';
+  ctx.lineWidth = Math.max(3.8, 5.4 * u);
+  ctx.beginPath();
+  ctx.moveTo(handleEndX, handleEndY);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+
+  // Bottle cap contact point positioned DEAD-CENTER ON THE BARREL OVER HOME PLATE!
+  const capDist = batLen * 0.5;
+  const capX = pivotX + cosA * capDist;
+  const capY = pivotY + sinA * capDist;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(capX, capY, Math.max(4, 5 * u), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#f43f5e';
+  ctx.lineWidth = Math.max(1.3, 1.8 * u);
+  ctx.stroke();
+
+  ctx.restore(); // end dirt-box clip
+
+  // Row 3: Dedicated Timing Grade Strip
+  const badgeY = bodyY + bodyH;
+  const rawColor = fb.timingColor || '#4ade80';
+  const brightTextColor =
+    rawColor === '#94a3b8' || rawColor === '#64748b' || rawColor === '#475569' ? '#fb7185' : rawColor;
+  ctx.fillStyle = '#0a101f';
+  ctx.fillRect(ox, badgeY, w, badgeH);
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(ox, badgeY, w, Math.max(1, Math.round(dpr)));
+  ctx.fillStyle = brightTextColor;
+  ctx.font = `800 ${Math.round(12.5 * u)}px "Chakra Petch", sans-serif`;
+  ctx.fillText(fb.timingLabel || fb.callLabel, ox + w / 2, badgeY + badgeH * 0.54, w - 10 * u);
+
+  // Row 4: Dedicated EV / LA Bar (only in vertical mode; horizontal mode renders full-width EV footer)
+  if (hasEv && typeof fb.exitSpeedKmh === 'number') {
+    const evY = badgeY + badgeH;
+    ctx.fillStyle = '#070b14';
+    ctx.fillRect(ox, evY, w, evH);
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(ox, evY, w, Math.max(1, Math.round(dpr)));
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = `700 ${Math.round(11 * u)}px "Chakra Petch", sans-serif`;
+    const laTxt = typeof fb.launchAngleDeg === 'number' ? ` · ${fb.laPrefix}${Math.round(fb.launchAngleDeg)}°` : '';
+    ctx.fillText(`${fb.evPrefix}${Math.round(fb.exitSpeedKmh)}${laTxt}`, ox + w / 2, evY + evH * 0.54, w - 10 * u);
+  }
+
+  ctx.restore();
+}
+
+function drawStackedSideFeedback(
+  ctx: CanvasRenderingContext2D,
+  liveCam: GameCamera,
+  width: number,
+  height: number,
+  fb: OnZoneFeedbackState,
+  alpha: number,
+  role: OverlayState['role'],
+  hudBottomPx: number | undefined,
+  dpr: number,
+): void {
+  const isLefty = fb.batterHandedness === 'left';
+  const isSwing = fb.kind === 'swing';
+  const hasEv = Boolean(fb.contact && typeof fb.exitSpeedKmh === 'number');
+  const hasDetail = Boolean(fb.resultDetail && fb.resultDetail.trim().length > 0);
+  const isPortrait = height > width;
+  const accent = fb.callColor || '#38bdf8';
+
+  // Project resting home-plate strike zone using dedicated stationary restCam (NEVER moves when live cam pans!)
+  restCam.setViewport(width, height);
+  restCam.setTargetCenterYRatio(liveCam.getRestCenterYRatio(), true);
+  restCam.resetImmediate();
+
+  const hw = PLATE_WIDTH * 0.5;
+  const ztl = restCam.project([-hw, STRIKE_ZONE_HI, HIT_PLANE_Z]);
+  const ztr = restCam.project([hw, STRIKE_ZONE_HI, HIT_PLANE_Z]);
+  const zbr = restCam.project([hw, STRIKE_ZONE_LO, HIT_PLANE_Z]);
+  const zbl = restCam.project([-hw, STRIKE_ZONE_LO, HIT_PLANE_Z]);
+
+  const zLeft = Math.min(ztl.sx, zbl.sx);
+  const zRight = Math.max(ztr.sx, zbr.sx);
+  const zTop = Math.min(ztl.sy, ztr.sy);
+  const zBottom = Math.max(zbl.sy, zbr.sy);
+  const zoneMidY = (zTop + zBottom) * 0.5;
+
+  // Catcher-camera view: LHB stands on RIGHT -> open side is LEFT; RHB stands on LEFT -> open side is RIGHT
+  const placeOnRight = !isLefty;
+  const edgePad = Math.round((isPortrait ? 5 : 14) * dpr);
+  const gap = Math.round((isPortrait ? 6 : 18) * dpr);
+  const topSafe = Math.round(
+    Math.max(
+      (hudBottomPx ?? (isPortrait ? 92 * dpr : 104 * dpr)) + 8 * dpr,
+      height * 0.11,
+    ),
+  );
+  const bottomReserve = isPortrait && role === 'pitcher' ? Math.round(182 * dpr) : edgePad;
+  const maxAvailH = Math.max(180 * dpr, height - topSafe - bottomReserve);
+
+  // ALWAYS stay in the open side beside the strike zone (Phone, Tablet & Desktop!)
+  // Strictly bounded to <= sideSpace so it NEVER covers the strike zone or top Play Call banner!
+  const sideSpace = Math.max(88 * dpr, placeOnRight ? width - zRight - gap - edgePad : zLeft - gap - edgePad);
+  const desiredMaxW = isPortrait ? 168 * dpr : 240 * dpr;
+  let cardW = Math.round(Math.min(desiredMaxW, sideSpace));
+  // Keep fonts large and readable even on compact portrait phones
+  let u = Math.max(0.74 * dpr, cardW / 182);
+
+  const calcVert = (sc: number) => {
+    const outH = Math.round((hasDetail ? 38 : 28) * sc);
+    const topH = Math.round(138 * sc);
+    const botH = isSwing ? Math.round((hasEv ? 156 : 134) * sc) : 0;
+    const divH = Math.max(1, Math.round(2 * dpr));
+    const total = outH + divH + topH + (isSwing ? divH + botH : 0);
+    return { outH, topH, botH, divH, total };
+  };
+  let hSpec = calcVert(u);
+  if (hSpec.total > maxAvailH) {
+    const fitRatio = maxAvailH / hSpec.total;
+    u *= fitRatio;
+    hSpec = calcVert(u);
+  }
+
+  const maxY = Math.max(topSafe, height - bottomReserve - hSpec.total);
+  const rawX = placeOnRight ? Math.round(zRight + gap) : Math.round(zLeft - gap - cardW);
+  const x = clamp(rawX, edgePad, Math.max(edgePad, width - cardW - edgePad));
+  const y = clamp(Math.round(zoneMidY - hSpec.total * 0.5), topSafe, maxY);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Crisp shadow
+  ctx.fillStyle = 'rgba(5, 8, 16, 0.88)';
+  ctx.fillRect(x + 4 * dpr, y + 4 * dpr, cardW, hSpec.total);
+
+  // Top Consolidated Outcome Banner
+  ctx.fillStyle = '#090f1e';
+  ctx.fillRect(x, y, cardW, hSpec.outH);
+  ctx.fillStyle = accent;
+  ctx.fillRect(x, y, cardW, Math.round(3.5 * dpr));
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = accent;
+  ctx.font = `800 ${Math.round(14.5 * u)}px "Chakra Petch", sans-serif`;
+  if (hasDetail && fb.resultDetail) {
+    ctx.fillText(fb.callLabel, x + cardW / 2, y + hSpec.outH * 0.39, cardW - 10 * u);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = `700 ${Math.round(10 * u)}px "Chakra Petch", sans-serif`;
+    ctx.fillText(fb.resultDetail, x + cardW / 2, y + hSpec.outH * 0.77, cardW - 10 * u);
+  } else {
+    ctx.fillText(fb.callLabel, x + cardW / 2, y + hSpec.outH * 0.56, cardW - 10 * u);
+  }
+
+  const topPanelY = y + hSpec.outH + hSpec.divH;
+  ctx.fillStyle = '#334155';
+  ctx.fillRect(x, y + hSpec.outH, cardW, hSpec.divH);
+
+  // Top sub-panel: Pitch Location (+ PCI if swung) + Pitch Speed & Break
+  drawPitchLocationSubPanel(ctx, x, topPanelY, cardW, hSpec.topH, fb, u, dpr);
+
+  // Bottom sub-panel: Swing Timing (bat over plate!) + EV/LA (if swung)
+  if (isSwing) {
+    const div2Y = topPanelY + hSpec.topH;
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(x, div2Y, cardW, hSpec.divH);
+    drawTimingSubPanel(ctx, x, div2Y + hSpec.divH, cardW, hSpec.botH, fb, u, dpr, true);
+  }
+
+  // Outer crisp border
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = Math.max(1.6, 2 * dpr);
+  ctx.strokeRect(x, y, cardW, hSpec.total);
+
+  ctx.restore();
 }

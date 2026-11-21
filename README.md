@@ -4,7 +4,7 @@
 
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
-- **目前里程碑**：`v1.0.0` 起步，Pi 現行部署版本 `20261121-175200`
+- **目前里程碑**：`v2.0.0`（語意化三段式版本號），Pi 現行部署版本 `20261122-050037`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -18,7 +18,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 36 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 42 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -143,3 +143,32 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **玩家回饋**：日本玩家反映手機打擊時手指壓在好球帶上會擋住飛過來的瓶蓋，希望改成像《プロスピA》從下方操作游標。
   - **實測除錯**：初版針對好球帶內觸控採「隨移動距離漸變偏移」，本地手機實測發現小幅拖曳時準心仍黏在手指下、往回拉還會歸零。已改為「好球帶下方（`y < 0.42m`）按下即偏移；好球帶內只要拖曳 `≥ 6px` 或按住 `≥ 130ms` 即立刻鎖定完整向上偏移 `76–124px`、放開即揮棒」，而快速輕點（`< 6px` 且 `< 130ms`）則維持零偏移對點打擊，完全淘汰舊版手指壓住拖曳模式且無須額外切換按鈕。
 - **RFC 6455 協定層心跳與分流統計**：改用 `ws.ping()`／`ws.on('pong')`（12s 間隔／36s 逾時）避免手機切背景凍結 JS 被誤斷線，並將大廳閒置關閉（`idleClosed`）與對戰中失聯（`deadPongTimeout`）分開計算。
+
+### 9. v2.0.0 畫面流程重構、物理包絡線、Messenger 對話球與除錯紀錄（2026-11-22）
+
+本次升級為語意化版本 `v2.0.0`，完整重整比賽畫面節奏、跨裝置佈局、物理邊界與多人房操作，並修正實測過程中發現的多項問題：
+
+- **變速球包絡線跳動與軌跡準心脫鉤**：
+  - **問題**：初版球種包絡線（天花板／地板／左右側牆）使用固定最小步階 `Math.max(0.6, ...)` 往回推發射角，導致變速球在高點微調目標時高度上下跳動；且準心顯示原始目標而非受限後的真實擊球點，造成軌跡與控制點分離。
+  - **解法**：[src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 改以 7 步單調二分搜尋分別收斂仰角與方位角，並將準心位置直接綁定包絡線求解後的 `simToField(res.hitPlanePos)`。
+- **側邊回饋卡隨鏡頭回拉漂移、與文字／好球帶重疊**：
+  - **問題**：擊球回拉鏡頭時，側邊卡原本引用動態 `liveCam` 座標，導致卡片跟著好球帶移動；手機直向版曾嘗試改放好球帶上方，結果壓到上方消息框；此外初版揮棒示意圖的球棒軸心偏離本壘板太遠，且打者視角左右側放反。
+  - **解法**：[src/render/overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) 改以獨立靜止攝影機 `restCam` 鎖定本壘位置；依捕手視角放置於打者對側空位（左打者站畫面右側，卡片放左側；右打者站畫面左側，卡片放右側），全裝置寬度嚴格限制在 `<= sideSpace`；球棒與紅黃綠扇形區調整至正中央橫掃本壘板上方，揮棒瞬間立刻清除 3D 實時括號 PCI。
+- **移除上方浮動消息框與循序呈現佇列（`PresentationQueue`）**：
+  - **問題**：上方 Play Call 卡片與側邊卡、全螢幕轉場同時出現造成資訊重複與視覺干擾，且投手在卡片尚未消失前就能搶投下一球。
+  - **解法**：徹底移除 `#swing-feedback-card` 與 `callout`；擊球飛行與鏡頭回拉期間保持畫面淨空，等 `cam.isNearRest()` 回到本壘才跳出側邊雙格卡，並於期間鎖定投球、暫停投球時鐘；卡片淡出後依序接續 `strikeout` → `inning_change` → `game_over`（附 [src/ui/boxScore.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/boxScore.ts) 各局得分表與 MVP）。
+- **ABS 方案 B 原地翻牌流程**：
+  - 未揮棒且具挑戰資格時，側邊卡先以 `? ABS 可挑戰` 遮罩蓋住 3×3 好球帶避免劇透，2.2 秒未按 `[ABS]` 則原地閃光翻牌揭曉真實落點；按下挑戰則立即收起側邊卡並進入 3D 鷹眼重播，播畢後再接後續轉場。
+- **計分板 BSO 圓點燈號、全站棒球字母與頂部單列對齊**：
+  - 計分板改為三列圓點燈號（`B` 綠 `#4ade80`、`S` 黃 `#f4c41c`、`O` 紅 `#f43f5e`）並統一全站好壞球／出局色系；移除冗餘球數與毫秒延遲膠囊，將伺服器負載顏色整合至「在線人數」並與 `☰` 橫向排成單列。
+  - 全面保留國際通用棒球紀錄字母（`R`、`H`、`K`、`ꓘ`、`1B`、`2B`、`3B`、`AB`、`HR`、`BB`、`IBB`、`P`、`O`、`ABS`），修正中／日文版 Box Score 出現 `得 / 安 / 振 / 保` 與 MVP 出現 `12總 · 5振` 的問題。
+- **右下角 Messenger 對話球（廣播＋純文字快捷對話）與直排折行修正**：
+  - **問題**：初版將對話圖示置於右上角且未設 `width: max-content`，造成彈出訊息被壓縮成 `40px` 寬並逐字直排折行。
+  - **解法**：[src/ui/emotes.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/emotes.ts) 與 [src/styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) 改為右下角圓形 Messenger 對話球，訊息以單行圓角橫條（`width: max-content; white-space: nowrap`）從左側滑出；直立手機投球時自動抬升至投手面板正上方。內建 8 組純文字三語快捷對話（前後端雙重 3 秒冷卻）並整合賽事廣播與系統連線通知。
+- **界外球聲畫不同步與音效誤判**：
+  - **問題**：界外球在停球瞬間即播放與好球相同的 `strike` 音效，0.5–1.0 秒後鏡頭回正才出現揮棒畫面，且 `FOUL TIP` 與 `PERFECT!` 缺少翻譯。
+  - **解法**：[src/audio/sfx.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/audio/sfx.ts) 新增界外球專屬 `'foul'` 雙響提示音，並改由 `stepPresentationQueue` 在 `show_feedback` 出現同一幀播放裁判音效；補齊 `FOUL TIP` 與 `PERFECT!` 三語對照。
+- **雙方同時建立好友房間死鎖**：
+  - **問題**：兩名玩家各自建立空房後，其中一方輸入對方房號加入時，[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 的 `if (client.roomCode) return;` 直接靜默丟棄請求造成雙方卡死。
+  - **解法**：新增 `abandonWaitingRoomIfHost` 自動回收加入方的空等待房並直接開打；輸入自己房號或打錯房號時回傳明確錯誤且不誤刪原房，並於 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 新增第 23 項整合測試覆蓋。
+- **其餘 v2.0.0 系統升級**：外野滾地攔截守備（[src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts)）、扣倒制（2 局起 10 分差提前結束）、480 公開＋20 好友房保留席、捕手回傳演出（[src/render/catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts)）、4 分頁設定與行動版破除快取自動更新橫幅。

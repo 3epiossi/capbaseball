@@ -14,7 +14,8 @@
 | [gymScene.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/gymScene.ts) | 繪製台灣學校大禮堂（楓木地板、多運動場線、2025-02 瓶蓋棒球標線、舞台布幕與燈具）、離屏背景快取及 24 段 13 m 藍黃圍牆。 |
 | [cap3d.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/cap3d.ts) | 將 6-DOF 瓶蓋法向量轉為 `Field3D` 朝向（`simNormalToField`），並以正面圓盤、側面裙邊與背面陰影繪製真實傾斜的 3D 瓶蓋（`drawTrue3DCap`）。 |
 | [sprites.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/sprites.ts) | 非同步載入投手／打者／外野手／擊球特效精靈圖集，並以畫家演算法（Painter's algorithm）深度排序繪製所有場上實體。 |
-| [overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) | 在高 DPI 覆蓋層繪製 3×3 好球帶、3D 投球軌跡預覽、打者括號 PCI、縮圈時機導引環、高解析度投球瓶蓋與 ABS 鷹眼重播。 |
+| [overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) | 在高 DPI 覆蓋層繪製 3×3 好球帶、3D 投球軌跡預覽、打者括號 PCI、縮圈時機導引環、高解析度投球瓶蓋、獨立靜止攝影機側邊回饋卡與 ABS 鷹眼重播。 |
+| [catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts) | 繪製捕手接球停頓 `0.36` s 後，由畫面右下角以 16-bit 像素右手拋回投手丘的溫和拋物線回傳動畫。 |
 
 ---
 
@@ -49,10 +50,15 @@
 
 > **精靈圖修補紀錄**：`public/sprites/pitcher_strip.png` 與 `public/sprites/pitcher_black_strip.png` 曾於 15 個影格的大腿／短褲區域（`y=48..80`）出現封閉透明破洞，已使用邊界像素向內填補完畢（共修補 1,007 個像素）。
 
-### 5. 括號 PCI 與 ABS 鷹眼重播（`overlay.ts`）
+### 5. 括號 PCI、側邊回饋卡與 ABS 鷹眼重播（`overlay.ts`）
 
-- **括號 PCI（Plate Coverage Indicator）**：打擊階段在 `HIT_PLANE_Z = -0.22` 平面繪製左／右括號 `( • )` 與中心甜區點。一般揮棒（`NORMAL`）世界半徑為 `0.098` m（垂直 `0.076` m），強力揮棒（`POWER`）縮窄為 `0.068` m（垂直 `0.052` m）並轉為橘色邊框；投球飛行中同步顯示向中心收縮的時機導引環（`guideProgress` 進入 `0.85..1.08` 時閃爍金藍提示）。
-- **ABS 鷹眼重播（`AbsReplayState`）**：觸發挑戰時，將好球帶轉為水藍色鷹眼網格，標出實際進壘點與最近邊緣距離（`±X.X cm`，好球綠點、壞球紅點），並在畫面上方顯示 `CALL OVERTURNED!` 或 `CALL UPHELD` 播報橫幅。
+- **括號 PCI（Plate Coverage Indicator）**：打擊階段在 `HIT_PLANE_Z = -0.22` 平面繪製左／右括號 `( • )` 與中心甜區點；打者一揮棒即刻隱藏 3D 實時括號，避免與側邊回饋卡重複殘留。一般揮棒（`NORMAL`）世界半徑為 `0.098` m（垂直 `0.076` m），強力揮棒（`POWER`）縮窄為 `0.068` m（垂直 `0.052` m）並轉為橘色邊框；投球飛行中同步顯示向中心收縮的時機導引環（`guideProgress` 進入 `0.85..1.08` 時閃爍金藍提示）。
+- **獨立靜止攝影機側邊回饋卡（`drawStackedSideFeedback`）**：
+  - 使用專用靜止參考攝影機 `restCam` 計算本壘好球帶投影，確保鏡頭追球與回拉期間側邊卡完全不漂移。
+  - 依捕手視角放置於打者對側空位（左打者站畫面右側，卡片放左側；右打者站畫面左側，卡片放右側），並將寬度嚴格限制在 `<= sideSpace`，桌機、平板與直向手機皆不遮擋好球帶。
+  - 上格整合結果大標、細項、球種／球速／變化量與 3×3 進球落點（揮棒時同步繪製 PCI）；下格以本壘板為中心繪製橫掃板面上方的球棒軌跡與紅黃綠扇形時機區，並顯示初速與仰角。
+  - **ABS 方案 B 原地翻牌遮罩**：未揮棒且玩家具 ABS 挑戰資格時，側邊卡先以 `? ABS 可挑戰` 遮罩蓋住 3×3 落點防劇透；2.2 秒倒數結束未挑戰時，於同一張卡片原地閃光翻開真實進壘點。
+- **ABS 鷹眼重播（`AbsReplayState`）**：觸發挑戰時，將好球帶轉為水藍色鷹眼網格，標出實際進壘點與最近邊緣距離（`±X.X cm`，好球黃點、壞球綠點與全站 BSO 色系一致），並在畫面上方顯示 `CALL OVERTURNED!` 或 `CALL UPHELD` 播報橫幅。
 
 ---
 

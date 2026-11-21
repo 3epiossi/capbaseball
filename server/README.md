@@ -29,6 +29,8 @@
   - 同一座位再次 `reconnect` 時關閉舊連線並清除舊 client 的 `roomCode`／`side`；`reconnect` 也會移出配對佇列與觀戰。
   - 死連線偵測：`lastPongAt` 超過 `deadSocketTimeoutMs`（預設 `max(10000, pingIntervalMs * 5)`）即 `terminate()`，交由正常斷線流程啟動寬限，避免失訊手機永遠佔著座位。
   - `rematch` 遇到房間已不在或對手離線，回 `error` 碼 `opponent_left`，不再靜默無回應。
+  - **雙方同時建房死鎖修正（2026-11-22）**：初版 `join`／`create`／`queue` 在 `if (client.roomCode) return;` 直接靜默忽略封包，導致兩名玩家各自開了空等待房後互相無法加入。現已新增 `abandonWaitingRoomIfHost`：當加入目標房存在且未滿員時，自動釋放加入方自己的空等待房並直接開打；若輸入自己的房號（回傳 `already_in_room`）或打錯不存在的房號（回傳 `room_not_found`），則保留原本等待房不被誤刪。
+  - **快捷對話 3 秒防洗頻（`emote`）**：僅允許白名單內的 8 組訊息 ID（`nice`、`wow`、`fire`、`sweat`、`clap`、`gg`、`k`、`hr`），伺服器端強制限制每條連線至少間隔 `3000` ms 才廣播一次，且由接收端依自身語系本地化顯示。
   - 已知未修：親友房在伺服器忙碌時回 `server_busy` 會被客戶端導向 CPU 對戰；建房／加入按鈕沒有連點防護；`sendToRoom` 清除失效觀戰者時未重設 `watchingCode`。
 - **回合與序號驗證**：每球遞增 `pitchSeq`，伺服器僅接受符合當前 `turnState`（`awaiting_pitch` 或 `awaiting_swing`）、正確投打方且 `msg.pitchSeq === room.pitchSeq` 的指令，自動忽略重複、過期或越權封包。
 - **投打結算**：收到 `pitch_submit` 後，伺服器以加密安全亂數產生 `seed` 並呼叫 `solvePitchTrajectory`（`120` Hz）計算軌跡，廣播 `pitch_launch` 並啟動逾時自動判不揮棒計時器；收到 `swing_input`、`no_swing` 或逾時後，呼叫 `evaluateSwingResolution`、`checkCatcherCatch`、`evaluateUmpirePitchCall` 與 `applyPitchResult` 完成權威判決並廣播 `pitch_result`。
@@ -45,7 +47,7 @@
 
 ### 3. 放寬過載保護閘門（`getServerLoad`）
 
-伺服器透過 `monitorEventLoopDelay({ resolution: 20 })` 持續監測事件迴圈 p95 延遲（`lagMs`），並結合 RSS 記憶體（預設 `MAX_RSS_MB=640`）、房間數（預設 `MAX_ROOMS=80`）與連線數（預設 `MAX_CLIENTS=500`）計算負載等級：
+伺服器透過 `monitorEventLoopDelay({ resolution: 20 })` 持續監測事件迴圈 p95 延遲（`lagMs`），並結合 RSS 記憶體（預設 `MAX_RSS_MB=640`）、房間數（預設 `MAX_ROOMS=80`）與連線數（預設 `MAX_CLIENTS=500`，其中 `publicClientCap = 480` 供公開配對、最後 `20` 席 `481..500` 保留給好友房與重連）計算負載等級：
 
 | 狀態 | 條件（任一成立） | 行為 |
 |---|---|---|

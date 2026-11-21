@@ -21,6 +21,18 @@ export type PitchId = 'straight' | 'cutter' | 'fork' | 'changeup';
 export type BaseAttitude = 'flat' | 'edge_on';
 export type RotationSense = 'clockwise' | 'counterclockwise';
 
+export interface PitchEnvelope {
+  /** Minimum legal height above floor before plate (prevents ground-skimming rise). */
+  minFlightZ: number;
+  /** Maximum legal height ceiling before plate (prevents sky-lob drop). */
+  maxFlightZ: number;
+  /** Maximum lateral horizontal excursion |y| before plate. */
+  maxAbsFlightY: number;
+  minElevationDeg: number;
+  maxElevationDeg: number;
+  maxAbsAzimuthDeg: number;
+}
+
 export interface PitchSpec {
   id: PitchId;
   code: string;
@@ -42,6 +54,7 @@ export interface PitchSpec {
     force_coefficient: number;
     moment_coefficient: number;
   };
+  envelope: PitchEnvelope;
   description: string;
 }
 
@@ -61,6 +74,14 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     defaultSpeedKmh: 70,
     clAlphaPerRad: 0.8,
     magnusCoeff: 0.015,
+    envelope: {
+      minFlightZ: 0.24,
+      maxFlightZ: 1.85,
+      maxAbsFlightY: 0.64,
+      minElevationDeg: -7.5,
+      maxElevationDeg: 7.5,
+      maxAbsAzimuthDeg: 8.0,
+    },
     description: '12 o\'clock slight rising hop.',
   },
   cutter: {
@@ -78,6 +99,14 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     defaultSpeedKmh: 70,
     clAlphaPerRad: 0.9,
     magnusCoeff: 0.04,
+    envelope: {
+      minFlightZ: 0.22,
+      maxFlightZ: 1.92,
+      maxAbsFlightY: 0.72,
+      minElevationDeg: -6.5,
+      maxElevationDeg: 10.5,
+      maxAbsAzimuthDeg: 10.0,
+    },
     description: '4 o\'clock sharp down-right break.',
   },
   fork: {
@@ -96,6 +125,14 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     clAlphaPerRad: 0.08,
     magnusCoeff: 0.25,
     magnusMaxCoeff: 1.0,
+    envelope: {
+      minFlightZ: 0.2,
+      maxFlightZ: 2.02,
+      maxAbsFlightY: 0.64,
+      minElevationDeg: -4.5,
+      maxElevationDeg: 14.5,
+      maxAbsAzimuthDeg: 8.0,
+    },
     description: '6 o\'clock sharp downward drop.',
   },
   changeup: {
@@ -114,6 +151,14 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     clAlphaPerRad: 0.72,
     magnusCoeff: 0.03,
     cdProjected: 0.28,
+    envelope: {
+      minFlightZ: 0.22,
+      maxFlightZ: 2.08,
+      maxAbsFlightY: 0.72,
+      minElevationDeg: -2.5,
+      maxElevationDeg: 17.0,
+      maxAbsAzimuthDeg: 10.0,
+    },
     description: 'Face-on high-drag off-speed fade and drop.',
   },
 };
@@ -369,8 +414,12 @@ export function solvePitchTrajectory(
   const goalZ = targetPlateZ + (options?.errorZ ?? 0);
   const dx = HIT_PLANE_X - releasePos[0];
 
-  let azDeg = (Math.atan2(goalY - releasePos[1], dx) * 180) / Math.PI;
-  let elDeg = (Math.atan2(goalZ - releasePos[2], dx) * 180) / Math.PI;
+  const env = spec.envelope;
+  const clampAz = (v: number) => Math.max(-env.maxAbsAzimuthDeg, Math.min(env.maxAbsAzimuthDeg, v));
+  const clampEl = (v: number) => Math.max(env.minElevationDeg, Math.min(env.maxElevationDeg, v));
+
+  let azDeg = clampAz((Math.atan2(goalY - releasePos[1], dx) * 180) / Math.PI);
+  let elDeg = clampEl((Math.atan2(goalZ - releasePos[2], dx) * 180) / Math.PI);
 
   const evalOffset = (az: number, el: number) => {
     const raw = buildPitchRawConfig(spec, speedKmh, az, el, releasePos, {
@@ -410,28 +459,108 @@ export function solvePitchTrajectory(
     }
     prevErr = errNorm;
 
+    const prevAz = azDeg;
+    const prevEl = elDeg;
     if (Math.abs(det) > 1e-6) {
       const damp = errNorm > 0.3 ? 0.65 : 1.0;
       const dAz = ((j22 * errY - j12 * errZ) / det) * damp;
       const dEl = ((-j21 * errY + j11 * errZ) / det) * damp;
-      azDeg = Math.max(-25, Math.min(25, azDeg + Math.max(-10, Math.min(10, dAz))));
-      elDeg = Math.max(-15, Math.min(50, elDeg + Math.max(-10, Math.min(10, dEl))));
+      azDeg = clampAz(azDeg + Math.max(-10, Math.min(10, dAz)));
+      elDeg = clampEl(elDeg + Math.max(-10, Math.min(10, dEl)));
     } else {
       const gain = (180 / Math.PI) / dx;
-      azDeg += errY * gain;
-      elDeg += errZ * gain;
+      azDeg = clampAz(azDeg + errY * gain);
+      elDeg = clampEl(elDeg + errZ * gain);
+    }
+    if (Math.abs(azDeg - prevAz) < 1e-4 && Math.abs(elDeg - prevEl) < 1e-4) {
+      break;
     }
   }
 
-  // Final high-resolution simulation (with wake enabled for knuckleball)
+  // Final high-resolution simulation (with wake enabled for knuckleball) + envelope ceiling/floor/side enforcement
   const seed = options?.seed ?? ((Math.floor(Math.random() * 0xffffffff) >>> 0) || 1);
-  const finalRaw = buildPitchRawConfig(spec, speedKmh, azDeg, elDeg, releasePos, {
-    enableWake: Boolean(spec.wake),
-    seed,
-    fixedStepSec: 0.002,
-    outputHz: options?.outputHz ?? 120,
-  });
-  const simResult = runSimulation(configFromRaw(finalRaw, pitchId));
+  const runFinal = () => {
+    const raw = buildPitchRawConfig(spec, speedKmh, azDeg, elDeg, releasePos, {
+      enableWake: Boolean(spec.wake),
+      seed,
+      fixedStepSec: 0.002,
+      outputHz: options?.outputHz ?? 120,
+    });
+    return runSimulation(configFromRaw(raw, pitchId));
+  };
+
+  const measureEnvelope = (sim: SimResult) => {
+    let maxZ = -Infinity;
+    let minZ = Infinity;
+    let worstY = 0;
+    for (const f of sim.frames) {
+      if (f.y[0] > PLATE_PLANE_X) break;
+      if (f.y[2] > maxZ) maxZ = f.y[2];
+      if (f.y[2] < minZ) minZ = f.y[2];
+      if (Math.abs(f.y[1]) > Math.abs(worstY)) worstY = f.y[1];
+    }
+    return { maxZ, minZ, worstY };
+  };
+
+  let simResult = runFinal();
+  let envStats = measureEnvelope(simResult);
+
+  // Smooth monotonic binary search for vertical ceiling / floor (zero discrete jump or oscillation!)
+  if (envStats.maxZ > env.maxFlightZ) {
+    let loEl = env.minElevationDeg;
+    let hiEl = elDeg;
+    for (let i = 0; i < 7; i++) {
+      const mid = (loEl + hiEl) * 0.5;
+      elDeg = clampEl(mid);
+      simResult = runFinal();
+      envStats = measureEnvelope(simResult);
+      if (envStats.maxZ > env.maxFlightZ) {
+        hiEl = mid;
+      } else {
+        loEl = mid;
+      }
+    }
+    elDeg = clampEl(loEl);
+    simResult = runFinal();
+    envStats = measureEnvelope(simResult);
+  } else if (envStats.minZ < env.minFlightZ) {
+    let loEl = elDeg;
+    let hiEl = env.maxElevationDeg;
+    for (let i = 0; i < 7; i++) {
+      const mid = (loEl + hiEl) * 0.5;
+      elDeg = clampEl(mid);
+      simResult = runFinal();
+      envStats = measureEnvelope(simResult);
+      if (envStats.minZ < env.minFlightZ) {
+        loEl = mid;
+      } else {
+        hiEl = mid;
+      }
+    }
+    elDeg = clampEl(hiEl);
+    simResult = runFinal();
+    envStats = measureEnvelope(simResult);
+  }
+
+  // Smooth monotonic binary search for lateral wall |y| <= maxAbsFlightY
+  if (Math.abs(envStats.worstY) > env.maxAbsFlightY) {
+    const signY = Math.sign(envStats.worstY);
+    let innerAz = 0;
+    let outerAz = azDeg;
+    for (let i = 0; i < 7; i++) {
+      const mid = (innerAz + outerAz) * 0.5;
+      azDeg = clampAz(mid);
+      simResult = runFinal();
+      envStats = measureEnvelope(simResult);
+      if (Math.abs(envStats.worstY) > env.maxAbsFlightY && Math.sign(envStats.worstY) === signY) {
+        outerAz = mid;
+      } else {
+        innerAz = mid;
+      }
+    }
+    azDeg = clampAz(innerAz);
+    simResult = runFinal();
+  }
   const frames = simResult.frames;
 
   const last = frames[frames.length - 1];

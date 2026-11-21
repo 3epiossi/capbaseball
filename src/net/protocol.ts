@@ -59,6 +59,12 @@ export interface CompactMatch {
   /** optional gameOver + winner ('h'|'a'|'t') */
   go?: 1;
   w?: 'h' | 'a' | 't';
+  /** optional runs-by-inning arrays for full BoxScore line score */
+  ar?: number[];
+  hr?: number[];
+  /** mercy rule off flag (omitted when enabled) & triggered flag */
+  mr?: 0;
+  mt?: 1;
   /** optional challengeable call [pitchSeq, eligibleSide(0=away,1=home), challenged(0|1)] */
   lc?: [number, number, number];
 }
@@ -120,6 +126,10 @@ export function packMatch(m: MatchState): CompactMatch {
     ];
   }
   if (m.isGameOver) cm.go = 1;
+  if (m.away.runsByInning.length > 0) cm.ar = m.away.runsByInning;
+  if (m.home.runsByInning.length > 0) cm.hr = m.home.runsByInning;
+  if (m.mercyRule === false) cm.mr = 0;
+  if (m.mercyTriggered) cm.mt = 1;
   if (m.winner) {
     cm.w = m.winner === 'home' ? 'h' : m.winner === 'away' ? 'a' : 't';
   }
@@ -159,7 +169,7 @@ export function unpackMatch(cm: CompactMatch): MatchState {
       name: cm.a,
       lineup: DEFAULT_AWAY_LINEUP.map((p) => ({ ...p })),
       batterIndex: abi,
-      runsByInning: [ar],
+      runsByInning: Array.isArray(cm.ar) && cm.ar.length > 0 ? [...cm.ar] : [ar],
       totalRuns: ar,
       hits: ah,
       walks: abb,
@@ -170,7 +180,7 @@ export function unpackMatch(cm: CompactMatch): MatchState {
       name: cm.h,
       lineup: DEFAULT_HOME_LINEUP.map((p) => ({ ...p })),
       batterIndex: hbi,
-      runsByInning: [hr],
+      runsByInning: Array.isArray(cm.hr) && cm.hr.length > 0 ? [...cm.hr] : [hr],
       totalRuns: hr,
       hits: hh,
       walks: hbb,
@@ -179,6 +189,8 @@ export function unpackMatch(cm: CompactMatch): MatchState {
     },
     isGameOver: cm.go === 1,
     winner,
+    mercyRule: cm.mr !== 0,
+    mercyTriggered: cm.mt === 1,
     lastEvent: '',
     stats: {
       totalPitches,
@@ -282,7 +294,12 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
     case 'uq':
       return { type: 'unqueue' };
     case 'cr':
-      return { type: 'create', mode: raw.m === 1 ? 'official6' : 'quick3', name: raw.n };
+      return {
+        type: 'create',
+        mode: raw.m === 1 ? 'official6' : 'quick3',
+        name: raw.n,
+        ...(raw.mr !== undefined ? { mercyRule: raw.mr !== 0 } : {}),
+      };
     case 'jn':
       return { type: 'join', code: raw.c, name: raw.n };
     case 'rc':
@@ -326,6 +343,8 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
       return { type: 'resign' };
     case 'rm':
       return { type: 'rematch' };
+    case 'em':
+      return { type: 'emote', id: raw.e };
     default:
       return raw;
   }
@@ -402,16 +421,18 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
             round3(bp.velocity[2]),
             bp.seed ?? 1,
           ],
-          ci: ci.caught || ci.bobbled
+          ci: ci.caught || ci.bobbled || (ci as { blocked?: boolean }).blocked
             ? [
                 ci.caught ? 1 : 0,
                 ci.bobbled ? 1 : 0,
                 ci.fielderId === 'RF' ? 1 : 0,
                 ci.catchTimeSec !== null ? round3(ci.catchTimeSec) : -1,
+                (ci as { blocked?: boolean }).blocked ? 1 : 0,
               ]
             : 0,
           oc: res.outcome,
           ev: Math.round(Number(res.exitSpeedKmh)),
+          ...(typeof res.launchAngleDeg === 'number' ? { la: Math.round(res.launchAngleDeg) } : {}),
           dm: round2(Number(res.distanceM)),
         };
       }
@@ -429,6 +450,19 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
       if (msg.ibb) out.ib = 1;
       if (msg.clockViolation) out.cv = 1;
       if (msg.inningChanged) out.ic = 1;
+      if (Array.isArray(msg.platePos)) {
+        out.pp = [round3(Number(msg.platePos[0])), round3(Number(msg.platePos[1]))];
+      }
+      if (msg.swingData && typeof msg.swingData === 'object') {
+        const sd = msg.swingData as { batX: number; batY: number; flightTimeSec: number; swingMode: string; batterSide: string };
+        out.sd = [
+          round3(sd.flightTimeSec),
+          round3(sd.batX),
+          round3(sd.batY),
+          sd.swingMode === 'power' ? 1 : 0,
+          sd.batterSide === 'R' ? 1 : 0,
+        ];
+      }
       if (cr) out.r = cr;
       return out;
     }
@@ -509,6 +543,12 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         w: msg.winner,
         rs: msg.reason,
         cm: packMatch(msg.match as MatchState),
+      };
+    case 'emote':
+      return {
+        t: 'em',
+        s: msg.side === 'home' ? 1 : 0,
+        e: msg.id,
       };
     case 'error':
       return {
@@ -624,13 +664,18 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
             velocity: [bp[3], bp[4], bp[5]],
             seed: bp[6],
           },
-          catchInfo,
+          catchInfo: {
+            ...catchInfo,
+            blocked: Array.isArray(r.ci) && r.ci[4] === 1,
+          },
           outcome: r.oc,
           exitSpeedKmh: r.ev,
+          ...(typeof r.la === 'number' ? { launchAngleDeg: r.la } : {}),
           distanceM: r.dm,
         };
       }
       const co = raw.co as [string, string, string, number];
+      const sdArr = Array.isArray(raw.sd) ? (raw.sd as number[]) : null;
       return {
         type: 'pitch_result',
         pitchSeq: raw.q,
@@ -638,12 +683,21 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         swung: raw.sw === 1,
         ibb: raw.ib === 1,
         clockViolation: raw.cv === 1,
-        swingData: null,
+        swingData: sdArr
+          ? {
+              flightTimeSec: sdArr[0],
+              batX: sdArr[1],
+              batY: sdArr[2],
+              swingMode: sdArr[3] === 1 ? 'power' : 'normal',
+              batterSide: sdArr[4] === 1 ? 'R' : 'L',
+            }
+          : null,
         resolution,
         outcome: raw.oc,
         callout: { title: co[0], subtitle: co[1], color: co[2], ttl: co[3] },
         inningChanged: raw.ic === 1,
         telemetry: raw.tl,
+        ...(Array.isArray(raw.pp) ? { platePos: raw.pp } : {}),
         match: unpackMatch(raw.cm as CompactMatch),
       };
     }
@@ -700,6 +754,12 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         winner: raw.w,
         reason: raw.rs,
         match: unpackMatch(raw.cm as CompactMatch),
+      };
+    case 'em':
+      return {
+        type: 'emote',
+        side: raw.s === 1 ? 'home' : 'away',
+        id: raw.e,
       };
     case 'er':
       return {

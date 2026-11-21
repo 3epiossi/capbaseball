@@ -95,6 +95,7 @@ interface ClientMeta {
   queuedMode: OnlineMode | null;
   lastPingSentAt: number;
   lastPongAt: number;
+  lastEmoteAt: number;
   msgWindowStart: number;
   msgCount: number;
 }
@@ -125,6 +126,7 @@ interface Room {
   code: string;
   mode: OnlineMode;
   isMatchmaking: boolean;
+  mercyRule: boolean;
   createdAt: number;
   lastActivityAt: number;
   match: MatchState;
@@ -158,6 +160,8 @@ export interface ServerOptions {
   pitchClockScale?: number;
   maxRooms?: number;
   maxClients?: number;
+  /** Soft cap for public matchmaking; clients above this up to maxClients are reserved for Friend Rooms (default maxClients - 20 = 480). */
+  publicClientCap?: number;
   maxRssMb?: number;
   maxConnPerIp?: number;
   maxMsgsPerSec?: number;
@@ -266,14 +270,17 @@ function appendMatchLog(record: unknown, override?: string): void {
     });
 }
 
-function buildMatchState(mode: OnlineMode, homeName: string, awayName: string): MatchState {
+function buildMatchState(mode: OnlineMode, homeName: string, awayName: string, mercyRule = true): MatchState {
   return createMatch(mode, {
     awayName: `中正黑 ${awayName}`,
     homeName: `中正黃 ${homeName}`,
     awayLineup: AWAY_LINEUP,
     homeLineup: HOME_LINEUP,
+    mercyRule,
   });
 }
+
+const VALID_EMOTE_IDS = new Set(['nice', 'wow', 'fire', 'sweat', 'clap', 'gg', 'k', 'hr']);
 
 export function startServer(
   port = Number(process.env.PORT) || 8788,
@@ -298,6 +305,9 @@ export function startServer(
   const pitchClockScale = opts.pitchClockScale ?? 1;
   const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 80);
   const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 500);
+  const publicClientCap =
+    opts.publicClientCap ??
+    (Number(process.env.PUBLIC_CLIENT_CAP) || Math.max(1, maxClients - 20));
   const maxRssMb = opts.maxRssMb ?? (Number(process.env.MAX_RSS_MB) || 640);
   const maxConnPerIp = opts.maxConnPerIp ?? (Number(process.env.MAX_CONN_PER_IP) || 48);
   const maxMsgsPerSec = opts.maxMsgsPerSec ?? (Number(process.env.MAX_MSGS_PER_SEC) || 30);
@@ -423,6 +433,8 @@ export function startServer(
       maxRooms,
       clients: clients.size,
       maxClients,
+      publicClientCap,
+      friendReserveActive: clients.size > publicClientCap && clients.size < maxClients,
     };
   }
 
@@ -718,6 +730,31 @@ export function startServer(
     if (c) c.queuedMode = null;
   }
 
+  /**
+   * If a client is only sitting alone as the host of an unstarted waiting room (away === null),
+   * close that waiting room so they can freely join a friend's room, re-create, queue, or watch.
+   */
+  function abandonWaitingRoomIfHost(client: ClientMeta): boolean {
+    if (!client.roomCode) return false;
+    const existing = rooms.get(client.roomCode);
+    if (!existing) {
+      client.roomCode = null;
+      client.side = null;
+      return true;
+    }
+    if (!existing.players.away && existing.players.home.clientId === client.id) {
+      if (existing.players.home.disconnectTimer) {
+        clearTimeout(existing.players.home.disconnectTimer);
+        existing.players.home.disconnectTimer = null;
+      }
+      rooms.delete(existing.code);
+      client.roomCode = null;
+      client.side = null;
+      return true;
+    }
+    return false;
+  }
+
   function sendToRoom(room: Room, payload: unknown) {
     sendJson(room.players.home.ws, payload);
     if (room.players.away) {
@@ -844,7 +881,7 @@ export function startServer(
         callout = {
           title: isK ? 'STRIKE OUT!' : 'STRIKE',
           subtitle: isK ? 'CALLED STRIKE THREE' : 'CALLED STRIKE',
-          color: '#ffd23f',
+          color: isK ? '#f43f5e' : '#f4c41c',
           ttl: 1.25,
         };
       } else {
@@ -888,7 +925,7 @@ export function startServer(
         callout = {
           title: isK ? 'STRIKE OUT!' : 'STRIKE',
           subtitle: 'SWINGING STRIKE',
-          color: '#ffd23f',
+          color: isK ? '#f43f5e' : '#f4c41c',
           ttl: 1.25,
         };
       }
@@ -914,6 +951,7 @@ export function startServer(
       callout,
       inningChanged,
       telemetry,
+      platePos: [plateField[0], plateField[1]],
       match: room.match,
     });
 
@@ -1023,21 +1061,27 @@ export function startServer(
     }
 
     const isBobbleHit = resolution.catchInfo.bobbled && (outcome === '1B' || outcome === '2B' || outcome === '3B');
+    const isBlockedSingle = Boolean(resolution.catchInfo.blocked) && outcome === '1B';
     let callout: { title: string; subtitle: string; color: string; ttl: number };
     if (outcome === 'HR') {
-      callout = { title: 'HOME RUN!', subtitle: `${resolution.distanceM.toFixed(1)}m OVER THE WALL!`, color: '#ffd23f', ttl: 2.1 };
+      callout = { title: 'HOME RUN!', subtitle: `${resolution.distanceM.toFixed(1)}m`, color: '#ffd23f', ttl: 2.1 };
     } else if (outcome === '3B') {
-      callout = { title: 'TRIPLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : 'OFF THE WALL ON THE FLY · 3B', color: '#38bdf8', ttl: 1.6 };
+      callout = { title: 'TRIPLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE' : `${resolution.distanceM.toFixed(1)}m`, color: '#38bdf8', ttl: 1.6 };
     } else if (outcome === '2B') {
-      callout = { title: 'DOUBLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : 'BOUNCED TO THE WALL · 2B', color: '#4ade80', ttl: 1.5 };
+      callout = { title: 'DOUBLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE' : `${resolution.distanceM.toFixed(1)}m`, color: '#4ade80', ttl: 1.5 };
     } else if (outcome === '1B') {
-      callout = { title: 'SINGLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : 'BASE HIT · 1B', color: '#a3e635', ttl: 1.4 };
+      callout = {
+        title: 'SINGLE!',
+        subtitle: isBlockedSingle ? 'OUTFIELD BLOCK' : isBobbleHit ? 'FIELDER BOBBLE' : `${resolution.distanceM.toFixed(1)}m`,
+        color: '#a3e635',
+        ttl: 1.4,
+      };
     } else if (outcome === 'FOUL') {
-      callout = { title: 'FOUL', subtitle: 'FOUL BALL', color: '#cbd5e1', ttl: 1.2 };
+      callout = { title: 'FOUL', subtitle: '', color: '#cbd5e1', ttl: 1.1 };
     } else {
       callout = {
         title: 'OUT!',
-        subtitle: resolution.catchInfo.caught ? 'OUTFIELD CATCH!' : 'INFIELD OUT!',
+        subtitle: resolution.catchInfo.caught ? 'OUTFIELD CATCH' : 'INFIELD OUT',
         color: '#ef4444',
         ttl: 1.5,
       };
@@ -1066,6 +1110,7 @@ export function startServer(
       catchInfo: resolution.catchInfo,
       outcome: resolution.outcome,
       exitSpeedKmh: resolution.exitSpeedKmh,
+      launchAngleDeg: resolution.launchAngleDeg,
       distanceM: resolution.distanceM,
       bounces: resolution.battedResult.bounces,
       hitFence: resolution.battedResult.hitFence,
@@ -1086,6 +1131,7 @@ export function startServer(
       callout,
       inningChanged,
       telemetry,
+      platePos: [plateField[0], plateField[1]],
       match: room.match,
     });
 
@@ -1149,6 +1195,7 @@ export function startServer(
         code,
         mode,
         isMatchmaking: true,
+        mercyRule: true,
         createdAt: Date.now(),
         lastActivityAt: Date.now(),
         match: buildMatchState(mode, homeClient.name, awayClient.name),
@@ -1458,6 +1505,7 @@ export function startServer(
       queuedMode: null,
       lastPingSentAt: nowOnConnect,
       lastPongAt: nowOnConnect,
+      lastEmoteAt: 0,
       msgWindowStart: nowOnConnect,
       msgCount: 0,
     };
@@ -1531,16 +1579,21 @@ export function startServer(
             return;
           }
           const load = getServerLoad();
-          if (load.status === 'red') {
+          // Reserve the final 20 slots (481..500) exclusively for Friend Rooms
+          if (load.status === 'red' || clients.size > publicClientCap) {
             monitor.rejectedBusy += 1;
             sendJson(ws, {
               type: 'error',
               code: 'server_busy',
-              message: 'Server busy — routing to CPU match',
+              message:
+                clients.size > publicClientCap && load.status !== 'red'
+                  ? 'Public matchmaking full (Friend Reserve active) — routing to CPU match'
+                  : 'Server busy — routing to CPU match',
               load: load.status,
             });
             return;
           }
+          abandonWaitingRoomIfHost(client);
           if (client.roomCode) return;
           if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
           const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
@@ -1576,10 +1629,12 @@ export function startServer(
             });
             return;
           }
+          abandonWaitingRoomIfHost(client);
           if (client.roomCode) return;
           removeFromQueues(clientId);
           if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
           const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
+          const mercyRule = msg.mercyRule !== false;
           const code = generateRoomCode(rooms);
           const token = crypto.randomUUID();
 
@@ -1587,9 +1642,10 @@ export function startServer(
             code,
             mode,
             isMatchmaking: false,
+            mercyRule,
             createdAt: Date.now(),
             lastActivityAt: Date.now(),
-            match: buildMatchState(mode, client.name, 'Opponent'),
+            match: buildMatchState(mode, client.name, 'Opponent', mercyRule),
             pitchSeq: 1,
             solvingSeq: null,
             turnState: 'awaiting_pitch',
@@ -1628,8 +1684,11 @@ export function startServer(
         }
 
         case 'join': {
-          if (client.roomCode) return;
           const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
+          if (client.roomCode && client.roomCode === code) {
+            sendJson(ws, { type: 'error', code: 'already_in_room', message: 'You are already hosting this room' });
+            return;
+          }
           const room = rooms.get(code);
           if (!room) {
             sendJson(ws, { type: 'error', code: 'room_not_found', message: 'Room code not found' });
@@ -1637,6 +1696,12 @@ export function startServer(
           }
           if (room.players.away) {
             sendJson(ws, { type: 'error', code: 'room_full', message: 'Room is full' });
+            return;
+          }
+          // If the joiner accidentally created their own empty waiting room first, cleanly abandon it!
+          abandonWaitingRoomIfHost(client);
+          if (client.roomCode) {
+            sendJson(ws, { type: 'error', code: 'already_in_match', message: 'Already in an active match' });
             return;
           }
           removeFromQueues(clientId);
@@ -2000,6 +2065,7 @@ export function startServer(
         }
 
         case 'watch': {
+          abandonWaitingRoomIfHost(client);
           const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
           const room = rooms.get(code);
           if (!room) {
@@ -2154,7 +2220,7 @@ export function startServer(
           if (awayClient) awayClient.side = 'away';
 
           room.rematchVotes.clear();
-          room.match = buildMatchState(room.mode, room.players.home.name, room.players.away.name);
+          room.match = buildMatchState(room.mode, room.players.home.name, room.players.away.name, room.mercyRule);
           room.pitchSeq = 1;
           room.solvingSeq = null;
           room.turnState = 'awaiting_pitch';
@@ -2164,6 +2230,18 @@ export function startServer(
           monitor.rematchesStarted += 1;
 
           startMatchInRoom(room);
+          break;
+        }
+
+        case 'emote': {
+          if (!client.roomCode || !client.side) return;
+          const room = rooms.get(client.roomCode);
+          if (!room) return;
+          const emoteId = typeof msg.id === 'string' ? msg.id : '';
+          if (!VALID_EMOTE_IDS.has(emoteId)) return;
+          if (now - client.lastEmoteAt < 3000) return;
+          client.lastEmoteAt = now;
+          sendToRoom(room, { type: 'emote', side: client.side, id: emoteId });
           break;
         }
       }
