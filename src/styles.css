@@ -687,6 +687,32 @@ select {
   display: block;
 }
 
+.menu-bat-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.45rem;
+}
+
+.menu-bat-row[hidden] {
+  display: none;
+}
+
+.menu-bat-row .act-btn {
+  padding: 0.56rem 0.5rem;
+  font-size: 0.78rem;
+}
+
+.act-btn.bat-opt {
+  border-color: var(--cyan);
+  color: var(--cyan-hi);
+}
+
+.act-btn.bat-opt[aria-pressed='true'] {
+  border-color: var(--orange);
+  color: #fdba74;
+  background-color: #2f180b;
+}
+
 .menu-util-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

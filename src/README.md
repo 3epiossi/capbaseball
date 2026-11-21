@@ -30,7 +30,7 @@
 
 桌機與行動裝置一律維持單列右對齊結構，不佔用垂直畫面：
 
-- **單列內容**：玩家暱稱晶片（`#btn-nick-chip`，手機自動隱藏）、即時網速狀態膠囊（`#net-speed-pill`）、線上人數膠囊（`#top-online-pill`），以及固定置右的三條線漢堡鈕（`#btn-menu` `☰`）；規則、設定、音效與棄權統一收進 `#menu-dialog`。
+- **單列內容**：玩家暱稱晶片（`#btn-nick-chip`，手機自動隱藏）、即時網速狀態膠囊（`#net-speed-pill`）、線上人數膠囊（`#top-online-pill`），以及固定置右的三條線漢堡鈕（`#btn-menu` `☰`）；規則、設定、音效、棄權，以及打擊時的左右打切換（`#btn-hand`）／強振模式切換（`#btn-swing-type`，`#menu-bat-row`）統一收進可折疊 `#menu-dialog` 內，維持比賽主畫面單列極簡無遮擋。
 - **暫停與返回導航（`isGamePaused` / `navigateBack`）**：開啟選單、規則或設定對話框時，單機對戰會立即暫停物理與計時器；支援點擊與全域 `Escape`／`Backspace` 快捷鍵返回。
 - **伺服器版本漂移提醒（`#update-banner`）**：比對編譯注入的 `__BUILD__` 與伺服器 `welcome`／`/health` 版本號，若發現新版則提示玩家點擊刷新。
 
