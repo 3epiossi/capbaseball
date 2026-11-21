@@ -28,6 +28,7 @@
   - 已知未修：親友房在伺服器忙碌時回 `server_busy` 會被客戶端導向 CPU 對戰；建房／加入按鈕沒有連點防護；`sendToRoom` 清除失效觀戰者時未重設 `watchingCode`。
 - **回合與序號驗證**：每球遞增 `pitchSeq`，伺服器僅接受符合當前 `turnState`（`awaiting_pitch` 或 `awaiting_swing`）、正確投打方且 `msg.pitchSeq === room.pitchSeq` 的指令，自動忽略重複、過期或越權封包。
 - **投打結算**：收到 `pitch_submit` 後，伺服器以加密安全亂數產生 `seed` 並呼叫 `solvePitchTrajectory`（`120` Hz）計算軌跡，廣播 `pitch_launch` 並啟動逾時自動判不揮棒計時器；收到 `swing_input`、`no_swing` 或逾時後，呼叫 `evaluateSwingResolution`、`checkCatcherCatch`、`evaluateUmpirePitchCall` 與 `applyPitchResult` 完成權威判決並廣播 `pitch_result`。
+- **權威投球時鐘（Pitch Clock）**：開賽與每球結束進入 `awaiting_pitch` 時由 `armPitchClock` 啟動倒數（無跑者 `15` 秒／有跑者 `20` 秒＋結算緩衝，測試可透過 `pitchClockScale` 調整），斷線寬限期間自動暫停；逾時由 `applyPitchClockViolation` 判自動壞球／保送並廣播帶 `cv: 1` 的 `pitch_result`。
 
 ### 2. 雙路徑服務與綁定設定
 

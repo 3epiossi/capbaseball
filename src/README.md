@@ -10,9 +10,10 @@
 
 | 檔案 | 職責 |
 |---|---|
-| [index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html) | 定義雙層 Canvas（`#pixel-canvas`、`#overlay-canvas`）、左上播報 HUD、右上雙列工具列、大廳選單與各式原生 `<dialog>` 視窗。 |
-| [main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) | 管理遊戲階段狀態機、兩階段彈簧投球儀表、指標與鍵盤操作、線上同步、CPU 自動備援以及零 `innerHTML` 安全 DOM 更新。 |
-| [styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) | 實作 16-bit 像素播報風格樣式、彈簧壓縮／回彈動畫、安全區域（`env(safe-area-inset-*)`）與 `@container` 響應式規則。 |
+| [index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html) | 定義雙層 Canvas（`#pixel-canvas`、`#overlay-canvas`）、頂部 HUD（`.hud-top-region`）、漢堡選單、`#update-banner` 與各式原生 `<dialog>` 視窗。 |
+| [main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) | 管理遊戲階段狀態機、光譜整合彈簧投球、拖曳放開觸控打擊、線上揮棒時序佇列同步、投球時鐘、更新提示與零 `innerHTML` 安全 DOM 更新。 |
+| [styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) | 實作 16-bit 像素播報風格樣式、統一光譜彈簧軌道、桌機放大 HUD 與 `@container` 響應式規則。 |
+| [i18n/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/i18n/index.ts) | 依瀏覽器語系自動切換繁體中文（`zh-TW`）、日文（`ja`）與英文（`en`），並轉換伺服器裁判播報字串。 |
 
 ---
 
@@ -22,24 +23,22 @@
 
 - **零重疊頂部容器（`.hud-top-region`）**：將左上角計分板（`#scoreboard`）與右上角固定 2 排工具列（`.top-bar`）納入同一個 Flex 容器；寬螢幕左右並排，手機窄螢幕自動垂直堆疊，徹底避免文字換行或按鈕增減造成互遮。
 - **記分板（`#scoreboard`）**：顯示客主隊分數、壘包鑽石圖（`#base-1` 至 `#base-3`）、局數／球數、出局數與 ABS 剩餘挑戰次數燈號（`#abs-1`、`#abs-2`），底部跑馬燈顯示當前打者、投手用球數與遙測資訊；投球飛行中僅顯示 `IN FLIGHT`，**通過本壘板或擊中後才揭露實際球種與球速**。
-- **好球帶上方 Play Call／ABS（`.zone-top-hud`）**：將 `FOUL`、`TOO LATE`、`SINGLE`、`DOUBLE` 等統一卡片與放大版 `ABS` 按鈕置於好球帶正上方，且揮棒落空時**直接顯示 timing 結果**（不再先閃紅色 `MISS`）；`ABS` 按鈕的顯示時間與最後 `0.4s` 淡出曲線透過 `startAbsPromptWindow()` 與 Play Call 卡片完全同步，且雙方消散前會由 `isPlayCallActive()` 鎖定下一球投球。
+- **前景安全區 Play Call／ABS（`.zone-top-hud`）**：將 `FOUL`、`TOO LATE`、`SINGLE`、`DOUBLE` 等統一卡片與放大版 `ABS` 按鈕**釘死於螢幕前景安全區**（與 3D 好球帶投影脫鉤，追球運鏡時不再跟著移動），且揮棒落空時**直接顯示 timing 結果**（不再先閃紅色 `MISS`）；`ABS` 按鈕與卡片透過 `startAbsPromptWindow()` 同步淡出，雙方消散前鎖定投球。
 - **字體選擇**：一般介面與播報文字採用 `Chakra Petch` 提升小尺寸辨識度，主標題保留 `Silkscreen`。
 
-### 2. 固定雙列右上角功能條（`.top-bar`）
+### 2. 右上角單列狀態與漢堡收折選單（`.top-bar`）
 
-桌機與行動裝置採用相同的雙列對齊結構（`.top-status` 與 `.header-actions`），確保按鈕不任意換行遮擋球場：
+桌機與行動裝置一律維持單列右對齊結構，不佔用垂直畫面：
 
-- **第一列狀態列**：玩家暱稱晶片（`#btn-nick-chip`）、即時網速狀態膠囊（`#net-speed-pill`，依連線品質切換 `LOCAL`、`SYNC`、`<rtt>ms` 或 `BUSY`）與線上人數膠囊（`#top-online-pill`）。
-- **第二列操作列**：左右打切換（`#btn-hand`）、一般／強力揮棒切換（`#btn-swing-type`）、規則、設定、音效靜音，以及固定置右的 `MENU` 按鈕（`#btn-menu`）。
-- **暫停與返回導航（`isGamePaused` / `navigateBack`）**：開啟 `MENU`、規則或設定對話框時，單機對戰會立即暫停物理與計時器；支援點擊與全域 `Escape`／`Backspace` 快捷鍵返回。
+- **單列內容**：玩家暱稱晶片（`#btn-nick-chip`，手機自動隱藏）、即時網速狀態膠囊（`#net-speed-pill`）、線上人數膠囊（`#top-online-pill`），以及固定置右的三條線漢堡鈕（`#btn-menu` `☰`）；規則、設定、音效與棄權統一收進 `#menu-dialog`。
+- **暫停與返回導航（`isGamePaused` / `navigateBack`）**：開啟選單、規則或設定對話框時，單機對戰會立即暫停物理與計時器；支援點擊與全域 `Escape`／`Backspace` 快捷鍵返回。
+- **伺服器版本漂移提醒（`#update-banner`）**：比對編譯注入的 `__BUILD__` 與伺服器 `welcome`／`/health` 版本號，若發現新版則提示玩家點擊刷新。
 
-### 3. 兩階段彈簧投球發射器（`springMeter`）
+### 3. 光譜整合彈簧投球、投球時鐘與手機拖曳打擊
 
-投球控制採用類彈珠台拉桿的物理手感，階段依序為 `idle` → `charging` → `rebounding` → `locked`：
-
-1. **壓縮蓄力（`charging`）**：按住投球鍵、`#spring-chamber` 或空白鍵時，`springMeter.charge` 以每秒 `0.88` 的速率向內壓縮至 `1.0`（滿壓時進入高頻微幅震盪），此時指針維持在 `0%` 原點以預告蓄力張力。
-2. **釋放回彈（`rebounding`）**：放開控制後計算目標頂點 `peak = clamp(0.1 + 0.9 * charge^0.95, 0.1, 1)`，並在 `0.28 + 0.24 * peak` 秒內以三次緩出曲線將指針彈射至頂點，同時透過 `buildSpringCoilPath` 繪製阻尼彈簧震盪。
-3. **頂點鎖定與出手（`locked`）**：抵達頂點後停留 `0.36` 秒（`lockTimer`）顯示落點區間（`NORMAL`、`BEST` 或 `OVER`），隨後呼叫 `commitSpringPitch` 依 `evaluateSpring` 計算實際球速與控球散佈誤差並送出投球。
+- **光譜整合彈簧發射器（`springMeter`）**：彈簧線圈直接繪製於 `NORMAL · BEST · OVER` 光譜軌條上——按住左側壓縮（`charging`）→ 放開後彈簧向右伸展彈射至最高點（`rebounding`）→ 鎖定峰值（`locked`）決定球速與控球並出手。
+- **手機觸控打擊（`activeBatTouchId`）**：預設為 `DRAG & RELEASE / TAP`（按住拖曳移動球棒，放開立即揮棒；輕點亦可即時揮棒），設定中保留切換為「僅限點擊」之選項。
+- **線上揮棒同步與結算防卡死**：收到擊球 `pitch_result` 時先以 `queuedOnlinePitchResult` 對齊投手端本地飛行時間，提前 `110ms` 播出打者揮棒動畫並延遲 `180ms` 追球；`match = msg.match` 延後至 `finishBattedPlay()` 套用，確保最後一球再見安打或出局不會提前被 `isGameOver` 卡死在空中。
 
 ### 4. 伺服器忙碌與網路不穩自動切換 CPU
 

@@ -94,3 +94,18 @@ PORT=8788 HOST=127.0.0.1 npm run server
 - **正式網域綁定與 DNS 負快取排查**：
   - 使用 Pi 上既有 `cloudflared` 憑證建立 Named Tunnel `capbaseball`（UUID：`aa7dc803-241e-4b05-95ff-9049bacb417c`），透過 `~/.cloudflared/capbaseball.yml` 將 `3epiossi.com` 下的 `^/capbaseball(/.*)?$` 轉發至 `http://127.0.0.1:8788`，並切換為常駐 `capbaseball-tunnel.service`（停用 `capbaseball-quick`；`scripts/deploy.sh` 已同步防呆）。
   - **排錯紀錄**：上線當下 Mac 端曾持續遇到 `ERR_NAME_NOT_RESOLVED`，經查權威 DNS（`1.1.1.1` / `8.8.8.8` / 路由器 `192.168.1.1`）皆已正常解析，實因 **Tailscale MagicDNS (`100.100.100.100`) 暫存了較早的 SOA 負快取**導致 Mac `mDNSResponder` 只快取 `AAAA` 而無 `A` 紀錄；待 Tailscale DNS TTL 過期後重啟 `mDNSResponder` 即可恢復正常。
+
+### 6. v1.0.0 後續線上修復、手遊操控與開源協作紀錄（2026-11-21）
+
+- **修復好友對戰結束卡死、無結算視窗**：
+  - **原因**：擊出安打／出局的 `pitch_result` 在進入 `batted_flight` 前就提前賦值 `match = msg.match`，導致 `match.isGameOver` 立刻變 `true` 而被主迴圈 `if (!onTitleScreen && !match.isGameOver)` 擋在門外，`finishBattedPlay()` 與 `showGameOverModal()` 永遠不會執行；加上 `#result-dialog` 原本設有 `closedby="any"` 易誤觸關閉，且重連進已結束房間時未重開結算框。
+  - **解法**：擊球後延後至 `finishBattedPlay()` 才套用 `msg.match`（同步防止飛球途中隊色與分數提前劇透），主迴圈放行 `batted_flight`／`result` 階段跑完，重連已結束對局會直接開啟結算視窗，並移除 `#result-dialog` 的 `closedby="any"`。
+- **修復手機投手視角「沒看到揮棒就出現二壘安打」**：
+  - **原因**：投手端收到 `pitch_result` 時無視本地 `windup`/`pitch_flight` 進度立即切進 `batted_flight`，跳過 `load` → `swing_early` 並在首幀將鏡頭切往外野；另每幀 `resizeCanvases()` 觸發 `getBoundingClientRect()` 造成手機掉幀漂移。
+  - **解法**：`resizeCanvases()` 改為僅尺寸變更時重算安全區；新增 `queuedOnlinePitchResult` 依接觸時間同步在投手端提前 `110ms` 播出 `load` → `swing_early` → `swing_contact` 揮棒動畫，並讓鏡頭於本壘停留 `180ms` 後再追蹤飛球。
+- **判定訊息與好球帶 3D 投影脫鉤**：`.zone-top-hud` 改為固定釘在螢幕前景安全區（不再跟隨 3D 鏡頭或追球運鏡移動）。
+- **手機觸控拖曳放開打擊＋多語系自動偵測**：新增 `activeBatTouchId`（按住拖曳移動球棒、放開即揮棒，同時保留點擊揮棒），並加入 `src/i18n/index.ts` 自動偵測 `ja`／`zh-TW`／`en`。
+- **路線 A 競技與維運機制**：加入 **投球時鐘（15s/20s）**（伺服器權威計時＋超時自動壞球，測試通過 31/31 項）與 **伺服器更新刷新橫幅**（比對 `__BUILD__` 與 `welcome`/`/health`）。
+- **UI 收斂與大螢幕可讀性**：將右上角收折為單列 `[PLAYER] [延遲] [在線] [☰]` 漢堡選單（移除 `#btn-hand` 與 `#btn-swing-type`），將彈簧線圈直接整合進 `NORMAL–BEST–OVER` 光譜軌條上方，並放大桌機計分板與投手面板字體。
+- **GitHub Fork 協作說明（`3epiossi/capbaseball` ← `koshien2015/cap-flight-sim`）**：
+  - 本專案已透過 Fork 正式關聯上游 `koshien2015/cap-flight-sim`。因本機採獨立 `git init` 起步，GitHub 網頁會顯示 `ahead / behind koshien2015/cap-flight-sim:master`；**切勿點擊 GitHub 上的 `Sync fork` 或 `Discard commits`**（否則會將不相關目錄結構合併進來或清空本專案），需要參考上游物理演算法時於本機使用 `git fetch upstream` 查閱即可。
