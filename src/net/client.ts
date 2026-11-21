@@ -175,7 +175,7 @@ export type ServerMessage =
       match: MatchState;
       pitchSeq: number;
     }
-  | { type: 'emote'; side: OnlineSide; id: string }
+  | { type: 'emote'; side: OnlineSide | 'spectator'; id: string; senderName?: string }
   | { type: 'pause_state'; pausedSides: OnlineSide[]; remainingSec: number }
   | { type: 'notice'; kind: string }
   | { type: 'error'; code: string; message: string; load?: ServerLoadStatus };

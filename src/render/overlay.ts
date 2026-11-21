@@ -745,25 +745,44 @@ function drawTimingSubPanel(
 
   const baseAngle = isLefty ? Math.PI : 0;
   const dirSign = isLefty ? -1 : 1;
-  // Annular Early -> Good -> Late timing band sweeping DIRECTLY OVER HOME PLATE
-  const offsets: Array<{ o0: number; o1: number; color: string }> = [
-    { o0: -0.24, o1: -0.14, color: 'rgba(239, 68, 68, 0.58)' },
-    { o0: -0.14, o1: -0.055, color: 'rgba(250, 204, 21, 0.68)' },
-    { o0: -0.055, o1: 0.055, color: 'rgba(34, 197, 94, 0.78)' },
-    { o0: 0.055, o1: 0.14, color: 'rgba(250, 204, 21, 0.68)' },
-    { o0: 0.14, o1: 0.24, color: 'rgba(239, 68, 68, 0.58)' },
-  ];
-  for (const s of offsets) {
-    const a0 = baseAngle + dirSign * s.o0 * Math.PI;
-    const a1 = baseAngle + dirSign * s.o1 * Math.PI;
-    const aMin = Math.min(a0, a1);
-    const aMax = Math.max(a0, a1);
-    ctx.fillStyle = s.color;
+  // Continuous annular Early -> Good -> Late timing spectrum sweeping DIRECTLY OVER HOME PLATE
+  const a0 = baseAngle - 0.24 * Math.PI;
+  const a1 = baseAngle + 0.24 * Math.PI;
+  const aMin = Math.min(a0, a1);
+  const aMax = Math.max(a0, a1);
+  const span = aMax - aMin;
+  if (typeof ctx.createConicGradient === 'function') {
+    const frac = span / (Math.PI * 2);
+    const grad = ctx.createConicGradient(aMin, pivotX, pivotY);
+    grad.addColorStop(0.0, 'rgba(239, 68, 68, 0.72)');
+    grad.addColorStop(0.18 * frac, 'rgba(249, 115, 22, 0.74)');
+    grad.addColorStop(0.35 * frac, 'rgba(250, 204, 21, 0.78)');
+    grad.addColorStop(0.5 * frac, 'rgba(34, 197, 94, 0.84)');
+    grad.addColorStop(0.65 * frac, 'rgba(250, 204, 21, 0.78)');
+    grad.addColorStop(0.82 * frac, 'rgba(249, 115, 22, 0.74)');
+    grad.addColorStop(1.0 * frac, 'rgba(239, 68, 68, 0.72)');
+    ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.arc(pivotX, pivotY, outerR, aMin, aMax, false);
     ctx.arc(pivotX, pivotY, innerR, aMax, aMin, true);
     ctx.closePath();
     ctx.fill();
+  } else {
+    // Smooth 48-slice continuous fallback for older canvas runtimes
+    const steps = 48;
+    for (let i = 0; i < steps; i++) {
+      const tMid = (i + 0.5) / steps;
+      const d = Math.abs(tMid - 0.5) * 2; // 0 at center (green), 1 at edges (red)
+      const hue = Math.round(142 * (1 - d));
+      const sa0 = aMin + (span * i) / steps;
+      const sa1 = aMin + (span * (i + 1)) / steps + 0.002;
+      ctx.fillStyle = `hsla(${hue}, 82%, 52%, ${0.84 - d * 0.12})`;
+      ctx.beginPath();
+      ctx.arc(pivotX, pivotY, outerR, sa0, Math.min(aMax, sa1), false);
+      ctx.arc(pivotX, pivotY, innerR, Math.min(aMax, sa1), sa0, true);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   // Bat sweeping directly over home plate!

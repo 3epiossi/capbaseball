@@ -494,7 +494,7 @@ const emoteCtrl = new EmoteController(
     bubble: document.getElementById('chat-bubble') as HTMLElement,
   },
   (id) => {
-    if (isOnline && !spectating) {
+    if (isOnline || spectating) {
       onlineClient.sendEmote(id);
     }
   },
@@ -2829,9 +2829,9 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   catcherReturn.active = false;
   transitionDirector.clear();
   emoteCtrl.clearHistory();
-  emoteCtrl.setOnlineSendEnabled(false);
+  emoteCtrl.setOnlineSendEnabled(true);
   emoteCtrl.setVisible(true);
-  btnMuteEmotes.hidden = true;
+  btnMuteEmotes.hidden = false;
   absPromptTimer = 0;
   absReplay = null;
   batterSwungThisPitch = false;
@@ -3276,9 +3276,15 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'emote': {
-      const senderTeam = msg.side === 'away' ? match.away.name : match.home.name;
-      const isOpp = !spectating && onlineSide !== null && msg.side !== onlineSide;
-      emoteCtrl.showBubble(msg.id, senderTeam, isOpp);
+      if (msg.side === 'spectator') {
+        const specTag = msg.senderName ? `${t('watchPrefix')} · ${msg.senderName}` : t('watchPrefix');
+        const isOwnSpec = spectating && msg.senderName === getOnlinePlayerName();
+        emoteCtrl.showBubble(msg.id, specTag, !isOwnSpec, true);
+      } else {
+        const senderTeam = msg.side === 'away' ? match.away.name : match.home.name;
+        const isOpp = !spectating && onlineSide !== null && msg.side !== onlineSide;
+        emoteCtrl.showBubble(msg.id, senderTeam, isOpp, false);
+      }
       break;
     }
     case 'notice': {

@@ -261,13 +261,13 @@ export class EmoteController {
     }, 250);
   }
 
-  /** Display an opponent or self quick-chat preset bubbling out of the speech-bubble icon. */
-  showBubble(id: string, senderLabel: string, isOpponent: boolean): void {
+  /** Display an opponent, spectator, or self quick-chat preset bubbling out of the speech-bubble icon. */
+  showBubble(id: string, senderLabel: string, isOpponent: boolean, isSpectator = false): void {
     if (isOpponent && this.mutedOpponent) return;
     const def = CHAT_MAP.get(id);
     if (!def) return;
     const phrase = this.getPhrase(def);
-    const accent = isOpponent ? '#38bdf8' : def.accent;
+    const accent = isSpectator ? '#c084fc' : isOpponent ? '#38bdf8' : def.accent;
     this.pushFeed({ kind: 'chat', tag: senderLabel, text: phrase, accent }, isOpponent ? 'opp' : 'self', 2600, true);
   }
 

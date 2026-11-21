@@ -143,6 +143,7 @@ interface Room {
   pauseTimers: Record<Side, NodeJS.Timeout | null>;
   pauseExpiresAt: Record<Side, number>;
   absWindowUntil: number;
+  lastSpectatorEmoteAt: number;
   players: {
     home: RoomPlayer;
     away: RoomPlayer | null;
@@ -1324,6 +1325,7 @@ export function startServer(
         pauseTimers: { home: null, away: null },
         pauseExpiresAt: { home: 0, away: 0 },
         absWindowUntil: 0,
+        lastSpectatorEmoteAt: 0,
         players: {
           home: {
             token: crypto.randomUUID(),
@@ -1777,6 +1779,7 @@ export function startServer(
             pauseTimers: { home: null, away: null },
             pauseExpiresAt: { home: 0, away: 0 },
             absWindowUntil: 0,
+            lastSpectatorEmoteAt: 0,
             players: {
               home: {
                 token,
@@ -2388,14 +2391,27 @@ export function startServer(
         }
 
         case 'emote': {
-          if (!client.roomCode || !client.side) return;
-          const room = rooms.get(client.roomCode);
+          const targetCode = client.roomCode || client.watchingCode;
+          if (!targetCode) return;
+          const room = rooms.get(targetCode);
           if (!room) return;
           const emoteId = typeof msg.id === 'string' ? msg.id : '';
           if (!VALID_EMOTE_IDS.has(emoteId)) return;
           if (now - client.lastEmoteAt < 3000) return;
+          const isPlayer = Boolean(client.roomCode && client.side);
+          if (!isPlayer) {
+            // Room-wide spectator throttle (1.2s) prevents crowd floods from distracting players
+            if (now - room.lastSpectatorEmoteAt < 1200) return;
+            room.lastSpectatorEmoteAt = now;
+          }
           client.lastEmoteAt = now;
-          sendToRoom(room, { type: 'emote', side: client.side, id: emoteId });
+          const senderSide: Side | 'spectator' = isPlayer ? client.side! : 'spectator';
+          sendToRoom(room, {
+            type: 'emote',
+            side: senderSide,
+            id: emoteId,
+            ...(senderSide === 'spectator' ? { senderName: client.name } : {}),
+          });
           break;
         }
 

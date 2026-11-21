@@ -549,8 +549,9 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
     case 'emote':
       return {
         t: 'em',
-        s: msg.side === 'home' ? 1 : 0,
+        s: msg.side === 'home' ? 1 : msg.side === 'away' ? 0 : 2,
         e: msg.id,
+        ...(typeof msg.senderName === 'string' && msg.senderName ? { n: msg.senderName } : {}),
       };
     case 'pause_state':
       return {
@@ -768,8 +769,9 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
     case 'em':
       return {
         type: 'emote',
-        side: raw.s === 1 ? 'home' : 'away',
+        side: raw.s === 1 ? 'home' : raw.s === 0 ? 'away' : 'spectator',
         id: raw.e,
+        ...(typeof raw.n === 'string' ? { senderName: raw.n } : {}),
       };
     case 'mp':
       return {

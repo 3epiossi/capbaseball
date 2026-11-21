@@ -4,7 +4,7 @@
 
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
-- **目前里程碑**：`v2.0.3`（語意化三段式版本號），Pi 現行部署版本 `20261122-052641`
+- **目前里程碑**：`v2.0.4`（語意化三段式版本號），Pi 現行部署版本 `20261122-054020`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -18,7 +18,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 44 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 45 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -176,3 +176,6 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **單方開選單時對手投球時鐘照走／偷投**：新增前後端雙向 `menu_pause`／`pause_state`（v2 短鍵 `mp`），任一方開啟選單、規則或設定時，伺服器精確凍結剩餘投球時鐘毫秒數並鎖定雙方投球與 `IBB`，同時以權威 20 秒上限自動續算恢復。
   - **對手斷線與 ABS 視窗同步**：斷線寬限期間前後端同步凍結時鐘與投球鈕；伺服器新增 `absWindowUntil`（`2200` ms）搭配前端 `oppAbsWaitTimer`，防止投手在精簡轉場下搶在對手 ABS 決策結束前出手；`armPitchClock` 改依當球事件動態計算轉場緩衝秒數避免誤判超時。
   - **點擊玩家名稱直達帳號分頁**：修正點擊右上角名稱按鈕（`#btn-nick-chip`）只開在第一個分頁的問題，改由 `selectSettingsTab('account')` 直接切到帳號頁並自動全選名稱輸入框。
+- **v2.0.4 觀戰快捷對話與連續時機光譜（2026-11-22）**：
+  - **觀戰觀眾快捷對話**：放行觀戰房間的觀眾透過右下角對話球發送 8 組三語快捷對話（紫色 `觀戰 · 玩家名` 氣泡），保留單人 3 秒冷卻並加上單房觀眾 `1.2s` 總節流防洗版；選手開啟「靜音對話」可同步屏蔽觀眾發言。
+  - **連續揮棒時機光譜**：[src/render/overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) 的揮棒時機扇形由 5 段離散色塊改為 `createConicGradient` 連續漸層光譜（紅→橘→黃→綠→黃→橘→紅），並附 48 段細切平滑備援。

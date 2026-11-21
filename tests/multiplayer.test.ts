@@ -1274,4 +1274,38 @@ describe('Online Multiplayer Server Integration', () => {
       await absSrv.close();
     }
   });
+
+  it('26. Spectators can send quick-chat emotes visible to players and spectators with 3s cooldown', async () => {
+    const home = await connectClient(srv.port, 'SpecChatH');
+    const away = await connectClient(srv.port, 'SpecChatA');
+    const spec = await connectClient(srv.port, 'CrowdFan');
+    openClients.push(home, away, spec);
+
+    home.send({ type: 'create', mode: 'quick3', name: 'SpecChatH' });
+    const created = await home.nextMsg((m) => m.type === 'room_created');
+    away.send({ type: 'join', code: created.code, name: 'SpecChatA' });
+    await home.nextMsg((m) => m.type === 'match_start');
+    await away.nextMsg((m) => m.type === 'match_start');
+
+    spec.send({ type: 'watch', code: created.code });
+    await spec.nextMsg((m) => m.type === 'spectate_sync');
+
+    // Spectator sends quick-chat + immediate spam -> only first broadcasts with side='spectator' & senderName
+    spec.send({ type: 'emote', id: 'clap' });
+    spec.send({ type: 'emote', id: 'fire' });
+
+    const emH = await home.nextMsg((m) => m.type === 'emote');
+    const emA = await away.nextMsg((m) => m.type === 'emote');
+    const emS = await spec.nextMsg((m) => m.type === 'emote');
+    expect(emH.side).toBe('spectator');
+    expect(emH.id).toBe('clap');
+    expect(emH.senderName).toBe('CrowdFan');
+    expect(emA.side).toBe('spectator');
+    expect(emA.id).toBe('clap');
+    expect(emS.side).toBe('spectator');
+    expect(emS.id).toBe('clap');
+
+    await new Promise((r) => setTimeout(r, 120));
+    expect(home.queue.filter((m) => m.type === 'emote').length).toBe(0);
+  });
 });
