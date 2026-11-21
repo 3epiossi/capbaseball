@@ -107,5 +107,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
 - **手機觸控拖曳放開打擊＋多語系自動偵測**：新增 `activeBatTouchId`（按住拖曳移動球棒、放開即揮棒，同時保留點擊揮棒），並加入 `src/i18n/index.ts` 自動偵測 `ja`／`zh-TW`／`en`。
 - **路線 A 競技與維運機制**：加入 **投球時鐘（15s/20s）**（伺服器權威計時＋超時自動壞球，測試通過 31/31 項）與 **伺服器更新刷新橫幅**（比對 `__BUILD__` 與 `welcome`/`/health`）。
 - **UI 收斂與大螢幕可讀性**：將右上角收折為單列 `[PLAYER] [延遲] [在線] [☰]` 漢堡選單，並將打擊時的「左／右打切換（`#btn-hand`）」與「一般／強振模式（`#btn-swing-type`）」移入可折疊的 `☰` 選單內（不佔用主畫面空間）；將彈簧線圈直接整合進 `NORMAL–BEST–OVER` 光譜軌條上方，並放大桌機計分板與投手面板字體。
+- **線上模式選單計時強制恢復**：單機模式開啟 `☰` 選單會無限暫停遊戲；但在線上對戰模式下，開啟選單／規則／設定會啟動 **20 秒倒數（`#menu-online-timer`）**，時間一到會強制關閉選單並恢復進行，防止拖延或卡住對戰節奏。
+- **開源授權（MIT License）**：根目錄已補上 [`LICENSE`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/LICENSE)（MIT 授權）並更新 [`.gitignore`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/.gitignore) 排除本地參考 PDF 與規劃文件。
 - **GitHub Fork 協作說明（`3epiossi/capbaseball` ← `koshien2015/cap-flight-sim`）**：
   - 本專案已透過 Fork 正式關聯上游 `koshien2015/cap-flight-sim`。因本機採獨立 `git init` 起步，GitHub 網頁會顯示 `ahead / behind koshien2015/cap-flight-sim:master`；**切勿點擊 GitHub 上的 `Sync fork` 或 `Discard commits`**（否則會將不相關目錄結構合併進來或清空本專案），需要參考上游物理演算法時於本機使用 `git fetch upstream` 查閱即可。

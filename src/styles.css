@@ -1525,6 +1525,27 @@ select {
   font-size: 0.82rem;
 }
 
+.menu-online-timer {
+  padding: 0.36rem 0.55rem;
+  text-align: center;
+  font-family: var(--font-pixel);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--cyan-hi);
+  background: rgba(14, 30, 54, 0.92);
+  border: 2px solid var(--cyan);
+}
+
+.menu-online-timer[hidden] {
+  display: none;
+}
+
+.menu-online-timer[data-urgent='true'] {
+  color: #ffffff;
+  background: rgba(159, 18, 57, 0.95);
+  border-color: #fda4af;
+}
+
 /* ==========================================================================
    Native <dialog> Modals (modern-web-guidance 'dialog' compliant)
    ========================================================================== */

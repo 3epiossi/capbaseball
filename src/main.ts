@@ -170,6 +170,7 @@ const btnQueueCancel = document.getElementById('btn-queue-cancel') as HTMLButton
 const btnQueueCpu = document.getElementById('btn-queue-cpu') as HTMLButtonElement;
 
 const menuDialog = document.getElementById('menu-dialog') as HTMLDialogElement;
+const menuOnlineTimerEl = document.getElementById('menu-online-timer') as HTMLElement;
 const cpuDialog = document.getElementById('cpu-dialog') as HTMLDialogElement;
 const friendDialog = document.getElementById('friend-dialog') as HTMLDialogElement;
 const watchDialog = document.getElementById('watch-dialog') as HTMLDialogElement;
@@ -367,10 +368,25 @@ let totalHrBursts = 0;
 let absPromptTimer = 0;
 let absPromptMaxTimer = 2.5;
 let absReplay: AbsReplayState | null = null;
+const ONLINE_MENU_TIMEOUT_SEC = 20;
+let onlineMenuTimerSec = 0;
 let pitchClockSec = 15;
 let pitchClockLastWhole = 15;
 let detectedServerVersion: string | null = null;
 let updateBannerDismissed = false;
+
+function isOnlineMenuTimerActive(): boolean {
+  return isOnline && !spectating && !onTitleScreen && !match.isGameOver;
+}
+
+function updateOnlineMenuTimerUi(): void {
+  const show = isOnlineMenuTimerActive() && menuDialog.open && onlineMenuTimerSec > 0;
+  menuOnlineTimerEl.hidden = !show;
+  if (!show) return;
+  const whole = Math.max(1, Math.ceil(onlineMenuTimerSec));
+  menuOnlineTimerEl.textContent = `${t('onlineMenuTimerPrefix')} ${whole}${t('onlineMenuTimerSuffix')}`;
+  menuOnlineTimerEl.dataset.urgent = String(whole <= 5);
+}
 
 const IS_DEV_MODE = Boolean((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -1669,7 +1685,13 @@ btnMenu.addEventListener('click', () => {
     return;
   }
   cancelSpringCharge();
+  if (isOnlineMenuTimerActive()) {
+    onlineMenuTimerSec = ONLINE_MENU_TIMEOUT_SEC;
+  } else {
+    onlineMenuTimerSec = 0;
+  }
   if (!menuDialog.open) menuDialog.showModal();
+  updateOnlineMenuTimerUi();
 });
 btnMenuBack.addEventListener('click', () => {
   if (menuDialog.open) menuDialog.close();
@@ -2372,6 +2394,25 @@ function step(now: number): void {
   const paused = isGamePaused();
 
   if (!paused) {
+    // Online mode menu pause countdown: force-close menu/rules/settings when timer hits 0 so match resumes
+    if (isOnlineMenuTimerActive() && (menuDialog.open || rulesDialog.open || settingsDialog.open)) {
+      if (onlineMenuTimerSec <= 0) {
+        onlineMenuTimerSec = ONLINE_MENU_TIMEOUT_SEC;
+      }
+      onlineMenuTimerSec = Math.max(0, onlineMenuTimerSec - dt);
+      updateOnlineMenuTimerUi();
+      if (onlineMenuTimerSec <= 0) {
+        if (rulesDialog.open) rulesDialog.close();
+        if (settingsDialog.open) settingsDialog.close();
+        if (menuDialog.open) menuDialog.close();
+        menuOnlineTimerEl.hidden = true;
+        showCallout(t('callMenuTimeout'), t('callResumingMatch'), '#f97316', 2.0);
+      }
+    } else if (onlineMenuTimerSec > 0) {
+      onlineMenuTimerSec = 0;
+      menuOnlineTimerEl.hidden = true;
+    }
+
     // ABS prompt & replay decay (synchronized with Play Call card fade-out)
     if (absPromptTimer > 0) {
       absPromptTimer = Math.max(0, absPromptTimer - dt);
