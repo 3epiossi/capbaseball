@@ -523,15 +523,16 @@ select {
 }
 
 /* ==========================================================================
-   Top-Right Fixed 2-Row Broadcast Utility Strip (Desktop & Mobile Identical)
+   Top-Right Single-Row Broadcast Status & Hamburger Menu
    ========================================================================== */
 .top-bar {
   margin-left: auto;
   flex-shrink: 0;
   z-index: 25;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
   gap: 0.28rem;
   pointer-events: none;
 }

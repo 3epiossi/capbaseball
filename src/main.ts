@@ -160,9 +160,6 @@ const btnThrow = document.getElementById('btn-throw') as HTMLButtonElement;
 const btnIbb = document.getElementById('btn-ibb') as HTMLButtonElement;
 const pitchButtonsWrap = document.getElementById('pitch-buttons') as HTMLElement;
 
-const btnHand = document.getElementById('btn-hand') as HTMLButtonElement;
-const btnSwingType = document.getElementById('btn-swing-type') as HTMLButtonElement;
-
 const btnHubPlay = document.getElementById('btn-hub-play') as HTMLButtonElement;
 const btnHubFriend = document.getElementById('btn-hub-friend') as HTMLButtonElement;
 const btnHubWatch = document.getElementById('btn-hub-watch') as HTMLButtonElement;
@@ -237,8 +234,6 @@ function applyLocaleToDom(): void {
     const key = el.dataset.i18nPlaceholder as DictKey | undefined;
     if (key) el.placeholder = t(key);
   }
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
-  btnSwingType.textContent = powerSwing ? t('btnPower') : t('btnNormal');
   btnSound.textContent = sfx.isMuted() ? t('btnMute') : t('btnSfx');
   pitchSelectedNameEl.textContent = getLocalizedPitchName(selectedPitch);
   if (phase === 'idle') {
@@ -804,16 +799,7 @@ function updateHudAndDocks(): void {
     role === 'pitcher' &&
     (phase === 'idle' || phase === 'pitch_meter') &&
     (!isOnline || onlineTurnState === 'awaiting_pitch');
-  const canBatUi =
-    !onTitleScreen &&
-    !spectating &&
-    !match.isGameOver &&
-    role === 'batter' &&
-    (phase === 'idle' || phase === 'windup' || phase === 'pitch_flight');
-
   pitcherDock.hidden = !canPitchUi;
-  btnHand.hidden = !canBatUi;
-  btnSwingType.hidden = !canBatUi;
   const playCallBlocking = isPlayCallActive();
   btnThrow.disabled = playCallBlocking && phase === 'idle';
   if (phase === 'idle') {
@@ -936,8 +922,6 @@ function returnToTitle(): void {
   titleScreen.hidden = false;
   scoreboardEl.hidden = true;
   pitcherDock.hidden = true;
-  btnHand.hidden = true;
-  btnSwingType.hidden = true;
   swingFeedbackCard.hidden = true;
   btnAbsChallenge.hidden = true;
   resetSpringMeter();
@@ -1641,20 +1625,6 @@ btnIbb.addEventListener('click', () => {
   }
 });
 
-btnHand.addEventListener('click', () => {
-  batterHandedness = batterHandedness === 'right' ? 'left' : 'right';
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
-  if (isOnline && getCurrentRole() === 'batter') {
-    onlineClient.setBatterSide(batterHandedness === 'right' ? 'R' : 'L');
-  }
-});
-
-btnSwingType.addEventListener('click', () => {
-  powerSwing = !powerSwing;
-  btnSwingType.setAttribute('aria-pressed', String(powerSwing));
-  btnSwingType.textContent = powerSwing ? t('btnPower') : t('btnNormal');
-});
-
 btnAbsChallenge.addEventListener('click', () => triggerAbsChallenge());
 
 btnSound.addEventListener('click', () => {
@@ -1943,7 +1913,6 @@ function enterOnlineMatch(
   queuedOnlinePitchResult = null;
   match = msg.match;
   batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
   onTitleScreen = false;
   titleScreen.hidden = true;
@@ -2166,7 +2135,6 @@ onlineClient.onMessage((msg) => {
     }
     case 'batter_side': {
       batterHandedness = msg.side === 'L' ? 'left' : 'right';
-      btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
       break;
     }
     case 'pitch_launch': {
@@ -2174,7 +2142,6 @@ onlineClient.onMessage((msg) => {
       onlinePitchSeq = p.pitchSeq;
       onlineTurnState = 'awaiting_swing';
       batterHandedness = p.batterSide === 'L' ? 'left' : 'right';
-      btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
       launchPitch(p.pitchId, p.speedKmh, p.targetX, p.targetY, p.errorX, p.errorY, p.seed);
       break;
     }
