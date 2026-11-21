@@ -18,7 +18,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 34 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 36 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -126,3 +126,20 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - 即時儀表板：[`https://3epiossi.com/capbaseball/monitor`](https://3epiossi.com/capbaseball/monitor)（嚴格相容 CSP，Zero PII）
   - JSON 遙測 API：[`https://3epiossi.com/capbaseball/metrics`](https://3epiossi.com/capbaseball/metrics)（可選 `MONITOR_TOKEN` 驗證與 `METRICS_LOG` 每分鐘落地紀錄）
   - 涵蓋 HTTP/WS 速率與頻寬、前 10 大封包類型、連線角色拆解、拒收/斷線計數、物理求解耗時、事件迴圈延遲、CPU/RAM 與 Raspberry Pi 溫度／降頻狀態。
+
+### 8. 主選單重構、多核心物理 Worker 池與協定層心跳最佳化（2026-11-21）
+
+- **主畫面選單獨立「CPU 對戰」＋ 10 秒自動進 CPU**：
+  - 首頁 `#lobby-hub` 改為四項並列：**線上對戰**、**好友對戰**、**CPU 對戰**、**即時觀戰**。
+  - 點擊 **CPU 對戰** 後細分為三種單人模式：**三局對戰**、**打擊練習**、**投球練習**（移除舊版 `hotseat2p`）。
+  - 當 **線上對戰** 排隊滿 10 秒仍找不到真人對手時，改為直接自動進入 CPU 三局對戰（不再停留在彈出選單要求重選）。
+- **訪客隨機代號與 12 字元上限**：未自訂名稱的玩家自動配發 6 碼不重複隨機英數代號（如 `K7M2Q9`），自訂名稱前後端統一上限為 12 字元。
+- **消除高併發 Event Loop Lag（94ms → 個位數 ms）**：
+  - **問題實測**：在 92 人在線、40 間對戰房的 Pi 實測中，`/metrics` 顯示單次 `solvePitchTrajectory` 平均耗時 `93.95ms`（最慢 `468.79ms`），導致 Event Loop p95 Lag 持續在 `60–128ms` 震盪並頻繁觸發 `LAG_SPIKE`／`LOAD_YELLOW`（但 4 核 Pi 總 CPU 僅 `34.2%`、溫度 `53.1°C`、`throttled=0x0`）。
+  - **解法**：[server/physicsPool.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/physicsPool.ts) 與 [server/physicsWorker.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/physicsWorker.ts) 建立多核心 `worker_threads` 池（4 核 Pi 預設 3 Workers），將 `solvePitchTrajectory`（維持 `120Hz` 前後端完全一致）與 `evaluateSwingResolution` 移出主事件迴圈，並以 `room.solvingSeq` 防護非同步重複送出；建立 Worker 時明確傳入 `{ execArgv: [] }` 避免繼承父程序旗標造成 `ERR_INPUT_TYPE_NOT_ALLOWED`。
+  - [src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 改以解析式拋物線計算無氣動基準落點 `ballisticPos`，省去每球多跑一次 RK4 模擬。
+  - `appendMatchLog` 改佇列化非同步 `fs.promises.appendFile`（排除 SD 卡同步寫檔阻塞），`vcgencmd` 降頻至 60 秒，`/metrics` 新增 1 秒 JSON 快取。
+- **手機下方游標操作（プロスピ風）＋ 直接對點點擊打擊**：
+  - **玩家回饋**：日本玩家反映手機打擊時手指壓在好球帶上會擋住飛過來的瓶蓋，希望改成像《プロスピA》從下方操作游標。
+  - **實測除錯**：初版針對好球帶內觸控採「隨移動距離漸變偏移」，本地手機實測發現小幅拖曳時準心仍黏在手指下、往回拉還會歸零。已改為「好球帶下方（`y < 0.42m`）按下即偏移；好球帶內只要拖曳 `≥ 6px` 或按住 `≥ 130ms` 即立刻鎖定完整向上偏移 `76–124px`、放開即揮棒」，而快速輕點（`< 6px` 且 `< 130ms`）則維持零偏移對點打擊，完全淘汰舊版手指壓住拖曳模式且無須額外切換按鈕。
+- **RFC 6455 協定層心跳與分流統計**：改用 `ws.ping()`／`ws.on('pong')`（12s 間隔／36s 逾時）避免手機切背景凍結 JS 被誤斷線，並將大廳閒置關閉（`idleClosed`）與對戰中失聯（`deadPongTimeout`）分開計算。

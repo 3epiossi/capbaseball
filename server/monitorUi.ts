@@ -139,7 +139,7 @@ export const MONITOR_HTML = `<!doctype html>
       <div class="kv"><span>Rejected: Server Busy</span><strong id="f-busy">-</strong></div>
       <div class="kv"><span>Rejected: IP Limit (1008)</span><strong id="f-ip">-</strong></div>
       <div class="kv"><span>Rejected: Rate Limit</span><strong id="f-rate">-</strong></div>
-      <div class="kv"><span>Terminated: Dead Pong</span><strong id="f-dead">-</strong></div>
+      <div class="kv"><span>Dead Pong (Match / Idle)</span><strong id="f-dead">-</strong></div>
       <div class="kv"><span>HTTP 4xx / 5xx</span><strong id="f-http">-</strong></div>
     </div>
 
@@ -283,13 +283,16 @@ export const MONITOR_JS = `(() => {
         pi.memAvailMb + ' MB · ' + (pi.cpuTempC !== null ? pi.cpuTempC + '°C' : 'N/A'),
         pi.cpuTempC !== null && pi.cpuTempC >= 75
       );
-      setText('r-phys', rt.physicsAvgMs + ' ms / ' + rt.physicsMaxMs + ' ms');
+      setText(
+        'r-phys',
+        rt.physicsAvgMs + ' / ' + rt.physicsMaxMs + ' ms (' + (rt.physicsWorkerCount > 0 ? rt.physicsWorkerCount + 'w' : 'inline') + ')'
+      );
 
       const fj = d.rejections;
       setText('f-busy', fj.serverBusy, fj.serverBusy > 0);
       setText('f-ip', fj.ipLimit, fj.ipLimit > 0);
       setText('f-rate', fj.rateLimit, fj.rateLimit > 0);
-      setText('f-dead', fj.deadPongTimeout, fj.deadPongTimeout > 0);
+      setText('f-dead', fj.deadPongTimeout + ' / ' + (fj.idleClosed || 0), fj.deadPongTimeout >= 10);
       setText('f-http', tr.httpStatuses['4xx'] + ' / ' + tr.httpStatuses['5xx']);
 
       const gp = d.gameplay || {};

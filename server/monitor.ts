@@ -77,6 +77,8 @@ export interface ServerSnapshotInput {
   maxConnsSingleIp: number;
   staticCacheFiles: number;
   staticCacheMb: number;
+  physicsWorkerMode?: string;
+  physicsWorkerCount?: number;
   roomsHealth?: RoomHealthSnapshot;
 }
 
@@ -108,6 +110,7 @@ export class ServerMonitor {
   rejectedRateLimit = 0;
   rejectedBusy = 0;
   terminatedDeadPong = 0;
+  idleClosedTotal = 0;
 
   physicsSolvesTotal = 0;
   private physicsTotalMs = 0;
@@ -179,6 +182,7 @@ export class ServerMonitor {
   private lastLoadStatus: MonitorLoadStatus = 'green';
   private sampleTimer: NodeJS.Timeout | null = null;
   private piTimer: NodeJS.Timeout | null = null;
+  private throttleTimer: NodeJS.Timeout | null = null;
   private persistCounter = 0;
   private getSnapshot: (() => ServerSnapshotInput) | null = null;
 
@@ -189,7 +193,9 @@ export class ServerMonitor {
   start(getSnapshot: () => ServerSnapshotInput, sampleMs = 2000): void {
     this.getSnapshot = getSnapshot;
     this.samplePiSystemAsync();
-    this.piTimer = setInterval(() => this.samplePiSystemAsync(), 5000);
+    this.sampleThrottleAsync();
+    this.piTimer = setInterval(() => this.samplePiSystemAsync(), 10_000);
+    this.throttleTimer = setInterval(() => this.sampleThrottleAsync(), 60_000);
     this.sampleTimer = setInterval(() => this.tickSample(), sampleMs);
   }
 
@@ -201,6 +207,10 @@ export class ServerMonitor {
     if (this.piTimer) {
       clearInterval(this.piTimer);
       this.piTimer = null;
+    }
+    if (this.throttleTimer) {
+      clearInterval(this.throttleTimer);
+      this.throttleTimer = null;
     }
   }
 
@@ -278,7 +288,9 @@ export class ServerMonitor {
         }
       }
     });
+  }
 
+  private sampleThrottleAsync(): void {
     if (os.platform() === 'linux') {
       execFile('vcgencmd', ['get_throttled'], { timeout: 800 }, (err, stdout) => {
         if (!err && stdout) {
@@ -491,6 +503,7 @@ export class ServerMonitor {
         rateLimit: this.rejectedRateLimit,
         serverBusy: this.rejectedBusy,
         deadPongTimeout: this.terminatedDeadPong,
+        idleClosed: this.idleClosedTotal,
       },
       traffic: {
         httpRequestsTotal: this.httpRequestsTotal,
@@ -528,6 +541,8 @@ export class ServerMonitor {
             ? Number((this.physicsTotalMs / this.physicsSolvesTotal).toFixed(2))
             : 0,
         physicsMaxMs: Number(this.physicsMaxMs.toFixed(2)),
+        physicsWorkerMode: snap.physicsWorkerMode ?? 'inline',
+        physicsWorkerCount: snap.physicsWorkerCount ?? 0,
       },
       pi: this.piStats,
       gameplay: {

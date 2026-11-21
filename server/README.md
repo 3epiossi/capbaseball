@@ -10,8 +10,10 @@
 
 | 檔案 | 職責 |
 |---|---|
-| [index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) | 啟動 HTTP 與 WebSocket 伺服器，負責記憶體靜態快取（含 ETag 304／`.gz`）、房間配對、權威投打結算、ABS 挑戰同步、觀戰廣播、過載卸載閘門、安全防護與對局紀錄寫入（`matches.jsonl`）。 |
-| [monitor.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitor.ts) | `ServerMonitor` 監測核心：累計 HTTP／WS 封包速率與頻寬、前 10 大訊息類型、角色拆解、拒收與異常計數、物理運算耗時、事件迴圈延遲／CPU%、Raspberry Pi OS 溫度／降頻旗標，以及 10 分鐘環狀歷史與告警引擎。 |
+| [index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) | 啟動 HTTP 與 WebSocket 伺服器，負責記憶體靜態快取（含 ETag 304／`.gz`）、房間配對、權威投打結算、ABS 挑戰同步、觀戰廣播、過載卸載閘門、安全防護與非同步對局紀錄寫入（`matches.jsonl`）。 |
+| [physicsPool.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/physicsPool.ts) | 多核心 `worker_threads` 物理求解池（4 核心 Pi 上預設啟用 3 條 Worker），將 `solvePitchTrajectory` 與 `evaluateSwingResolution` 移出主事件迴圈（測試無打包檔時自動退回 inline）。 |
+| [physicsWorker.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/physicsWorker.ts) | 獨立建置為 `dist-server/physics-worker.mjs` 的背景執行緒物理計算端點，僅回傳精簡座標與判決結果。 |
+| [monitor.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitor.ts) | `ServerMonitor` 監測核心：累計 HTTP／WS 封包速率與頻寬、前 10 大訊息類型、角色拆解、拒收與異常計數、物理運算耗時、事件迴圈延遲／CPU%、Raspberry Pi OS 溫度／降頻旗標（60 秒週期），以及 10 分鐘環狀歷史與告警引擎。 |
 | [monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts) | `/monitor` 單頁儀表板 HTML 與 CSP 相容的外部腳本 `/monitor.js`，每 2 秒輪詢 `./metrics` 繪製 SVG 折線圖、吞吐表與異常列表（零 PII）。 |
 
 ---
@@ -56,7 +58,8 @@
 ### 4. WebSocket 心跳、節流廣播與安全強化
 
 - **節流與預先序列化廣播（`scheduleStatsBroadcast`）**：上線／離線／開房／排隊不再每次對全員重編 JSON，改以 `800ms` 防抖排程並對 legacy 與 compact v2 各自只做一次 `JSON.stringify`，將突發連線潮由 $O(N^2)$ 降為 $O(N)$，定時廣播間隔調為 `5000ms`。
-- **低負擔心跳**：伺服器主動 ping 預設調為 `pingIntervalMs = 5000` ms（`deadSocketTimeoutMs = 25000` ms），且任何有效進站 WebSocket 封包均同步更新 `lastPongAt`，避免活躍玩家因偶發排程抖動被誤踢。
+- **協定層低負擔心跳（RFC 6455 `ws.ping()` / `ws.on('pong')`）**：伺服器心跳預設改為 `pingIntervalMs = 12000` ms（`deadSocketTimeoutMs = 36000` ms），改發 WebSocket 協定層 `PING`，由手機與瀏覽器底層網路執行緒自動回 `PONG`，解決切背景／鎖屏 JS 凍結造成假性斷線；另將首頁閒置逾時（`1000 idle`、`idleClosed`）與對戰中異常失聯（`deadPongTimeout`）分開統計。
+- **非同步 I/O 與 `/metrics` 快取**：`appendMatchLog` 改用佇列化非同步 `fs.promises.appendFile` 避免 Pi SD 卡同步寫檔卡頓事件迴圈；`vcgencmd get_throttled` 改每 60 秒抽樣一次，`/metrics` 回應預設快取 `1000ms`。
 - **HTTP 安全標頭**：所有 HTTP 回應均附加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Permissions-Policy: camera=(), microphone=(), geolocation=()` 與嚴格 `Content-Security-Policy`（`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'self'; frame-ancestors 'none'`）。
 - **隱藏檔與路徑穿越封鎖**：拒絕任何包含空位元組（`\0`）、以 `.` 開頭的路徑區段（如 `/.env`）或超出範圍的請求，回傳 `403 Forbidden`。
 - **玩家名稱淨化（`sanitizeName`）**：移除控制字元與 `<>'"`&`，裁切至最多 12 字元；空字串或預設 `PLAYER` 則自動配發 6 碼不重複英數訪客代號（如 `K7M2Q9`，且避開目前在線名稱）。

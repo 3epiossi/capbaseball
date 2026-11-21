@@ -679,32 +679,47 @@ describe('Online Multiplayer Server Integration', () => {
     }
   });
 
-  it('13. Client that stops answering pings is terminated by heartbeat', async () => {
+  it('13. Protocol-level ws.ping keeps frozen-JS clients alive while closing truly silent sockets', async () => {
     const hbSrv = await startServer(0, {
       matchLogPath: path.join(tmpDir, 'hb.jsonl'),
       pingIntervalMs: 30,
-      deadSocketTimeoutMs: 100,
+      deadSocketTimeoutMs: 110,
     });
-    const ws = new WebSocket(`ws://127.0.0.1:${hbSrv.port}`);
+    // Frozen-JS client: never sends JSON messages after hello, but browser/OS stack still auto-pongs RFC 6455 ping
+    const bgWs = new WebSocket(`ws://127.0.0.1:${hbSrv.port}`, { autoPong: true });
+    // Truly dead client: stops replying even to protocol-level ping
+    const deadWs = new WebSocket(`ws://127.0.0.1:${hbSrv.port}`, { autoPong: false });
     try {
-      await new Promise<void>((resolve, reject) => {
-        ws.once('open', () => {
-          ws.send(JSON.stringify({ type: 'hello', name: 'Silent' }));
-          resolve();
-        });
-        ws.once('error', reject);
-      });
+      await Promise.all([
+        new Promise<void>((resolve, reject) => {
+          bgWs.once('open', () => {
+            bgWs.send(JSON.stringify({ type: 'hello', name: 'BackgroundTab' }));
+            resolve();
+          });
+          bgWs.once('error', reject);
+        }),
+        new Promise<void>((resolve, reject) => {
+          deadWs.once('open', () => {
+            deadWs.send(JSON.stringify({ type: 'hello', name: 'DeadSocket' }));
+            resolve();
+          });
+          deadWs.once('error', reject);
+        }),
+      ]);
 
-      const closed = await new Promise<boolean>((resolve) => {
+      const deadClosed = await new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => resolve(false), 1500);
-        ws.once('close', () => {
+        deadWs.once('close', () => {
           clearTimeout(timer);
           resolve(true);
         });
       });
-      expect(closed).toBe(true);
+      expect(deadClosed).toBe(true);
+      // Background tab stayed alive past deadSocketTimeoutMs via protocol-level pong
+      expect(bgWs.readyState).toBe(WebSocket.OPEN);
     } finally {
-      if (ws.readyState !== WebSocket.CLOSED) ws.close();
+      if (bgWs.readyState !== WebSocket.CLOSED) bgWs.close();
+      if (deadWs.readyState !== WebSocket.CLOSED) deadWs.close();
       await hbSrv.close();
     }
   });

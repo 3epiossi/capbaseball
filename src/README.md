@@ -37,15 +37,15 @@
 ### 3. 光譜整合彈簧投球、投球時鐘與手機拖曳打擊
 
 - **光譜整合彈簧發射器（`springMeter`）**：彈簧線圈直接繪製於 `NORMAL · BEST · OVER` 光譜軌條上——按住左側壓縮（`charging`）→ 放開後彈簧向右伸展彈射至最高點（`rebounding`）→ 鎖定峰值（`locked`）決定球速與控球並出手。
-- **手機觸控打擊（`activeBatTouchId`）**：預設為 `DRAG & RELEASE / TAP`（按住拖曳移動球棒，放開立即揮棒；輕點亦可即時揮棒），設定中保留切換為「僅限點擊」之選項。
+- **手機觸控打擊（下方游標操作＋直接點擊，`activeBatTouchId`）**：預設於好球帶下方（`y < 0.42m`）觸控、或好球帶內拖曳 `≥ 6px`／按住 `≥ 130ms` 時，立即鎖定向上偏移 `76–124px` 讓準心位於指尖上方不遮擋瓶蓋，放開即揮棒；快速輕點（`< 6px` 且 `< 130ms`）則維持零偏移直接對點打擊，設定中保留「僅限點擊揮棒」選項。
 - **線上揮棒同步與結算防卡死**：收到擊球 `pitch_result` 時先以 `queuedOnlinePitchResult` 對齊投手端本地飛行時間，提前 `110ms` 播出打者揮棒動畫並延遲 `180ms` 追球；`match = msg.match` 延後至 `finishBattedPlay()` 套用，確保最後一球再見安打或出局不會提前被 `isGameOver` 卡死在空中。
 
-### 4. 伺服器忙碌與網路不穩自動切換 CPU
+### 4. 主選單分流、10 秒自動切 CPU 與負載備援
 
-點擊快速配對（`#btn-hub-play`）前與連線過程中，`main.ts` 持續監聽 `onlineClient.onNetUpdate`：
+首頁大廳（`#lobby-hub`）並列「線上對戰」、「好友對戰」、「CPU 對戰（內含三局對戰、打擊練習、投球練習）」與「即時觀戰」。點擊線上對戰（`#btn-hub-play`）前與排隊過程中，`main.ts` 持續監聽 `onlineClient.onNetUpdate`：
 
-- 若偵測到 `onlineClient.isServerBusy`（伺服器負載非 `green`）或 `onlineClient.isUnstable`（斷線、連線逾時或 `netQuality === 'poor'`），系統自動取消排隊並執行 `autoFallbackToCpu`。
-- `autoFallbackToCpu` 會啟動單機 `quick3` 3 局制電腦對戰，並在 Play Call 卡片提示 `SERVER BUSY` 或 `UNSTABLE NET`（`AUTO CPU`），確保玩家不因排隊卡死或高延遲中斷遊玩。
+- 若排隊滿 10 秒仍找不到真人對手，或偵測到 `onlineClient.isServerBusy`（僅伺服器負載達 `red` 過載時）或 `onlineClient.isUnstable`（斷線、連線逾時或 `netQuality === 'poor'`），系統自動取消排隊並執行 `autoFallbackToCpu`。
+- `autoFallbackToCpu` 會直接啟動單機 `quick3` 3 局制電腦對戰，並在 Play Call 卡片提示對應狀態（`AUTO CPU`），確保玩家不因排隊久候或網路異常中斷遊玩。
 
 ### 5. 零 `innerHTML` XSS 防護與跨裝置安全區框景
 

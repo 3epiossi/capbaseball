@@ -165,6 +165,7 @@ const btnSwingType = document.getElementById('btn-swing-type') as HTMLButtonElem
 
 const btnHubPlay = document.getElementById('btn-hub-play') as HTMLButtonElement;
 const btnHubFriend = document.getElementById('btn-hub-friend') as HTMLButtonElement;
+const btnHubCpu = document.getElementById('btn-hub-cpu') as HTMLButtonElement;
 const btnHubWatch = document.getElementById('btn-hub-watch') as HTMLButtonElement;
 const btnQueueCancel = document.getElementById('btn-queue-cancel') as HTMLButtonElement;
 const btnQueueCpu = document.getElementById('btn-queue-cpu') as HTMLButtonElement;
@@ -1462,11 +1463,20 @@ function resizeCanvases(): void {
 }
 
 // --- Pointer & Keyboard Controls ---
-function updateAimFromClient(clientX: number, clientY: number): void {
+function getBatTouchOffsetPx(): number {
+  const rect = overlayCanvas.getBoundingClientRect();
+  return Math.max(76, Math.min(124, Math.round(rect.height * 0.16)));
+}
+
+function projectClientToHitPlane(clientX: number, clientY: number, yOffsetPx = 0): readonly [number, number, number] | null {
   const rect = overlayCanvas.getBoundingClientRect();
   const sx = ((clientX - rect.left) / Math.max(1, rect.width)) * cam.width;
-  const sy = ((clientY - rect.top) / Math.max(1, rect.height)) * cam.height;
-  const hit = cam.screenToPlaneZ(sx, sy, HIT_PLANE_Z);
+  const sy = ((clientY - yOffsetPx - rect.top) / Math.max(1, rect.height)) * cam.height;
+  return cam.screenToPlaneZ(sx, sy, HIT_PLANE_Z);
+}
+
+function updateAimFromClient(clientX: number, clientY: number, yOffsetPx = 0): void {
+  const hit = projectClientToHitPlane(clientX, clientY, yOffsetPx);
   if (!hit) return;
 
   const role = getCurrentRole();
@@ -1484,33 +1494,84 @@ function updateAimFromClient(clientX: number, clientY: number): void {
 
 let pointerDownOnCanvas = false;
 let activeBatTouchId: number | null = null;
+let batTouchStartX = 0;
+let batTouchStartY = 0;
+let batTouchLastX = 0;
+let batTouchLastY = 0;
+let batTouchUseOffset = false;
+let batTouchOffsetPx = 96;
+let batTouchHoldTimer: number | null = null;
+
+function clearBatTouchHoldTimer(): void {
+  if (batTouchHoldTimer !== null) {
+    window.clearTimeout(batTouchHoldTimer);
+    batTouchHoldTimer = null;
+  }
+}
 
 overlayCanvas.addEventListener('pointerdown', (e) => {
   sfx.unlock();
   pointerDownOnCanvas = true;
-  updateAimFromClient(e.clientX, e.clientY);
   if (getCurrentRole() === 'batter') {
     if (e.pointerType === 'mouse' || touchSwingMode === 'instant_tap') {
+      updateAimFromClient(e.clientX, e.clientY, 0);
       if (phase === 'windup' || phase === 'pitch_flight') {
         triggerSwing();
       }
     } else {
-      // Mobile drag-and-release mode: hold & drag moves bat, release swings (quick tap also swings cleanly!)
+      // Unified below-cursor drag & release + direct point tap:
+      // - Touching below the strike zone (y < 0.42m) immediately places the cursor above the fingertip.
+      // - Dragging (>= 6px) OR holding (>= 130ms) anywhere (including inside the strike zone) locks full upward offset so finger never blocks the cap.
+      // - Quick tapping inside the strike zone (< 6px and < 130ms) swings directly at the tapped spot (zero offset).
+      clearBatTouchHoldTimer();
       activeBatTouchId = e.pointerId;
+      batTouchStartX = e.clientX;
+      batTouchStartY = e.clientY;
+      batTouchLastX = e.clientX;
+      batTouchLastY = e.clientY;
+      batTouchOffsetPx = getBatTouchOffsetPx();
+      const rawHit = projectClientToHitPlane(e.clientX, e.clientY, 0);
+      const startedBelow = rawHit !== null && rawHit[1] < 0.42;
+      batTouchUseOffset = startedBelow;
+      updateAimFromClient(e.clientX, e.clientY, batTouchUseOffset ? batTouchOffsetPx : 0);
+
+      if (!batTouchUseOffset) {
+        const pointerId = e.pointerId;
+        batTouchHoldTimer = window.setTimeout(() => {
+          batTouchHoldTimer = null;
+          if (activeBatTouchId === pointerId && !batTouchUseOffset) {
+            batTouchUseOffset = true;
+            updateAimFromClient(batTouchLastX, batTouchLastY, batTouchOffsetPx);
+          }
+        }, 130);
+      }
     }
+  } else {
+    updateAimFromClient(e.clientX, e.clientY, 0);
   }
 });
 window.addEventListener('pointermove', (e) => {
   if (activeBatTouchId !== null && e.pointerId === activeBatTouchId) {
-    updateAimFromClient(e.clientX, e.clientY);
+    batTouchLastX = e.clientX;
+    batTouchLastY = e.clientY;
+    if (!batTouchUseOffset) {
+      const dist = Math.hypot(e.clientX - batTouchStartX, e.clientY - batTouchStartY);
+      if (dist >= 6) {
+        clearBatTouchHoldTimer();
+        batTouchUseOffset = true;
+      }
+    }
+    updateAimFromClient(e.clientX, e.clientY, batTouchUseOffset ? batTouchOffsetPx : 0);
   } else if (pointerDownOnCanvas || (getCurrentRole() === 'batter' && e.pointerType === 'mouse')) {
-    updateAimFromClient(e.clientX, e.clientY);
+    updateAimFromClient(e.clientX, e.clientY, 0);
   }
 });
 window.addEventListener('pointerup', (e) => {
   if (activeBatTouchId !== null && e.pointerId === activeBatTouchId) {
-    updateAimFromClient(e.clientX, e.clientY);
+    clearBatTouchHoldTimer();
+    updateAimFromClient(e.clientX, e.clientY, batTouchUseOffset ? batTouchOffsetPx : 0);
     activeBatTouchId = null;
+    batTouchUseOffset = false;
     if (getCurrentRole() === 'batter' && (phase === 'windup' || phase === 'pitch_flight')) {
       triggerSwing();
     }
@@ -1519,7 +1580,9 @@ window.addEventListener('pointerup', (e) => {
 });
 window.addEventListener('pointercancel', (e) => {
   if (activeBatTouchId !== null && e.pointerId === activeBatTouchId) {
+    clearBatTouchHoldTimer();
     activeBatTouchId = null;
+    batTouchUseOffset = false;
   }
   pointerDownOnCanvas = false;
 });
@@ -1787,13 +1850,7 @@ function getOnlinePlayerName(): string {
 }
 
 function cancelQueueToCpu(): void {
-  onlineWaitingQueue = false;
-  queueElapsedSec = 0;
-  lobbyHub.hidden = false;
-  queuePanel.hidden = true;
-  if (onlineClient.connected) onlineClient.unqueue();
-  updateHudAndDocks();
-  if (!cpuDialog.open) cpuDialog.showModal();
+  autoFallbackToCpu(t('callNoOpponent'), t('callAutoCpuSub'));
 }
 
 function autoFallbackToCpu(title: string, detail: string): void {
@@ -1877,6 +1934,11 @@ btnQueueCancel.addEventListener('click', () => {
 });
 
 btnQueueCpu.addEventListener('click', () => cancelQueueToCpu());
+
+btnHubCpu.addEventListener('click', () => {
+  sfx.unlock();
+  if (!cpuDialog.open) cpuDialog.showModal();
+});
 
 btnHubFriend.addEventListener('click', async () => {
   sfx.unlock();

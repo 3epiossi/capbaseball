@@ -442,21 +442,21 @@ export function solvePitchTrajectory(
   const plateCross = interpolateXCrossing(frames, PLATE_PLANE_X) ?? hitCross;
   const passCross = interpolateXCrossing(frames, PASS_LINE_SIM_X);
 
-  // Gravity-only ballistic baseline (drag/lift/magnus off) for exact induced aerodynamic break
-  const ballisticRaw = buildPitchRawConfig(spec, speedKmh, azDeg, elDeg, releasePos, {
-    enableWake: false,
-    disableAero: true,
-    fixedStepSec: 0.004,
-    outputHz: 60,
-    stopAtGround: false,
-    pitchDistanceM: HIT_PLANE_X,
-  });
-  const ballisticPos = measureAtHitPlane(runSimulation(configFromRaw(ballisticRaw, pitchId)));
+  // Gravity-only ballistic baseline (drag/lift/magnus off) via exact closed-form kinematics
+  const speedMs = speedKmh / 3.6;
+  const azRad = deg2rad(azDeg);
+  const elRad = deg2rad(elDeg);
+  const vx0 = speedMs * Math.cos(elRad) * Math.cos(azRad);
+  const vy0 = speedMs * Math.cos(elRad) * Math.sin(azRad);
+  const vz0 = speedMs * Math.sin(elRad);
+  const tBallistic = (HIT_PLANE_X - releasePos[0]) / Math.max(1e-6, vx0);
+  const ballisticY = releasePos[1] + vy0 * tBallistic;
+  const ballisticZ = releasePos[2] + vz0 * tBallistic - 0.5 * 9.80665 * tBallistic * tBallistic;
 
   const breakDelta: V3 = [
     0,
-    hitCross.pos[1] - ballisticPos.y,
-    hitCross.pos[2] - ballisticPos.z,
+    hitCross.pos[1] - ballisticY,
+    hitCross.pos[2] - ballisticZ,
   ];
 
   let peakSpeedMS = 0;

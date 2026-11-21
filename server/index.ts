@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { ServerMonitor, type ServerSnapshotInput } from './monitor';
 import { MONITOR_HTML, MONITOR_JS } from './monitorUi';
+import { PhysicsPool, type ServerPitchSummary } from './physicsPool';
 import { checkCatcherCatch } from '../src/ai/cpu';
 import {
   encodeServerMsgV2,
@@ -14,16 +15,11 @@ import {
   type ServerLoadStatus,
 } from '../src/net/protocol';
 import { simToField } from '../src/physics/batted';
-import {
-  evaluateSwingResolution,
-  type SwingMode,
-} from '../src/physics/contact';
+import type { SwingMode } from '../src/physics/contact';
 import {
   PITCH_IDS,
   PITCH_SPECS,
-  solvePitchTrajectory,
   type PitchId,
-  type PitchTrajectoryResult,
 } from '../src/physics/pitches';
 import {
   evaluateUmpirePitchCall,
@@ -122,7 +118,7 @@ interface ActivePitchData {
   errorX: number;
   errorY: number;
   breakCm: number;
-  trajectory: PitchTrajectoryResult;
+  trajectory: ServerPitchSummary;
 }
 
 interface Room {
@@ -133,6 +129,7 @@ interface Room {
   lastActivityAt: number;
   match: MatchState;
   pitchSeq: number;
+  solvingSeq: number | null;
   turnState: TurnState;
   batterSide: 'R' | 'L';
   activePitch: ActivePitchData | null;
@@ -166,6 +163,8 @@ export interface ServerOptions {
   maxMsgsPerSec?: number;
   metricsLogPath?: string;
   monitorToken?: string;
+  metricsCacheMs?: number;
+  physicsWorkers?: number;
   getLoadOverride?: () => ServerLoadStatus | null;
 }
 
@@ -247,17 +246,24 @@ function getMatchLogPath(override?: string): string {
   return path.resolve(process.cwd(), target);
 }
 
+const ensuredMatchLogDirs = new Set<string>();
+let matchLogWriteChain: Promise<void> = Promise.resolve();
+
 function appendMatchLog(record: unknown, override?: string): void {
-  try {
-    const logPath = getMatchLogPath(override);
-    const dir = path.dirname(logPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.appendFileSync(logPath, JSON.stringify(record) + '\n', 'utf8');
-  } catch (err) {
-    console.error('[match-log] write failed:', err);
-  }
+  const logPath = getMatchLogPath(override);
+  const dir = path.dirname(logPath);
+  const line = JSON.stringify(record) + '\n';
+  matchLogWriteChain = matchLogWriteChain
+    .then(async () => {
+      if (!ensuredMatchLogDirs.has(dir)) {
+        await fs.promises.mkdir(dir, { recursive: true });
+        ensuredMatchLogDirs.add(dir);
+      }
+      await fs.promises.appendFile(logPath, line, 'utf8');
+    })
+    .catch((err) => {
+      console.error('[match-log] write failed:', err);
+    });
 }
 
 function buildMatchState(mode: OnlineMode, homeName: string, awayName: string): MatchState {
@@ -284,8 +290,8 @@ export function startServer(
       process.env.STATIC_DIR ||
       fileURLToPath(new URL('../dist', import.meta.url)),
   );
-  const pingIntervalMs = opts.pingIntervalMs ?? 5000;
-  const deadSocketTimeoutMs = opts.deadSocketTimeoutMs ?? Math.max(10_000, pingIntervalMs * 5);
+  const pingIntervalMs = opts.pingIntervalMs ?? 12_000;
+  const deadSocketTimeoutMs = opts.deadSocketTimeoutMs ?? Math.max(35_000, pingIntervalMs * 3);
   const graceMs = opts.graceMs ?? 45_000;
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
@@ -296,7 +302,11 @@ export function startServer(
   const maxConnPerIp = opts.maxConnPerIp ?? (Number(process.env.MAX_CONN_PER_IP) || 48);
   const maxMsgsPerSec = opts.maxMsgsPerSec ?? (Number(process.env.MAX_MSGS_PER_SEC) || 30);
   const monitorToken = opts.monitorToken ?? (process.env.MONITOR_TOKEN || '');
+  const metricsCacheMs = opts.metricsCacheMs ?? (process.env.VITEST ? 0 : 1000);
   const monitor = new ServerMonitor(opts.metricsLogPath ?? process.env.METRICS_LOG);
+  const physicsPool = new PhysicsPool({ workers: opts.physicsWorkers });
+  let cachedMetricsPayload = '';
+  let cachedMetricsAt = 0;
 
   interface StaticCacheEntry {
     contentType: string;
@@ -542,6 +552,8 @@ export function startServer(
       maxConnsSingleIp,
       staticCacheFiles: staticCache.size,
       staticCacheMb: Math.round((staticCacheBytes / (1024 * 1024)) * 10) / 10,
+      physicsWorkerMode: physicsPool.mode,
+      physicsWorkerCount: physicsPool.workerCount,
       roomsHealth: {
         startedRooms,
         waitingRooms,
@@ -912,7 +924,7 @@ export function startServer(
     }
   }
 
-  function finalizeSwing(
+  async function finalizeSwing(
     room: Room,
     swung: boolean,
     swingData: {
@@ -922,8 +934,9 @@ export function startServer(
       swingMode: SwingMode;
       batterSide: 'R' | 'L';
     } | null,
-  ) {
+  ): Promise<void> {
     if (room.turnState !== 'awaiting_swing' || !room.activePitch) return;
+    if (room.solvingSeq === room.activePitch.pitchSeq) return;
     if (room.swingTimer) {
       clearTimeout(room.swingTimer);
       room.swingTimer = null;
@@ -934,16 +947,39 @@ export function startServer(
       return;
     }
 
+    const expectedSeq = room.activePitch.pitchSeq;
     const traj = room.activePitch.trajectory;
-    const resolution = evaluateSwingResolution({
-      trajectory: traj,
-      flightTimeSec: swingData.flightTimeSec,
-      batX: swingData.batX,
-      batY: swingData.batY,
-      swingMode: swingData.swingMode,
-      batterSide: swingData.batterSide,
-      seed: room.activePitch.seed,
-    });
+    const pitchSeed = room.activePitch.seed;
+    room.solvingSeq = expectedSeq;
+
+    let resolution: Awaited<ReturnType<typeof physicsPool.evaluateSwing>>['result'];
+    try {
+      const evaluated = await physicsPool.evaluateSwing({
+        hitPlanePos: traj.hitPlanePos,
+        hitPlaneTimeSec: traj.hitPlaneTimeSec,
+        flightTimeSec: swingData.flightTimeSec,
+        batX: swingData.batX,
+        batY: swingData.batY,
+        swingMode: swingData.swingMode,
+        batterSide: swingData.batterSide,
+        seed: pitchSeed,
+      });
+      resolution = evaluated.result;
+    } catch {
+      if (room.solvingSeq === expectedSeq) room.solvingSeq = null;
+      return;
+    }
+
+    if (room.solvingSeq === expectedSeq) room.solvingSeq = null;
+    if (
+      rooms.get(room.code) !== room ||
+      room.turnState !== 'awaiting_swing' ||
+      !room.activePitch ||
+      room.activePitch.pitchSeq !== expectedSeq ||
+      room.match.isGameOver
+    ) {
+      return;
+    }
 
     if (!resolution.contact) {
       resolveNoContactPitch(room, true);
@@ -1117,6 +1153,7 @@ export function startServer(
         lastActivityAt: Date.now(),
         match: buildMatchState(mode, homeClient.name, awayClient.name),
         pitchSeq: 1,
+        solvingSeq: null,
         turnState: 'awaiting_pitch',
         batterSide: 'L',
         activePitch: null,
@@ -1235,7 +1272,13 @@ export function startServer(
           return;
         }
       }
-      const payload = JSON.stringify(monitor.buildReport(buildMonitorSnapshot()));
+      const nowMs = Date.now();
+      let payload = cachedMetricsPayload;
+      if (!payload || metricsCacheMs <= 0 || nowMs - cachedMetricsAt >= metricsCacheMs) {
+        payload = JSON.stringify(monitor.buildReport(buildMonitorSnapshot()));
+        cachedMetricsPayload = payload;
+        cachedMetricsAt = nowMs;
+      }
       const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(payload, 'utf8');
       monitor.recordHttp(200, bytes);
       res.writeHead(200, {
@@ -1347,12 +1390,26 @@ export function startServer(
     for (const c of clients.values()) {
       if (c.ws.readyState === WebSocket.OPEN) {
         if (t - c.lastPongAt > deadSocketTimeoutMs) {
-          monitor.terminatedDeadPong += 1;
-          c.ws.terminate();
+          if (c.roomCode || c.watchingCode || c.queuedMode) {
+            monitor.terminatedDeadPong += 1;
+            c.ws.terminate();
+          } else {
+            monitor.idleClosedTotal += 1;
+            try {
+              c.ws.close(1000, 'idle');
+            } catch {
+              c.ws.terminate();
+            }
+          }
           continue;
         }
         c.lastPingSentAt = t;
-        sendJson(c.ws, { type: 'ping', t });
+        try {
+          // RFC 6455 protocol-level ping: answered automatically by browser network thread even when tab JS is frozen
+          c.ws.ping();
+        } catch {
+          // ignore closed socket error
+        }
       }
     }
   }, pingIntervalMs);
@@ -1405,6 +1462,10 @@ export function startServer(
       msgCount: 0,
     };
     clients.set(clientId, client);
+
+    ws.on('pong', () => {
+      client.lastPongAt = Date.now();
+    });
 
     ws.on('message', (raw) => {
       // Sliding-window per-socket rate limiter
@@ -1530,6 +1591,7 @@ export function startServer(
             lastActivityAt: Date.now(),
             match: buildMatchState(mode, client.name, 'Opponent'),
             pitchSeq: 1,
+            solvingSeq: null,
             turnState: 'awaiting_pitch',
             batterSide: 'L',
             activePitch: null,
@@ -1738,7 +1800,14 @@ export function startServer(
         case 'pitch_submit': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || !room.players.away || room.turnState !== 'awaiting_pitch' || client.side !== getPitchingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
+          if (
+            !room ||
+            !room.players.away ||
+            room.turnState !== 'awaiting_pitch' ||
+            client.side !== getPitchingSide(room.match) ||
+            msg.pitchSeq !== room.pitchSeq ||
+            room.solvingSeq === room.pitchSeq
+          ) {
             if (room && room.players.away && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
             return;
           }
@@ -1773,64 +1842,94 @@ export function startServer(
             monitor.outOfRangeInputsClamped += 1;
           }
 
+          const expectedSeq = room.pitchSeq;
           const seed = crypto.randomInt(1, 2147483647);
-          const solveStart = performance.now();
-          const trajectory = solvePitchTrajectory(pitchId, speedKmh, targetX, targetY, {
-            errorY: errorX,
-            errorZ: errorY,
-            outputHz: 120,
-            seed,
-          });
-          monitor.recordPhysicsSolve(performance.now() - solveStart);
-          if (!trajectory.plateCrossPos.every(Number.isFinite) || !Number.isFinite(trajectory.flightTimeSec)) {
-            monitor.nanSanityErrors += 1;
-          }
-          const breakCm = Math.round(
-            Math.hypot(trajectory.breakDelta[1], trajectory.breakDelta[2]) * 100,
-          );
-
+          room.solvingSeq = expectedSeq;
           clearPitchClock(room);
-          room.turnState = 'awaiting_swing';
-          room.activePitch = {
-            pitchSeq: room.pitchSeq,
-            seed,
-            pitchId,
-            speedKmh,
-            targetX,
-            targetY,
-            errorX,
-            errorY,
-            breakCm,
-            trajectory,
-          };
 
-          const timeoutMs = Math.round(trajectory.flightTimeSec * 1000) + swingTimeoutPaddingMs;
-          room.swingTimer = setTimeout(() => {
-            monitor.swingTimeouts += 1;
-            room.lastActivityAt = Date.now();
-            finalizeSwing(room, false, null);
-          }, timeoutMs);
+          void physicsPool
+            .solvePitch({
+              pitchId,
+              speedKmh,
+              targetX,
+              targetY,
+              errorX,
+              errorY,
+              outputHz: 120,
+              seed,
+            })
+            .then(({ result: trajectory, solveMs }) => {
+              if (room.solvingSeq === expectedSeq) room.solvingSeq = null;
+              monitor.recordPhysicsSolve(solveMs);
+              if (
+                rooms.get(room.code) !== room ||
+                room.turnState !== 'awaiting_pitch' ||
+                room.pitchSeq !== expectedSeq ||
+                room.match.isGameOver
+              ) {
+                return;
+              }
+              if (!trajectory.plateCrossPos.every(Number.isFinite) || !Number.isFinite(trajectory.flightTimeSec)) {
+                monitor.nanSanityErrors += 1;
+              }
+              const breakCm = Math.round(
+                Math.hypot(trajectory.breakDelta[1], trajectory.breakDelta[2]) * 100,
+              );
 
-          sendToRoom(room, {
-            type: 'pitch_launch',
-            pitchSeq: room.pitchSeq,
-            seed,
-            pitchId,
-            speedKmh,
-            targetX,
-            targetY,
-            errorX,
-            errorY,
-            batterSide: room.batterSide,
-            breakCm,
-          });
+              room.turnState = 'awaiting_swing';
+              room.activePitch = {
+                pitchSeq: expectedSeq,
+                seed,
+                pitchId,
+                speedKmh,
+                targetX,
+                targetY,
+                errorX,
+                errorY,
+                breakCm,
+                trajectory,
+              };
+
+              const timeoutMs = Math.round(trajectory.flightTimeSec * 1000) + swingTimeoutPaddingMs;
+              room.swingTimer = setTimeout(() => {
+                monitor.swingTimeouts += 1;
+                room.lastActivityAt = Date.now();
+                void finalizeSwing(room, false, null);
+              }, timeoutMs);
+
+              sendToRoom(room, {
+                type: 'pitch_launch',
+                pitchSeq: expectedSeq,
+                seed,
+                pitchId,
+                speedKmh,
+                targetX,
+                targetY,
+                errorX,
+                errorY,
+                batterSide: room.batterSide,
+                breakCm,
+              });
+            })
+            .catch(() => {
+              if (room.solvingSeq === expectedSeq) room.solvingSeq = null;
+              if (rooms.get(room.code) === room && room.turnState === 'awaiting_pitch' && !room.match.isGameOver) {
+                armPitchClock(room, 1500);
+              }
+            });
           break;
         }
 
         case 'swing_input': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_swing' || client.side !== getBattingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
+          if (
+            !room ||
+            room.turnState !== 'awaiting_swing' ||
+            client.side !== getBattingSide(room.match) ||
+            msg.pitchSeq !== room.pitchSeq ||
+            room.solvingSeq === room.pitchSeq
+          ) {
             if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
             return;
           }
@@ -1850,7 +1949,7 @@ export function startServer(
           const batterSide: 'R' | 'L' = msg.batterSide === 'L' || msg.batterSide === 'left' ? 'L' : 'R';
           room.batterSide = batterSide;
 
-          finalizeSwing(room, true, {
+          void finalizeSwing(room, true, {
             flightTimeSec,
             batX: Math.max(-0.5, Math.min(0.5, batX)),
             batY: Math.max(0.15, Math.min(1.45, batY)),
@@ -1863,13 +1962,19 @@ export function startServer(
         case 'no_swing': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_swing' || client.side !== getBattingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
+          if (
+            !room ||
+            room.turnState !== 'awaiting_swing' ||
+            client.side !== getBattingSide(room.match) ||
+            msg.pitchSeq !== room.pitchSeq ||
+            room.solvingSeq === room.pitchSeq
+          ) {
             if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
             return;
           }
           room.lastActivityAt = Date.now();
 
-          finalizeSwing(room, false, null);
+          void finalizeSwing(room, false, null);
           break;
         }
 
@@ -2051,6 +2156,7 @@ export function startServer(
           room.rematchVotes.clear();
           room.match = buildMatchState(room.mode, room.players.home.name, room.players.away.name);
           room.pitchSeq = 1;
+          room.solvingSeq = null;
           room.turnState = 'awaiting_pitch';
           room.batterSide = 'L';
           room.activePitch = null;
@@ -2138,6 +2244,7 @@ export function startServer(
       }
     }
     clients.clear();
+    await physicsPool.close();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
