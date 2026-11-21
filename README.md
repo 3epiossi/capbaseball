@@ -4,7 +4,7 @@
 
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
-- **目前里程碑**：`v1.0.0` 起步，Pi 現行部署版本 `20261121-164640`
+- **目前里程碑**：`v1.0.0` 起步，Pi 現行部署版本 `20261121-175200`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -18,7 +18,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 31 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 34 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -111,3 +111,18 @@ PORT=8788 HOST=127.0.0.1 npm run server
 - **開源授權（MIT License）**：根目錄已補上 [`LICENSE`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/LICENSE)（MIT 授權）並更新 [`.gitignore`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/.gitignore) 排除本地參考 PDF 與規劃文件。
 - **GitHub Fork 協作說明（`3epiossi/capbaseball` ← `koshien2015/cap-flight-sim`）**：
   - 本專案已透過 Fork 正式關聯上游 `koshien2015/cap-flight-sim`。因本機採獨立 `git init` 起步，GitHub 網頁會顯示 `ahead / behind koshien2015/cap-flight-sim:master`；**切勿點擊 GitHub 上的 `Sync fork` 或 `Discard commits`**（否則會將不相關目錄結構合併進來或清空本專案），需要參考上游物理演算法時於本機使用 `git fetch upstream` 查閱即可。
+
+### 7. 124 人同步在線實測排查、過載門檻放寬與全方位流量監控（2026-11-21）
+
+在真實 124 人同時連線至 Raspberry Pi 的壓測高峰期，直接抓取 `/health` 與 Pi 系統數據發現異常真相：**Pi CPU 僅 `16.2%`、事件迴圈延遲僅 `1ms`、RSS 僅 `91MB / 3795MB`、溫度 `51.6°C`、`throttled=0x0`**，卻只有 `1` 個對戰房間、其餘玩家全數被導向單機 CPU！排查出五大瓶頸並完成修正：
+
+- **解除假性 `SERVER BUSY` 鎖死線上對戰**：
+  - **原因**：舊版 `MAX_CLIENTS=80` 導致超過 `64` 位瀏覽/單機玩家開著網頁時，伺服器即進入 `yellow`（`80` 進 `red`），且客戶端 `isServerBusy` 與伺服端 `queue`/`create` 雙雙設定「只要非 `green` 就拒絕並轉單機 CPU」，使上百人同時在線卻互相無法配對線上對戰。
+  - **解法**：將預設上限放寬為 `MAX_CLIENTS=500`、`MAX_ROOMS=80`、`MAX_RSS_MB=640`、事件迴圈延遲 `yellow >= 80ms / red >= 160ms`；且 `yellow` 改為純預警，**前後端統一只有 `red` 真正過載時才觸發 `server_busy` 與 `BUSY` 燈號**。
+- **放寬同 IP 連線上限**：`MAX_CONN_PER_IP` 由 `12` 調升至 `48`，避免同校 Wi-Fi、宿舍或電信商 CGNAT 多人同時遊玩遭到 `1008 too_many_connections` 斷線。
+- **消除 $O(N^2)$ 廣播與雙重心跳風暴**：新增 `scheduleStatsBroadcast()`（`800ms` 防抖合併，且 legacy / compact v2 各自只做一次 `JSON.stringify`），定時廣播調為 `5000ms`；伺服器心跳預設調為 `5000ms`（前端 `4000ms` 探測），任何進站訊息同步刷新 `lastPongAt`，大幅削減控制封包。
+- **記憶體靜態快取（Zero Disk I/O）**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 啟動時將 `dist/` 與 `.gz` 一次載入 `staticCache` 並支援 `ETag` / `304 Not Modified`。
+- **全方位流量監控系統**：新增 [server/monitor.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitor.ts) 與 [server/monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts)，提供：
+  - 即時儀表板：[`https://3epiossi.com/capbaseball/monitor`](https://3epiossi.com/capbaseball/monitor)（嚴格相容 CSP，Zero PII）
+  - JSON 遙測 API：[`https://3epiossi.com/capbaseball/metrics`](https://3epiossi.com/capbaseball/metrics)（可選 `MONITOR_TOKEN` 驗證與 `METRICS_LOG` 每分鐘落地紀錄）
+  - 涵蓋 HTTP/WS 速率與頻寬、前 10 大封包類型、連線角色拆解、拒收/斷線計數、物理求解耗時、事件迴圈延遲、CPU/RAM 與 Raspberry Pi 溫度／降頻狀態。

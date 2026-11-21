@@ -5,6 +5,8 @@ import path from 'node:path';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
+import { ServerMonitor, type ServerSnapshotInput } from './monitor';
+import { MONITOR_HTML, MONITOR_JS } from './monitorUi';
 import { checkCatcherCatch } from '../src/ai/cpu';
 import {
   encodeServerMsgV2,
@@ -161,10 +163,13 @@ export interface ServerOptions {
   maxRssMb?: number;
   maxConnPerIp?: number;
   maxMsgsPerSec?: number;
+  metricsLogPath?: string;
+  monitorToken?: string;
   getLoadOverride?: () => ServerLoadStatus | null;
 }
 
 const wsCompactMode = new WeakMap<WebSocket, boolean>();
+const wsMonitorMap = new WeakMap<WebSocket, ServerMonitor>();
 
 function sanitizeName(raw: unknown): string {
   if (typeof raw === 'string') {
@@ -191,11 +196,21 @@ function generateRoomCode(rooms: Map<string, Room>): string {
 function sendJson(ws: WebSocket | null | undefined, payload: unknown): void {
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
+      const compact = wsCompactMode.get(ws);
       const wire =
-        wsCompactMode.get(ws) && payload && typeof payload === 'object'
+        compact && payload && typeof payload === 'object'
           ? encodeServerMsgV2(payload as Record<string, unknown>)
           : payload;
-      ws.send(JSON.stringify(wire));
+      const encoded = JSON.stringify(wire);
+      ws.send(encoded);
+      const mon = wsMonitorMap.get(ws);
+      if (mon) {
+        const msgType =
+          payload && typeof payload === 'object' && typeof (payload as { type?: unknown }).type === 'string'
+            ? (payload as { type: string }).type
+            : 'unknown';
+        mon.recordWsOut(msgType, Buffer.byteLength(encoded, 'utf8'), 1);
+      }
     } catch {
       // ignore closed socket error
     }
@@ -252,17 +267,69 @@ export function startServer(
       process.env.STATIC_DIR ||
       fileURLToPath(new URL('../dist', import.meta.url)),
   );
-  const pingIntervalMs = opts.pingIntervalMs ?? 2000;
+  const pingIntervalMs = opts.pingIntervalMs ?? 5000;
   const deadSocketTimeoutMs = opts.deadSocketTimeoutMs ?? Math.max(10_000, pingIntervalMs * 5);
   const graceMs = opts.graceMs ?? 45_000;
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const pitchClockScale = opts.pitchClockScale ?? 1;
-  const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 20);
-  const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 80);
-  const maxRssMb = opts.maxRssMb ?? (Number(process.env.MAX_RSS_MB) || 360);
-  const maxConnPerIp = opts.maxConnPerIp ?? (Number(process.env.MAX_CONN_PER_IP) || 12);
+  const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 80);
+  const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 500);
+  const maxRssMb = opts.maxRssMb ?? (Number(process.env.MAX_RSS_MB) || 640);
+  const maxConnPerIp = opts.maxConnPerIp ?? (Number(process.env.MAX_CONN_PER_IP) || 48);
   const maxMsgsPerSec = opts.maxMsgsPerSec ?? (Number(process.env.MAX_MSGS_PER_SEC) || 30);
+  const monitorToken = opts.monitorToken ?? (process.env.MONITOR_TOKEN || '');
+  const monitor = new ServerMonitor(opts.metricsLogPath ?? process.env.METRICS_LOG);
+
+  interface StaticCacheEntry {
+    contentType: string;
+    cacheControl: string;
+    etag: string;
+    raw: Buffer;
+    gz: Buffer | null;
+  }
+
+  const staticCache = new Map<string, StaticCacheEntry>();
+  let staticCacheBytes = 0;
+
+  if (fs.existsSync(staticDir)) {
+    const walkStatic = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walkStatic(full);
+          continue;
+        }
+        if (!entry.isFile() || entry.name.endsWith('.gz')) continue;
+        const rel = '/' + path.relative(staticDir, full).split(path.sep).join('/');
+        const ext = path.extname(full).toLowerCase();
+        const raw = fs.readFileSync(full);
+        let gz: Buffer | null = null;
+        try {
+          if (fs.existsSync(`${full}.gz`)) {
+            gz = fs.readFileSync(`${full}.gz`);
+          }
+        } catch {
+          gz = null;
+        }
+        const sha = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12);
+        staticCache.set(rel, {
+          contentType: MIME_TYPES[ext] || 'application/octet-stream',
+          cacheControl: rel.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+          etag: `"${raw.length}-${sha}"`,
+          raw,
+          gz,
+        });
+        staticCacheBytes += raw.length + (gz ? gz.length : 0);
+      }
+    };
+    try {
+      walkStatic(staticDir);
+    } catch {
+      staticCache.clear();
+      staticCacheBytes = 0;
+    }
+  }
 
   const eld = monitorEventLoopDelay({ resolution: 20 });
   eld.enable();
@@ -305,16 +372,16 @@ export function startServer(
     if (override) {
       status = override;
     } else if (
-      lagMs >= 90 ||
+      lagMs >= 160 ||
       rooms.size >= maxRooms ||
       clients.size >= maxClients ||
       rssMb >= maxRssMb * 0.9
     ) {
       status = 'red';
     } else if (
-      lagMs >= 45 ||
+      lagMs >= 80 ||
       rooms.size >= maxRooms * 0.8 ||
-      clients.size >= maxClients * 0.8 ||
+      clients.size >= maxClients * 0.85 ||
       rssMb >= maxRssMb * 0.8
     ) {
       status = 'yellow';
@@ -343,11 +410,81 @@ export function startServer(
     };
   }
 
+  let statsBroadcastTimer: NodeJS.Timeout | null = null;
+
   function broadcastStats() {
-    const msg = { type: 'stats', stats: getStats() };
-    for (const c of clients.values()) {
-      sendJson(c.ws, msg);
+    if (statsBroadcastTimer) {
+      clearTimeout(statsBroadcastTimer);
+      statsBroadcastTimer = null;
     }
+    if (clients.size === 0) return;
+    const msg = { type: 'stats', stats: getStats() };
+    let legacyStr: string | null = null;
+    let v2Str: string | null = null;
+    let legacyCount = 0;
+    let v2Count = 0;
+    for (const c of clients.values()) {
+      if (c.ws.readyState !== WebSocket.OPEN) continue;
+      try {
+        if (c.compactV2) {
+          if (v2Str === null) v2Str = JSON.stringify(encodeServerMsgV2(msg));
+          c.ws.send(v2Str);
+          v2Count += 1;
+        } else {
+          if (legacyStr === null) legacyStr = JSON.stringify(msg);
+          c.ws.send(legacyStr);
+          legacyCount += 1;
+        }
+      } catch {
+        // ignore closed socket error
+      }
+    }
+    if (legacyStr !== null && legacyCount > 0) {
+      monitor.recordWsOut('stats', Buffer.byteLength(legacyStr, 'utf8'), legacyCount);
+    }
+    if (v2Str !== null && v2Count > 0) {
+      monitor.recordWsOut('stats', Buffer.byteLength(v2Str, 'utf8'), v2Count);
+    }
+  }
+
+  function scheduleStatsBroadcast() {
+    if (statsBroadcastTimer) return;
+    statsBroadcastTimer = setTimeout(() => {
+      statsBroadcastTimer = null;
+      broadcastStats();
+    }, 800);
+  }
+
+  function buildMonitorSnapshot(): ServerSnapshotInput {
+    let inMatchClients = 0;
+    let spectatingClients = 0;
+    for (const c of clients.values()) {
+      if (c.roomCode) inMatchClients += 1;
+      else if (c.watchingCode) spectatingClients += 1;
+    }
+    let matchmakingRooms = 0;
+    for (const r of rooms.values()) {
+      if (r.isMatchmaking) matchmakingRooms += 1;
+    }
+    let maxConnsSingleIp = 0;
+    for (const cnt of ipConnCounts.values()) {
+      if (cnt > maxConnsSingleIp) maxConnsSingleIp = cnt;
+    }
+    return {
+      uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
+      version,
+      draining,
+      load: getServerLoad(),
+      queuesTotal: queues.quick3.length + queues.official6.length,
+      inMatchClients,
+      spectatingClients,
+      friendRooms: rooms.size - matchmakingRooms,
+      matchmakingRooms,
+      uniqueIps: ipConnCounts.size,
+      maxConnsSingleIp,
+      staticCacheFiles: staticCache.size,
+      staticCacheMb: Math.round((staticCacheBytes / (1024 * 1024)) * 10) / 10,
+    };
   }
 
   function checkDrainComplete() {
@@ -924,7 +1061,7 @@ export function startServer(
       awayClient.side = 'away';
 
       startMatchInRoom(room);
-      broadcastStats();
+      scheduleStatsBroadcast();
     }
   }
 
@@ -947,9 +1084,12 @@ export function startServer(
 
     const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
+    const isGetOrHead = req.method === 'GET' || req.method === 'HEAD';
+
     // Canonicalize /capbaseball -> /capbaseball/ so relative ./assets & ./sprites resolve cleanly
-    if ((req.method === 'GET' || req.method === 'HEAD') && parsedUrl.pathname === '/capbaseball') {
+    if (isGetOrHead && parsedUrl.pathname === '/capbaseball') {
       const loc = `/capbaseball/${parsedUrl.search}`;
+      monitor.recordHttp(301, 0);
       res.writeHead(301, { Location: loc });
       res.end();
       return;
@@ -960,7 +1100,15 @@ export function startServer(
       ? parsedUrl.pathname.slice('/capbaseball'.length)
       : parsedUrl.pathname;
 
-    if ((req.method === 'GET' || req.method === 'HEAD') && normalizedPath === '/health') {
+    if (isGetOrHead && normalizedPath === '/monitor/') {
+      const target = parsedUrl.pathname.slice(0, -1) + parsedUrl.search;
+      monitor.recordHttp(301, 0);
+      res.writeHead(301, { Location: target });
+      res.end();
+      return;
+    }
+
+    if (isGetOrHead && normalizedPath === '/health') {
       const load = getServerLoad();
       const payload = JSON.stringify({
         ok: true,
@@ -972,6 +1120,8 @@ export function startServer(
         draining,
         load,
       });
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(payload, 'utf8');
+      monitor.recordHttp(200, bytes);
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache',
@@ -981,97 +1131,118 @@ export function startServer(
       return;
     }
 
-    if ((req.method === 'GET' || req.method === 'HEAD') && fs.existsSync(staticDir)) {
+    if (isGetOrHead && normalizedPath === '/metrics') {
+      if (monitorToken) {
+        const provided =
+          parsedUrl.searchParams.get('token') ||
+          String(req.headers['x-monitor-token'] || '') ||
+          String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        if (provided !== monitorToken) {
+          const body = JSON.stringify({ error: 'unauthorized' });
+          monitor.recordHttp(401, req.method === 'HEAD' ? 0 : Buffer.byteLength(body, 'utf8'));
+          res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(req.method === 'HEAD' ? undefined : body);
+          return;
+        }
+      }
+      const payload = JSON.stringify(monitor.buildReport(buildMonitorSnapshot()));
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(payload, 'utf8');
+      monitor.recordHttp(200, bytes);
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(req.method === 'HEAD' ? undefined : payload);
+      return;
+    }
+
+    if (isGetOrHead && normalizedPath === '/monitor') {
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(MONITOR_HTML, 'utf8');
+      monitor.recordHttp(200, bytes);
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache',
+      });
+      res.end(req.method === 'HEAD' ? undefined : MONITOR_HTML);
+      return;
+    }
+
+    if (isGetOrHead && normalizedPath === '/monitor.js') {
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(MONITOR_JS, 'utf8');
+      monitor.recordHttp(200, bytes);
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-cache',
+      });
+      res.end(req.method === 'HEAD' ? undefined : MONITOR_JS);
+      return;
+    }
+
+    if (isGetOrHead && staticCache.size > 0) {
       let decodedPath: string;
       try {
         decodedPath = decodeURIComponent(normalizedPath);
       } catch {
+        monitor.recordHttp(400, 11);
         res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Bad Request');
         return;
       }
       if (decodedPath.includes('\0') || /(^|\/)\./.test(decodedPath)) {
+        monitor.recordHttp(403, 9);
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Forbidden');
         return;
       }
 
       const relTarget = decodedPath === '/' ? '/index.html' : decodedPath;
-      let filePath = path.resolve(staticDir, '.' + relTarget);
-      if (filePath !== staticDir && !filePath.startsWith(staticDir + path.sep)) {
-        res.writeHead(403);
-        res.end('Forbidden');
-        return;
+      let entry = staticCache.get(relTarget);
+      if (!entry && !path.extname(decodedPath)) {
+        entry = staticCache.get('/index.html');
       }
-
-      let stat: fs.Stats | null = null;
-      try {
-        stat = fs.statSync(filePath);
-      } catch {
-        stat = null;
-      }
-
-      // SPA fallback for non-asset routes
-      if ((!stat || !stat.isFile()) && !path.extname(decodedPath)) {
-        filePath = path.join(staticDir, 'index.html');
-        try {
-          stat = fs.statSync(filePath);
-        } catch {
-          stat = null;
-        }
-      }
-
-      if (!stat || !stat.isFile()) {
+      if (!entry) {
+        monitor.recordHttp(404, 9);
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Not Found');
         return;
       }
 
-      const ext = path.extname(filePath).toLowerCase();
-      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-      const relFromRoot = '/' + path.relative(staticDir, filePath).split(path.sep).join('/');
-      const cacheControl = relFromRoot.startsWith('/assets/')
-        ? 'public, max-age=31536000, immutable'
-        : 'no-cache';
-
-      const gzPath = `${filePath}.gz`;
-      const hasGz = fs.existsSync(gzPath);
-      const useGz = hasGz && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
-      const sendPath = useGz ? gzPath : filePath;
-
-      const headers: Record<string, string | number> = {
-        'Content-Type': contentType,
-        'Cache-Control': cacheControl,
-        'Content-Length': useGz ? fs.statSync(gzPath).size : stat.size,
-      };
-      if (hasGz) headers.Vary = 'Accept-Encoding';
-      if (useGz) headers['Content-Encoding'] = 'gzip';
-
-      if (req.method === 'HEAD') {
-        res.writeHead(200, headers);
+      const ifNoneMatch = String(req.headers['if-none-match'] || '');
+      if (ifNoneMatch && (ifNoneMatch === entry.etag || ifNoneMatch.includes(entry.etag))) {
+        monitor.static304Hits += 1;
+        monitor.recordHttp(304, 0);
+        res.writeHead(304, {
+          ETag: entry.etag,
+          'Cache-Control': entry.cacheControl,
+          Vary: 'Accept-Encoding',
+        });
         res.end();
         return;
       }
 
-      const stream = fs.createReadStream(sendPath);
-      res.on('close', () => stream.destroy());
-      stream.on('open', () => {
-        res.writeHead(200, headers);
-        stream.pipe(res);
-      });
-      stream.on('error', () => {
-        if (!res.headersSent) {
-          res.writeHead(500);
-          res.end('Internal Server Error');
-        } else {
-          res.destroy();
-        }
-      });
+      const useGz = Boolean(entry.gz && /\bgzip\b/.test(String(req.headers['accept-encoding'] || '')));
+      const buf = useGz && entry.gz ? entry.gz : entry.raw;
+      const headers: Record<string, string | number> = {
+        'Content-Type': entry.contentType,
+        'Cache-Control': entry.cacheControl,
+        'Content-Length': buf.length,
+        ETag: entry.etag,
+      };
+      if (entry.gz) headers.Vary = 'Accept-Encoding';
+      if (useGz) headers['Content-Encoding'] = 'gzip';
+
+      monitor.staticCacheHits += 1;
+      monitor.recordHttp(200, req.method === 'HEAD' ? 0 : buf.length);
+      res.writeHead(200, headers);
+      res.end(req.method === 'HEAD' ? undefined : buf);
       return;
     }
 
+    const notFoundBody = JSON.stringify({ error: 'not_found' });
+    monitor.recordHttp(404, req.method === 'HEAD' ? 0 : Buffer.byteLength(notFoundBody, 'utf8'));
     res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not_found' }));
+    res.end(req.method === 'HEAD' ? undefined : notFoundBody);
   });
 
   // --- WebSocket Server (Compact framing, 16KB maxPayload, no deflate overhead on tiny frames) ---
@@ -1086,6 +1257,7 @@ export function startServer(
     for (const c of clients.values()) {
       if (c.ws.readyState === WebSocket.OPEN) {
         if (t - c.lastPongAt > deadSocketTimeoutMs) {
+          monitor.terminatedDeadPong += 1;
           c.ws.terminate();
           continue;
         }
@@ -1098,7 +1270,9 @@ export function startServer(
   const statsTimer = setInterval(() => {
     sampleEventLoopLag();
     broadcastStats();
-  }, 4000);
+  }, 5000);
+
+  monitor.start(buildMonitorSnapshot, 2000);
 
   wss.on('connection', (ws, req) => {
     const ip =
@@ -1107,10 +1281,13 @@ export function startServer(
         .trim();
     const curIpConns = ipConnCounts.get(ip) ?? 0;
     if (curIpConns >= maxConnPerIp) {
+      monitor.rejectedIpLimit += 1;
       ws.close(1008, 'too_many_connections');
       return;
     }
     ipConnCounts.set(ip, curIpConns + 1);
+    monitor.connAcceptedTotal += 1;
+    wsMonitorMap.set(ws, monitor);
 
     const clientId = crypto.randomUUID();
     const nowOnConnect = Date.now();
@@ -1141,20 +1318,25 @@ export function startServer(
       }
       client.msgCount += 1;
       if (client.msgCount > maxMsgsPerSec) {
+        monitor.rejectedRateLimit += 1;
         sendJson(ws, { type: 'error', code: 'rate_limited', message: 'Rate limit exceeded' });
         ws.close(1008, 'rate_limited');
         return;
       }
 
+      const rawStr = String(raw);
+      const rawByteLen = Buffer.byteLength(rawStr, 'utf8');
       let parsed: Record<string, unknown>;
       try {
-        parsed = JSON.parse(String(raw));
+        parsed = JSON.parse(rawStr);
       } catch {
         return;
       }
       if (!parsed || typeof parsed !== 'object') return;
       const msg = normalizeClientMsg(parsed);
       if (typeof msg.type !== 'string') return;
+      monitor.recordWsIn(msg.type, rawByteLen);
+      client.lastPongAt = now;
 
       switch (msg.type) {
         case 'ping': {
@@ -1163,9 +1345,8 @@ export function startServer(
         }
 
         case 'pong': {
-          client.lastPongAt = Date.now();
           const sentAt = typeof msg.t === 'number' ? msg.t : client.lastPingSentAt;
-          client.rttMs = Math.max(0, Math.min(9999, Date.now() - sentAt));
+          client.rttMs = Math.max(0, Math.min(9999, now - sentAt));
           break;
         }
 
@@ -1182,7 +1363,7 @@ export function startServer(
             version,
             stats: getStats(),
           });
-          broadcastStats();
+          scheduleStatsBroadcast();
           break;
         }
 
@@ -1192,7 +1373,8 @@ export function startServer(
             return;
           }
           const load = getServerLoad();
-          if (load.status !== 'green') {
+          if (load.status === 'red') {
+            monitor.rejectedBusy += 1;
             sendJson(ws, {
               type: 'error',
               code: 'server_busy',
@@ -1209,14 +1391,14 @@ export function startServer(
           queues[mode].push(clientId);
           sendJson(ws, { type: 'queued', mode });
           tryPairQueue(mode);
-          broadcastStats();
+          scheduleStatsBroadcast();
           break;
         }
 
         case 'unqueue': {
           removeFromQueues(clientId);
           sendJson(ws, { type: 'unqueued' });
-          broadcastStats();
+          scheduleStatsBroadcast();
           break;
         }
 
@@ -1226,7 +1408,8 @@ export function startServer(
             return;
           }
           const load = getServerLoad();
-          if (load.status !== 'green') {
+          if (load.status === 'red') {
+            monitor.rejectedBusy += 1;
             sendJson(ws, {
               type: 'error',
               code: 'server_busy',
@@ -1280,7 +1463,7 @@ export function startServer(
             token,
             side: 'home',
           });
-          broadcastStats();
+          scheduleStatsBroadcast();
           break;
         }
 
@@ -1326,7 +1509,7 @@ export function startServer(
             host.disconnectTimer = setTimeout(() => expireSeat(code, 'home'), graceMs);
             sendJson(ws, { type: 'opponent_disconnected', graceSec: Math.round(graceMs / 1000) });
           }
-          broadcastStats();
+          scheduleStatsBroadcast();
           break;
         }
 
@@ -1474,12 +1657,14 @@ export function startServer(
           const errorY = Number.isFinite(rawErrY) ? Math.max(-0.35, Math.min(0.35, rawErrY)) : 0;
 
           const seed = crypto.randomInt(1, 2147483647);
+          const solveStart = performance.now();
           const trajectory = solvePitchTrajectory(pitchId, speedKmh, targetX, targetY, {
             errorY: errorX,
             errorZ: errorY,
             outputHz: 120,
             seed,
           });
+          monitor.recordPhysicsSolve(performance.now() - solveStart);
           const breakCm = Math.round(
             Math.hypot(trajectory.breakDelta[1], trajectory.breakDelta[2]) * 100,
           );
@@ -1741,6 +1926,7 @@ export function startServer(
     });
 
     ws.on('close', () => {
+      monitor.connClosedTotal += 1;
       const ipLeft = (ipConnCounts.get(ip) ?? 1) - 1;
       if (ipLeft <= 0) ipConnCounts.delete(ip);
       else ipConnCounts.set(ip, ipLeft);
@@ -1783,14 +1969,19 @@ export function startServer(
         }
       }
 
-      broadcastStats();
+      scheduleStatsBroadcast();
     });
   });
 
   async function close() {
+    monitor.stop();
     eld.disable();
     clearInterval(heartbeatTimer);
     clearInterval(statsTimer);
+    if (statsBroadcastTimer) {
+      clearTimeout(statsBroadcastTimer);
+      statsBroadcastTimer = null;
+    }
     for (const room of rooms.values()) {
       clearPitchClock(room);
       if (room.swingTimer) clearTimeout(room.swingTimer);

@@ -1768,21 +1768,21 @@ onlineClient.onNetUpdate((m) => {
     netSpeedPill.dataset.quality = 'offline';
     netSpeedText.textContent = 'LOCAL';
     netSpeedPill.title = 'Offline / Local Mode';
-  } else if (m.serverLoad !== 'green') {
+  } else if (m.serverLoad === 'red') {
     netSpeedPill.dataset.quality = 'busy';
     netSpeedText.textContent = `BUSY ${m.rttMs || '--'}ms`;
     netSpeedPill.title = `Server load: ${m.serverLoad.toUpperCase()} (${m.serverLagMs}ms lag) · RTT ${m.rttMs}ms`;
   } else {
     netSpeedPill.dataset.quality = m.quality;
     netSpeedText.textContent = m.rttMs > 0 ? `${m.rttMs}ms` : 'SYNC';
-    netSpeedPill.title = `RTT ${m.rttMs}ms · Jitter ${m.jitterMs}ms · Server GREEN`;
+    netSpeedPill.title = `RTT ${m.rttMs}ms · Jitter ${m.jitterMs}ms · Server ${m.serverLoad.toUpperCase()}`;
   }
 
-  // If queuing and connection drops/becomes unstable OR server becomes busy -> auto-match CPU!
+  // If queuing and connection drops/becomes unstable OR server reaches red overload -> auto-match CPU!
   if (onTitleScreen && onlineWaitingQueue) {
     if (!m.connected || m.quality === 'poor') {
       autoFallbackToCpu('UNSTABLE NET', 'AUTO-MATCHED VS CPU');
-    } else if (m.serverLoad !== 'green') {
+    } else if (m.serverLoad === 'red') {
       autoFallbackToCpu('SERVER BUSY', 'AUTO-MATCHED VS CPU');
     }
   }

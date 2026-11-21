@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { decodeServerMsg, type ServerLoadStatus } from '../src/net/protocol';
@@ -520,6 +521,14 @@ describe('Online Multiplayer Server Integration', () => {
       const errBusy2 = await c.nextMsg((m) => m.type === 'error');
       expect(errBusy2.code).toBe('server_busy');
 
+      // Yellow warning zone still allows queueing/room creation (only red overloads block!)
+      forcedLoad = 'yellow';
+      c.send({ type: 'queue', mode: 'quick3', name: 'Tester' });
+      const queuedMsg = await c.nextMsg((m) => m.type === 'queued');
+      expect(queuedMsg.mode).toBe('quick3');
+      c.send({ type: 'unqueue' });
+      await c.nextMsg((m) => m.type === 'unqueued');
+
       // Server returns to green zone -> new connections & matchmaking accepted!
       forcedLoad = 'green';
       c.send({ type: 'create', mode: 'quick3', name: 'Tester' });
@@ -761,6 +770,171 @@ describe('Online Multiplayer Server Integration', () => {
       await host.close();
       await guest.close();
       await clockSrv.close();
+    }
+  });
+
+  it('16. /metrics reports HTTP/WS traffic, connection role split, rejections, and zero PII', async () => {
+    let forcedLoad: ServerLoadStatus = 'green';
+    const monSrv = await startServer(0, {
+      matchLogPath: path.join(tmpDir, 'mon-matches.jsonl'),
+      metricsLogPath: path.join(tmpDir, 'metrics.jsonl'),
+      maxConnPerIp: 2,
+      getLoadOverride: () => forcedLoad,
+    });
+    const fetchMetrics = () =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        http
+          .get(`http://127.0.0.1:${monSrv.port}/capbaseball/metrics`, (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => (body += c));
+            res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+          })
+          .on('error', reject);
+      });
+
+    const c1 = await connectClient(monSrv.port, 'SecretAlice');
+    const c2 = await connectClient(monSrv.port, 'SecretBob');
+    try {
+      c1.send({ type: 'create', mode: 'quick3', name: 'SecretAlice' });
+      const created = await c1.nextMsg((m) => m.type === 'room_created');
+      const code = created.code as string;
+
+      c2.send({ type: 'queue', mode: 'quick3', name: 'SecretBob' });
+      await c2.nextMsg((m) => m.type === 'queued');
+
+      // Trigger server_busy rejection counter while red
+      forcedLoad = 'red';
+      c2.send({ type: 'create', mode: 'quick3', name: 'SecretBob' });
+      const busyErr = await c2.nextMsg((m) => m.type === 'error');
+      expect(busyErr.code).toBe('server_busy');
+
+      // Trigger maxConnPerIp rejection counter (3rd socket from same IP)
+      const c3Ws = new WebSocket(`ws://127.0.0.1:${monSrv.port}`);
+      const c3Code = await new Promise<number>((resolve) => {
+        c3Ws.once('close', (closeCode) => resolve(closeCode));
+      });
+      expect(c3Code).toBe(1008);
+
+      const mRes = await fetchMetrics();
+      expect(mRes.status).toBe(200);
+      // Zero PII: player names & room codes never appear in metrics payload
+      expect(mRes.body).not.toContain('SecretAlice');
+      expect(mRes.body).not.toContain('SecretBob');
+      expect(mRes.body).not.toContain(code);
+
+      const report = JSON.parse(mRes.body);
+      expect(report.connections.activeClients).toBe(2);
+      expect(report.connections.inMatch).toBe(1);
+      expect(report.connections.queuing).toBe(1);
+      expect(report.connections.uniqueIps).toBe(1);
+      expect(report.connections.maxConnsSingleIp).toBe(2);
+      expect(report.connections.roomsActive).toBe(1);
+      expect(report.connections.friendRooms).toBe(1);
+      expect(report.connections.acceptedTotal).toBe(2);
+      expect(report.traffic.wsInMsgsTotal).toBeGreaterThanOrEqual(4);
+      expect(report.traffic.wsOutMsgsTotal).toBeGreaterThanOrEqual(4);
+      expect(report.traffic.httpRequestsTotal).toBeGreaterThanOrEqual(0);
+      expect(report.rejections.serverBusy).toBe(1);
+      expect(report.rejections.ipLimit).toBe(1);
+      expect(report.pi.memTotalMb).toBeGreaterThan(0);
+    } finally {
+      await c1.close();
+      await c2.close();
+      await monSrv.close();
+    }
+  });
+
+  it('17. /monitor UI obeys CSP (external monitor.js) and respects monitorToken', async () => {
+    const authSrv = await startServer(0, {
+      monitorToken: 'secret-mon-42',
+    });
+    const reqHttp = (p: string) =>
+      new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }>((resolve, reject) => {
+        http
+          .get(`http://127.0.0.1:${authSrv.port}${p}`, (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => (body += c));
+            res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+          })
+          .on('error', reject);
+      });
+
+    try {
+      const htmlRes = await reqHttp('/capbaseball/monitor');
+      expect(htmlRes.status).toBe(200);
+      expect(htmlRes.headers['content-type']).toContain('text/html');
+      expect(htmlRes.headers['content-security-policy']).toContain("script-src 'self'");
+      expect(htmlRes.body).toContain('src="./monitor.js"');
+      expect(htmlRes.body).not.toMatch(/<script(?![^>]*src=)/i);
+
+      const jsRes = await reqHttp('/capbaseball/monitor.js');
+      expect(jsRes.status).toBe(200);
+      expect(jsRes.headers['content-type']).toContain('javascript');
+      expect(jsRes.body).toContain('./metrics');
+
+      const slashRes = await reqHttp('/capbaseball/monitor/');
+      expect(slashRes.status).toBe(301);
+      expect(slashRes.headers.location).toBe('/capbaseball/monitor');
+
+      const unauth = await reqHttp('/capbaseball/metrics');
+      expect(unauth.status).toBe(401);
+
+      const authed = await reqHttp('/capbaseball/metrics?token=secret-mon-42');
+      expect(authed.status).toBe(200);
+      expect(JSON.parse(authed.body).ok).toBe(true);
+    } finally {
+      await authSrv.close();
+    }
+  });
+
+  it('18. In-memory static cache serves ETag, 304 Not Modified, and gzip pre-compressed bundles', async () => {
+    const distDir = path.join(tmpDir, 'dist-mock');
+    fs.mkdirSync(path.join(distDir, 'assets'), { recursive: true });
+    const indexHtml = '<!doctype html><html><body>CapBaseball</body></html>';
+    const jsBundle = 'console.log("hello capbaseball bundle");'.repeat(10);
+    fs.writeFileSync(path.join(distDir, 'index.html'), indexHtml);
+    fs.writeFileSync(path.join(distDir, 'assets', 'app.js'), jsBundle);
+    fs.writeFileSync(path.join(distDir, 'assets', 'app.js.gz'), zlib.gzipSync(jsBundle));
+
+    const cacheSrv = await startServer(0, { staticDir: distDir });
+    const reqRaw = (p: string, headers: Record<string, string> = {}) =>
+      new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+        http
+          .get(`http://127.0.0.1:${cacheSrv.port}${p}`, { headers }, (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () =>
+              resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }),
+            );
+          })
+          .on('error', reject);
+      });
+
+    try {
+      const r1 = await reqRaw('/capbaseball/');
+      expect(r1.status).toBe(200);
+      expect(r1.body.toString('utf8')).toBe(indexHtml);
+      expect(r1.headers.etag).toBeTruthy();
+
+      const r304 = await reqRaw('/capbaseball/', { 'If-None-Match': String(r1.headers.etag) });
+      expect(r304.status).toBe(304);
+      expect(r304.body.length).toBe(0);
+
+      const rGz = await reqRaw('/capbaseball/assets/app.js', { 'Accept-Encoding': 'gzip' });
+      expect(rGz.status).toBe(200);
+      expect(rGz.headers['content-encoding']).toBe('gzip');
+      expect(rGz.headers['cache-control']).toContain('immutable');
+      expect(zlib.gunzipSync(rGz.body).toString('utf8')).toBe(jsBundle);
+
+      const metricsRes = await reqRaw('/capbaseball/metrics');
+      const report = JSON.parse(metricsRes.body.toString('utf8'));
+      expect(report.traffic.staticCache.files).toBe(2);
+      expect(report.traffic.staticCache.hits).toBe(2);
+      expect(report.traffic.staticCache.notModified304).toBe(1);
+    } finally {
+      await cacheSrv.close();
     }
   });
 });

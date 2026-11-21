@@ -242,7 +242,7 @@ export class OnlineClient {
   }
 
   get isServerBusy(): boolean {
-    return this.serverLoad !== 'green';
+    return this.serverLoad === 'red';
   }
 
   getNetMetrics(): NetMetrics {
@@ -317,7 +317,7 @@ export class OnlineClient {
     const sendProbe = () => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       if (typeof document !== 'undefined' && document.hidden) return;
-      if (this.pendingPingAt > 0 && Date.now() - this.pendingPingAt >= 2500) {
+      if (this.pendingPingAt > 0 && Date.now() - this.pendingPingAt >= 4500) {
         this.missedPings += 1;
         this.recomputeNetQuality();
       }
@@ -326,7 +326,7 @@ export class OnlineClient {
       this.sendRaw({ t: 'p', n: now });
     };
     sendProbe();
-    this.pingTimer = window.setInterval(sendProbe, 2000);
+    this.pingTimer = window.setInterval(sendProbe, 4000);
   }
 
   private stopPingLoop(): void {

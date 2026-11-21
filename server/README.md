@@ -2,7 +2,7 @@
 
 ## 模組總覽
 
-`server` 目錄包含單一核心檔案 [index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts)，實作結合靜態網頁服務、`/health` 健康檢查與 WebSocket 即時多人對戰的權威伺服器。伺服器在後端重跑與前端完全一致的 6-DOF 投打物理與 2025-02 規則狀態機，並內建綠區負載卸載、HTTP／WS 安全強化與無中斷優雅停機機制。
+`server` 目錄包含三個核心檔案，實作結合記憶體靜態快取、`/health`、`/metrics` JSON 遙測、`/monitor` 即時 SVG 監控面板與 WebSocket 即時多人對戰的權威伺服器。伺服器在後端重跑與前端完全一致的 6-DOF 投打物理與 2025-02 規則狀態機，並內建放寬後的過載保護、HTTP／WS 安全強化與無中斷優雅停機機制。
 
 ---
 
@@ -10,7 +10,9 @@
 
 | 檔案 | 職責 |
 |---|---|
-| [index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) | 啟動 HTTP 與 WebSocket 伺服器，負責房間配對、權威投打結算、ABS 挑戰同步、觀戰廣播、負載卸載閘門、安全防護與對局紀錄寫入（`matches.jsonl`）。 |
+| [index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) | 啟動 HTTP 與 WebSocket 伺服器，負責記憶體靜態快取（含 ETag 304／`.gz`）、房間配對、權威投打結算、ABS 挑戰同步、觀戰廣播、過載卸載閘門、安全防護與對局紀錄寫入（`matches.jsonl`）。 |
+| [monitor.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitor.ts) | `ServerMonitor` 監測核心：累計 HTTP／WS 封包速率與頻寬、前 10 大訊息類型、角色拆解、拒收與異常計數、物理運算耗時、事件迴圈延遲／CPU%、Raspberry Pi OS 溫度／降頻旗標，以及 10 分鐘環狀歷史與告警引擎。 |
+| [monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts) | `/monitor` 單頁儀表板 HTML 與 CSP 相容的外部腳本 `/monitor.js`，每 2 秒輪詢 `./metrics` 繪製 SVG 折線圖、吞吐表與異常列表（零 PII）。 |
 
 ---
 
@@ -30,29 +32,35 @@
 - **投打結算**：收到 `pitch_submit` 後，伺服器以加密安全亂數產生 `seed` 並呼叫 `solvePitchTrajectory`（`120` Hz）計算軌跡，廣播 `pitch_launch` 並啟動逾時自動判不揮棒計時器；收到 `swing_input`、`no_swing` 或逾時後，呼叫 `evaluateSwingResolution`、`checkCatcherCatch`、`evaluateUmpirePitchCall` 與 `applyPitchResult` 完成權威判決並廣播 `pitch_result`。
 - **權威投球時鐘（Pitch Clock）**：開賽與每球結束進入 `awaiting_pitch` 時由 `armPitchClock` 啟動倒數（無跑者 `15` 秒／有跑者 `20` 秒＋結算緩衝，測試可透過 `pitchClockScale` 調整），斷線寬限期間自動暫停；逾時由 `applyPitchClockViolation` 判自動壞球／保送並廣播帶 `cv: 1` 的 `pitch_result`。
 
-### 2. 雙路徑服務與綁定設定
+### 2. 雙路徑服務、記憶體快取與流量監控端點
 
-- **根目錄與子路徑相容**：HTTP 伺服器同時支援 `/` 與 `/capbaseball/`；收到無結尾斜線的 `/capbaseball` GET／HEAD 請求時，自動回傳 `301` 導向 `/capbaseball/`，其餘請求則剝除 `/capbaseball` 前綴對應 `dist/` 靜態檔（優先提供預壓縮 `.gz` 檔案）與 `/health` 端點。
-- **生產環境綁定**：透過 `process.env.HOST` 控制監聽位址（未設定時預設 `0.0.0.0`），生產環境建議搭配 `HOST=127.0.0.1` 僅對本機反向代理（如 Nginx／Cloudflare Tunnel）開放。
+- **根目錄與子路徑相容**：HTTP 伺服器同時支援 `/` 與 `/capbaseball/`；收到無結尾斜線的 `/capbaseball` GET／HEAD 請求時，自動回傳 `301` 導向 `/capbaseball/`（`/monitor/` 亦導向 `./monitor` 以確保 `./metrics` 與 `./monitor.js` 相對路徑正確解析）。
+- **記憶體靜態快取（Zero Disk I/O）**：伺服器啟動時將 `dist/` 與預壓縮 `.gz` 一次載入 `staticCache` `Map` 並計算 SHA-1 `ETag`；靜態資源全面從 RAM 回應並支援 `If-None-Match` → `304 Not Modified`，免除高併發下每請求多次同步 `fs.statSync` 與開檔串流的磁碟瓶頸。
+- **即時監控端點（`/monitor` 與 `/metrics`）**：
+  - `GET /capbaseball/monitor`（與 `/capbaseball/monitor.js`）：免登入外部 JS 儀表板（完全相容 `script-src 'self'` CSP），即時顯示在線角色分佈（對戰中／排隊中／觀戰中／首頁閒置）、每秒 HTTP/WS 吞吐與封包類型、拒收計數、物理求解耗時與 Raspberry Pi CPU 溫度／降頻（`vcgencmd get_throttled`）。
+  - `GET /capbaseball/metrics`：完整 JSON 遙測輸出（不含玩家暱稱、房號或完整 IP 等 PII）。若設定環境變數 `MONITOR_TOKEN`，需透過 `?token=`、`x-monitor-token` 或 `Authorization: Bearer` 驗證；另可設定 `METRICS_LOG` 每 60 秒寫入一筆歷史摘要至 JSONL。
+- **生產環境綁定**：透過 `process.env.HOST` 控制監聽位址（未設定時預設 `0.0.0.0`），生產環境建議搭配 `HOST=127.0.0.1` 僅對本機反向代理（如 Cloudflare Tunnel）開放。
 
-### 3. 綠區負載卸載閘門（`getServerLoad`）
+### 3. 放寬過載保護閘門（`getServerLoad`）
 
-伺服器透過 `monitorEventLoopDelay({ resolution: 20 })` 持續監測事件迴圈 p95 延遲（`lagMs`），並結合 RSS 記憶體、房間數（預設上限 `MAX_ROOMS=20`）與連線數（預設上限 `MAX_CLIENTS=80`）計算負載等級：
+伺服器透過 `monitorEventLoopDelay({ resolution: 20 })` 持續監測事件迴圈 p95 延遲（`lagMs`），並結合 RSS 記憶體（預設 `MAX_RSS_MB=640`）、房間數（預設 `MAX_ROOMS=80`）與連線數（預設 `MAX_CLIENTS=500`）計算負載等級：
 
 | 狀態 | 條件（任一成立） | 行為 |
 |---|---|---|
-| `red` | `lagMs >= 90` ms、`rooms >= maxRooms`、`clients >= maxClients` 或 `rssMb >= maxRssMb * 0.9` | 拒絕 `queue` 與 `create`，回傳 `server_busy` |
-| `yellow` | `lagMs >= 45` ms、`rooms >= 0.8 * maxRooms`、`clients >= 0.8 * maxClients` 或 `rssMb >= 0.8 * maxRssMb` | 拒絕 `queue` 與 `create`，回傳 `server_busy` |
+| `red` | `lagMs >= 160` ms、`rooms >= maxRooms`、`clients >= maxClients` 或 `rssMb >= maxRssMb * 0.9` | 拒絕 `queue` 與 `create`，回傳 `server_busy` 並累加 `rejectedBusy` |
+| `yellow` | `lagMs >= 80` ms、`rooms >= 0.8 * maxRooms`、`clients >= 0.85 * maxClients` 或 `rssMb >= 0.8 * maxRssMb` | 預警狀態，**仍允許正常配對與建立好友房**（僅記錄告警） |
 | `green` | 低於上述所有門檻 | 正常開放配對與建房 |
 
-當狀態非 `green` 時，已進行中的對局不受影響，新排隊或開房請求會收到 `{ type: 'error', code: 'server_busy', load }`，引導前端自動轉為單機 CPU 對戰。
+僅當狀態為 `red`（真正過載）時，新排隊或開房請求才會收到 `{ type: 'error', code: 'server_busy', load }`，確保大量純瀏覽／單機玩家不會誤鎖線上對戰配對。
 
-### 4. HTTP 與 WebSocket 安全強化
+### 4. WebSocket 心跳、節流廣播與安全強化
 
+- **節流與預先序列化廣播（`scheduleStatsBroadcast`）**：上線／離線／開房／排隊不再每次對全員重編 JSON，改以 `800ms` 防抖排程並對 legacy 與 compact v2 各自只做一次 `JSON.stringify`，將突發連線潮由 $O(N^2)$ 降為 $O(N)$，定時廣播間隔調為 `5000ms`。
+- **低負擔心跳**：伺服器主動 ping 預設調為 `pingIntervalMs = 5000` ms（`deadSocketTimeoutMs = 25000` ms），且任何有效進站 WebSocket 封包均同步更新 `lastPongAt`，避免活躍玩家因偶發排程抖動被誤踢。
 - **HTTP 安全標頭**：所有 HTTP 回應均附加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Permissions-Policy: camera=(), microphone=(), geolocation=()` 與嚴格 `Content-Security-Policy`（`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'self'; frame-ancestors 'none'`）。
-- **隱藏檔與路徑穿越封鎖**：拒絕任何包含空位元組（`\0`）、以 `.` 開頭的路徑區段（如 `/.env`）或超出 `staticDir` 範圍的請求，回傳 `403 Forbidden`。
+- **隱藏檔與路徑穿越封鎖**：拒絕任何包含空位元組（`\0`）、以 `.` 開頭的路徑區段（如 `/.env`）或超出範圍的請求，回傳 `403 Forbidden`。
 - **玩家名稱淨化（`sanitizeName`）**：移除控制字元與 `<>'"`&`，裁切至最多 16 字元；空字串則退回隨機 `PlayerXXXX`。
-- **WebSocket 防護**：`WebSocketServer` 設定 `maxPayload: 16 * 1024`（16 KB）並關閉 `perMessageDeflate: false`；連線時檢查來源 IP（支援 `cf-connecting-ip`／`x-forwarded-for`）並限制單一 IP 最多 `maxConnPerIp`（預設 `12`）條連線；每條連線套用 1 秒滑動視窗頻率限制，超過 `maxMsgsPerSec`（預設 `30`）則回傳 `rate_limited` 並以代碼 `1008` 關閉連線。
+- **WebSocket 防護**：`WebSocketServer` 設定 `maxPayload: 16 * 1024`（16 KB）並關閉 `perMessageDeflate: false`；連線時檢查來源 IP（支援 `cf-connecting-ip`／`x-forwarded-for`）並限制單一 IP 最多 `maxConnPerIp`（預設 `48`，兼容校園／宿舍與行動 CGNAT 共享 IP）條連線；每條連線套用 1 秒滑動視窗頻率限制，超過 `maxMsgsPerSec`（預設 `30`）則回傳 `rate_limited` 並以代碼 `1008` 關閉連線。
 
 ### 5. 優雅 `SIGTERM` 排空（Drain）
 

@@ -38,9 +38,9 @@
 - **舊連線防護**：`connect()` 的 `open`／`close`／`error` 都檢查 `this.ws === ws`，逾時被放棄的舊 socket 晚關閉時不會清掉新連線；預設連線逾時為 `6000` ms（行動網路喚醒較慢）。
 - **背景節流**：`document.hidden` 時不送探測，且丟棄 `> 3000` ms 的 RTT 樣本，避免切回前景後誤判 `poor` 而在佇列中被自動轉 CPU。
 
-### 3. 2 秒 RTT／抖動探測與 `NetQuality` 分級
+### 3. 4 秒 RTT／抖動探測與 `NetQuality` 分級
 
-`OnlineClient` 連線後啟動 `startPingLoop()`，每 `2000` ms 發送 `{ t: 'p', n: now }` 並以最近 5 筆樣本（`rttWindow`）計算平均延遲 `avgRttMs` 與抖動 `jitterMs = max(rttWindow) - min(rttWindow)`；若超過 `2500` ms 未收到回應則累計 `missedPings`。`recomputeNetQuality()` 依下列條件分級：
+`OnlineClient` 連線後啟動 `startPingLoop()`，每 `4000` ms 發送 `{ t: 'p', n: now }` 並以最近 5 筆樣本（`rttWindow`）計算平均延遲 `avgRttMs` 與抖動 `jitterMs = max(rttWindow) - min(rttWindow)`；若超過 `4500` ms 未收到回應則累計 `missedPings`。`recomputeNetQuality()` 依下列條件分級：
 
 | `NetQuality` | 觸發條件 |
 |---|---|
@@ -54,7 +54,7 @@
 `OnlineClient` 對外暴露兩個布林唯讀屬性與 `onNetUpdate` 訂閱回呼，供 `src/main.ts` 執行無感備援：
 
 - **`isUnstable`**：當 `!connected || netQuality === 'poor'` 時為 `true`。
-- **`isServerBusy`**：當從伺服器 `welcome`、`stats` 或 `error` 訊息收到的 `serverLoad !== 'green'` 時為 `true`。
+- **`isServerBusy`**：當從伺服器 `welcome`、`stats` 或 `error` 訊息收到的 `serverLoad === 'red'` 時為 `true`（`yellow` 預警等級不再阻擋線上配對或標示 `BUSY`）。
 
 ---
 
