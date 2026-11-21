@@ -72,18 +72,23 @@ import {
   applyBattedOutcome,
   applyDerbySwingResult,
   applyIntentionalWalk,
+  applyPitchClockViolation,
   applyPitchResult,
   canIntentionalWalk,
   captureAbsPreSnapshot,
   createMatch,
   getCurrentBatter,
   getFieldingTeam,
+  getPitchClockSeconds,
   recordChallengeableCall,
   type GameMode,
   type MatchState,
   type PlayerSlot,
 } from './rules/match';
 import './styles.css';
+
+declare const __BUILD__: string;
+const CLIENT_BUILD_VERSION = typeof __BUILD__ !== 'undefined' ? __BUILD__ : '';
 
 // --- DOM Elements ---
 const appViewport = document.getElementById('app') as HTMLElement;
@@ -103,7 +108,12 @@ const sbNormalRow = document.getElementById('sb-normal-row') as HTMLElement;
 const sbDerbyRow = document.getElementById('sb-derby-row') as HTMLElement;
 const sbDerbyText = document.getElementById('sb-derby-text') as HTMLElement;
 const sbPitcherEl = document.getElementById('sb-pitcher') as HTMLElement;
+const sbPitchClockEl = document.getElementById('sb-pitch-clock') as HTMLElement;
 const sbBsEl = document.getElementById('sb-bs') as HTMLElement;
+
+const updateBanner = document.getElementById('update-banner') as HTMLElement;
+const btnUpdateRefresh = document.getElementById('btn-update-refresh') as HTMLButtonElement;
+const btnUpdateDismiss = document.getElementById('btn-update-dismiss') as HTMLButtonElement;
 
 const pitcherDock = document.getElementById('pitcher-dock') as HTMLElement;
 const zoneTopHud = document.getElementById('zone-top-hud') as HTMLElement;
@@ -357,6 +367,66 @@ let totalHrBursts = 0;
 let absPromptTimer = 0;
 let absPromptMaxTimer = 2.5;
 let absReplay: AbsReplayState | null = null;
+let pitchClockSec = 15;
+let pitchClockLastWhole = 15;
+let detectedServerVersion: string | null = null;
+let updateBannerDismissed = false;
+
+const IS_DEV_MODE = Boolean((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV);
+
+function handleServerVersion(serverVer: string | null | undefined): void {
+  if (!serverVer || !CLIENT_BUILD_VERSION) return;
+  if (IS_DEV_MODE) return;
+  if (serverVer !== CLIENT_BUILD_VERSION) {
+    detectedServerVersion = serverVer;
+    if (!updateBannerDismissed) {
+      updateBanner.hidden = false;
+    }
+  }
+}
+
+async function pollHealthVersion(): Promise<void> {
+  if (IS_DEV_MODE || !CLIENT_BUILD_VERSION || detectedServerVersion) return;
+  if (document.visibilityState === 'hidden') return;
+  try {
+    const res = await fetch('./health', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = (await res.json()) as { version?: string | null };
+    handleServerVersion(data.version);
+  } catch {
+    // ignore transient offline errors
+  }
+}
+
+function isPitchClockEnabled(): boolean {
+  if (onTitleScreen || match.isGameOver) return false;
+  if (isOnline || spectating) return true;
+  return match.mode === 'quick3' || match.mode === 'official6' || match.mode === 'hotseat2p';
+}
+
+function updatePitchClockUi(running: boolean): void {
+  const enabled = isPitchClockEnabled();
+  sbPitchClockEl.hidden = !enabled;
+  if (!enabled) return;
+  const whole = Math.max(0, Math.ceil(pitchClockSec));
+  sbPitchClockEl.textContent = String(whole);
+  sbPitchClockEl.dataset.urgent = String(running && whole <= 5);
+  sbPitchClockEl.dataset.paused = String(!running);
+}
+
+function resetPitchClock(): void {
+  pitchClockSec = getPitchClockSeconds(match);
+  pitchClockLastWhole = Math.ceil(pitchClockSec);
+  updatePitchClockUi(false);
+}
+
+btnUpdateRefresh.addEventListener('click', () => {
+  window.location.reload();
+});
+btnUpdateDismiss.addEventListener('click', () => {
+  updateBannerDismissed = true;
+  updateBanner.hidden = true;
+});
 
 let capPos: FieldV3 = [0, 1.18, -8.87];
 let capNormalField: FieldV3 = [0, 1, 0];
@@ -842,6 +912,7 @@ function startMode(mode: GameMode): void {
   cam.resetImmediate();
   resetOutfielders(outfielders);
   selectPitch('straight');
+  resetPitchClock();
   updateHudAndDocks();
   updateSafeCameraFraming(true);
 
@@ -1897,6 +1968,7 @@ function enterOnlineMatch(
   selectPitch('straight');
   pendingPitchTelemetry = '';
   lastPitchTelemetry = getCurrentRole() === 'pitcher' ? t('telYourPitch') : t('telWaitingPitch');
+  resetPitchClock();
   updateHudAndDocks();
   updateSafeCameraFraming(true);
   if (match.isGameOver) {
@@ -1951,10 +2023,11 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
 function applyOnlinePitchResult(msg: PitchResultMsg): void {
   lastPitchTelemetry = msg.telemetry;
 
-  if (msg.ibb) {
+  if (msg.ibb || msg.clockViolation) {
     match = msg.match;
     onlinePitchSeq = msg.nextPitchSeq;
     onlineTurnState = match.isGameOver ? 'game_over' : 'awaiting_pitch';
+    resetSpringMeter();
     showCallout(msg.callout.title, msg.callout.subtitle, msg.callout.color, msg.callout.ttl);
     sfx.playUmpireTone('ball');
     enterResultPause();
@@ -2042,7 +2115,11 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
 
 onlineClient.onMessage((msg) => {
   switch (msg.type) {
-    case 'welcome':
+    case 'welcome': {
+      topOnlinePill.textContent = `${t('livePrefix')} ${msg.stats.online}`;
+      handleServerVersion(msg.version);
+      break;
+    }
     case 'stats': {
       topOnlinePill.textContent = `${t('livePrefix')} ${msg.stats.online}`;
       break;
@@ -2101,7 +2178,7 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'pitch_result': {
-      if (msg.ibb) {
+      if (msg.ibb || msg.clockViolation) {
         queuedOnlinePitchResult = null;
         applyOnlinePitchResult(msg);
       } else if (phase === 'windup' || phase === 'pitch_flight') {
@@ -2143,6 +2220,7 @@ onlineClient.onMessage((msg) => {
       };
       sfx.playUmpireTone(msg.overturned ? 'ball' : 'strike');
       if (match.isGameOver) saveSession(null);
+      else resetPitchClock();
       updateHudAndDocks();
       if (match.isGameOver) showGameOverModal();
       break;
@@ -2378,6 +2456,38 @@ function step(now: number): void {
     if (hitFx && hitFx.active) {
       hitFx.elapsedSec += dt;
       if (hitFx.elapsedSec > 0.45) hitFx.active = false;
+    }
+
+    // Pitch Clock tick (15s bases empty / 20s runners on base; paused during Play Call, ABS, or Menu pause)
+    if (isPitchClockEnabled()) {
+      const clockPhaseActive =
+        phase === 'idle' || (phase === 'pitch_meter' && springMeter.stage === 'charging');
+      const clockRunning =
+        clockPhaseActive &&
+        !isPlayCallActive() &&
+        (!isOnline || onlineTurnState === 'awaiting_pitch');
+      if (clockRunning) {
+        pitchClockSec = Math.max(0, pitchClockSec - dt);
+        const whole = Math.ceil(pitchClockSec);
+        if (whole < pitchClockLastWhole) {
+          pitchClockLastWhole = whole;
+          if (whole > 0 && whole <= 5) {
+            sfx.playClockTick(whole <= 2);
+          }
+        }
+        if (pitchClockSec <= 0 && !isOnline && !spectating) {
+          resetSpringMeter();
+          const res = applyPitchClockViolation(match);
+          if (res.applied) {
+            sfx.playUmpireTone('ball');
+            showCallout('PITCH CLOCK', res.walked ? 'WALK (BB)' : 'AUTO BALL', '#f97316', 2.2);
+            enterResultPause();
+          }
+        }
+      }
+      updatePitchClockUi(clockRunning);
+    } else {
+      updatePitchClockUi(false);
     }
 
     // Phase updates (always allow in-flight batted_flight and result to finish even if match.isGameOver!)
@@ -2692,8 +2802,9 @@ function step(now: number): void {
           resetOutfielders(outfielders);
           if (isOnline && !spectating) {
             lastPitchTelemetry =
-              getCurrentRole() === 'pitcher' ? 'YOUR PITCH' : 'WAITING FOR PITCH...';
+              getCurrentRole() === 'pitcher' ? t('telYourPitch') : t('telWaitingPitch');
           }
+          resetPitchClock();
           updateHudAndDocks();
           if (!isOnline && !spectating && getCurrentRole() === 'batter' && match.mode !== 'hotseat2p') {
             cpuAutoPitchTimer = 0.75;
@@ -2843,6 +2954,11 @@ function step(now: number): void {
     },
     absAvailable: isAbsChallengeAvailable(),
     absChallenges: { ...match.absChallenges },
+    pitchClockSec: Number(pitchClockSec.toFixed(2)),
+    pitchClockEnabled: isPitchClockEnabled(),
+    buildVersion: CLIENT_BUILD_VERSION,
+    detectedServerVersion,
+    updateBannerVisible: !updateBanner.hidden,
     derby: { ...match.derby },
     strikeZoneAlpha,
     battedEvents: {
@@ -2994,6 +3110,10 @@ if (urlCode && (!prevSession || prevSession.code !== urlCode)) {
       }
     });
 }
+
+window.setInterval(() => {
+  void pollHealthVersion();
+}, 60_000);
 
 applyLocaleToDom();
 requestAnimationFrame(step);

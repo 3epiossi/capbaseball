@@ -427,6 +427,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         cm: packMatch(msg.match as MatchState),
       };
       if (msg.ibb) out.ib = 1;
+      if (msg.clockViolation) out.cv = 1;
       if (msg.inningChanged) out.ic = 1;
       if (cr) out.r = cr;
       return out;
@@ -636,6 +637,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         nextPitchSeq: raw.nq,
         swung: raw.sw === 1,
         ibb: raw.ib === 1,
+        clockViolation: raw.cv === 1,
         swingData: null,
         resolution,
         outcome: raw.oc,

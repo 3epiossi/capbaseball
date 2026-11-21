@@ -731,4 +731,36 @@ describe('Online Multiplayer Server Integration', () => {
     expect(sync.code).toBe(code);
     expect(sync.side).toBe('away');
   });
+
+  it('15. Server authoritative Pitch Clock issues automatic ball on timeout and broadcasts clockViolation', async () => {
+    const clockSrv = await startServer(0, {
+      pitchClockScale: 0.012,
+      graceMs: 1000,
+    });
+    const host = await connectClient(clockSrv.port, 'ClockHost');
+    const guest = await connectClient(clockSrv.port, 'ClockGuest');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'ClockHost' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      const code = created.code as string;
+
+      guest.send({ type: 'join', code, name: 'ClockGuest' });
+      await host.nextMsg((m) => m.type === 'match_start');
+      await guest.nextMsg((m) => m.type === 'match_start');
+
+      // Do not pitch -> server Pitch Clock expires and broadcasts clockViolation pitch_result to both!
+      const [hRes, gRes] = await Promise.all([
+        host.nextMsg((m) => m.type === 'pitch_result', 3000),
+        guest.nextMsg((m) => m.type === 'pitch_result', 3000),
+      ]);
+      expect(hRes.clockViolation).toBe(true);
+      expect(gRes.clockViolation).toBe(true);
+      expect((hRes.match as { balls: number }).balls).toBe(1);
+      expect((hRes.callout as { title: string }).title).toBe('PITCH CLOCK');
+    } finally {
+      await host.close();
+      await guest.close();
+      await clockSrv.close();
+    }
+  });
 });

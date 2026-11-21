@@ -83,6 +83,10 @@ class RetroSfxEngine {
     this.tone(320, 580, 0.06, 'square', 0.11);
   }
 
+  playClockTick(urgent = false): void {
+    this.tone(urgent ? 880 : 660, urgent ? 880 : 660, 0.045, 'square', urgent ? 0.08 : 0.05);
+  }
+
   playUmpireTone(kind: 'strike' | 'ball' | 'out'): void {
     if (kind === 'strike') {
       this.tone(440, 440, 0.08, 'square', 0.1);

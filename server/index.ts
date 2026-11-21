@@ -33,10 +33,12 @@ import {
   applyBattedOutcome,
   applyDerbySwingResult,
   applyIntentionalWalk,
+  applyPitchClockViolation,
   applyPitchResult,
   canIntentionalWalk,
   captureAbsPreSnapshot,
   createMatch,
+  getPitchClockSeconds,
   recordChallengeableCall,
   type MatchState,
   type PlayerSlot,
@@ -132,6 +134,7 @@ interface Room {
   batterSide: 'R' | 'L';
   activePitch: ActivePitchData | null;
   swingTimer: NodeJS.Timeout | null;
+  pitchClockTimer: NodeJS.Timeout | null;
   players: {
     home: RoomPlayer;
     away: RoomPlayer | null;
@@ -151,6 +154,8 @@ export interface ServerOptions {
   /** How long a room with no guest survives its host going offline (sharing the code on a phone). */
   waitingGraceMs?: number;
   swingTimeoutPaddingMs?: number;
+  /** Scale factor for server Pitch Clock duration (1 = normal 15s/20s; 0 disables; <1 accelerates tests). */
+  pitchClockScale?: number;
   maxRooms?: number;
   maxClients?: number;
   maxRssMb?: number;
@@ -252,6 +257,7 @@ export function startServer(
   const graceMs = opts.graceMs ?? 45_000;
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
+  const pitchClockScale = opts.pitchClockScale ?? 1;
   const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 20);
   const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 80);
   const maxRssMb = opts.maxRssMb ?? (Number(process.env.MAX_RSS_MB) || 360);
@@ -351,9 +357,63 @@ export function startServer(
     }
   }
 
+  function clearPitchClock(room: Room) {
+    if (room.pitchClockTimer) {
+      clearTimeout(room.pitchClockTimer);
+      room.pitchClockTimer = null;
+    }
+  }
+
+  function armPitchClock(room: Room, postCallBufferMs = 2800) {
+    clearPitchClock(room);
+    if (pitchClockScale <= 0) return;
+    if (!room.players.away || room.turnState !== 'awaiting_pitch' || room.match.isGameOver) return;
+    if (!room.players.home.connected || !room.players.away.connected) return;
+    const limitMs = Math.max(
+      120,
+      Math.round((getPitchClockSeconds(room.match) * 1000 + postCallBufferMs) * pitchClockScale),
+    );
+    const expectedSeq = room.pitchSeq;
+    room.pitchClockTimer = setTimeout(() => {
+      room.pitchClockTimer = null;
+      if (room.turnState !== 'awaiting_pitch' || room.match.isGameOver || room.pitchSeq !== expectedSeq) return;
+      if (!room.players.home.connected || !room.players.away?.connected) return;
+      const res = applyPitchClockViolation(room.match);
+      if (!res.applied) return;
+      const solvedSeq = room.pitchSeq;
+      room.pitchSeq += 1;
+      room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
+      sendToRoom(room, {
+        type: 'pitch_result',
+        pitchSeq: solvedSeq,
+        nextPitchSeq: room.pitchSeq,
+        swung: false,
+        clockViolation: true,
+        swingData: null,
+        resolution: null,
+        outcome: res.walked ? 'WALK' : 'BALL',
+        callout: {
+          title: 'PITCH CLOCK',
+          subtitle: res.walked ? 'WALK (BB)' : 'AUTO BALL',
+          color: '#f97316',
+          ttl: 2.2,
+        },
+        inningChanged: false,
+        telemetry: 'PITCH CLOCK',
+        match: room.match,
+      });
+      if (room.match.isGameOver) {
+        recordMatchEnd(room, 'completed');
+      } else {
+        armPitchClock(room, 2600);
+      }
+    }, limitMs);
+  }
+
   function cleanupRoom(code: string) {
     const room = rooms.get(code);
     if (!room) return;
+    clearPitchClock(room);
     if (room.swingTimer) {
       clearTimeout(room.swingTimer);
       room.swingTimer = null;
@@ -633,6 +693,8 @@ export function startServer(
 
     if (room.match.isGameOver) {
       recordMatchEnd(room, 'completed');
+    } else {
+      armPitchClock(room, 3000);
     }
   }
 
@@ -769,6 +831,8 @@ export function startServer(
 
     if (room.match.isGameOver) {
       recordMatchEnd(room, 'completed');
+    } else {
+      armPitchClock(room, 4200);
     }
   }
 
@@ -793,6 +857,7 @@ export function startServer(
         names,
       });
     }
+    armPitchClock(room, 1500);
   }
 
   function tryPairQueue(mode: OnlineMode) {
@@ -829,6 +894,7 @@ export function startServer(
         batterSide: 'L',
         activePitch: null,
         swingTimer: null,
+        pitchClockTimer: null,
         players: {
           home: {
             token: crypto.randomUUID(),
@@ -1187,6 +1253,7 @@ export function startServer(
             batterSide: 'L',
             activePitch: null,
             swingTimer: null,
+            pitchClockTimer: null,
             players: {
               home: {
                 token,
@@ -1327,6 +1394,9 @@ export function startServer(
           if (opp?.ws) {
             sendJson(opp.ws, { type: 'opponent_reconnected' });
           }
+          if (room.turnState === 'awaiting_pitch') {
+            armPitchClock(room, 1500);
+          }
           break;
         }
 
@@ -1349,6 +1419,7 @@ export function startServer(
           if (msg.pitchSeq !== room.pitchSeq) return;
           if (!canIntentionalWalk(room.match)) return;
 
+          clearPitchClock(room);
           applyIntentionalWalk(room.match);
           const solvedSeq = room.pitchSeq;
           room.pitchSeq += 1;
@@ -1371,6 +1442,8 @@ export function startServer(
 
           if (room.match.isGameOver) {
             recordMatchEnd(room, 'completed');
+          } else {
+            armPitchClock(room, 2200);
           }
           break;
         }
@@ -1411,6 +1484,7 @@ export function startServer(
             Math.hypot(trajectory.breakDelta[1], trajectory.breakDelta[2]) * 100,
           );
 
+          clearPitchClock(room);
           room.turnState = 'awaiting_swing';
           room.activePitch = {
             pitchSeq: room.pitchSeq,
@@ -1584,7 +1658,10 @@ export function startServer(
             pitchSeq: room.pitchSeq,
           });
           if (room.match.isGameOver) {
+            clearPitchClock(room);
             recordMatchEnd(room, 'completed');
+          } else {
+            armPitchClock(room, 2600);
           }
           break;
         }
@@ -1593,6 +1670,7 @@ export function startServer(
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
           if (!room || room.turnState === 'game_over') return;
+          clearPitchClock(room);
           if (room.swingTimer) {
             clearTimeout(room.swingTimer);
             room.swingTimer = null;
@@ -1688,6 +1766,7 @@ export function startServer(
               // Already finished -> clean up immediately
               cleanupRoom(code);
             } else {
+              clearPitchClock(room);
               const oppSide: Side = side === 'home' ? 'away' : 'home';
               if (room.players.away) {
                 sendJson(room.players[oppSide]?.ws, {
@@ -1713,6 +1792,7 @@ export function startServer(
     clearInterval(heartbeatTimer);
     clearInterval(statsTimer);
     for (const room of rooms.values()) {
+      clearPitchClock(room);
       if (room.swingTimer) clearTimeout(room.swingTimer);
       for (const side of ['home', 'away'] as const) {
         const p = room.players[side];

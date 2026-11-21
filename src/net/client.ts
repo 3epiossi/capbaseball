@@ -64,6 +64,7 @@ export interface PitchResultMsg {
   nextPitchSeq: number;
   swung: boolean;
   ibb?: boolean;
+  clockViolation?: boolean;
   swingData: {
     flightTimeSec: number;
     batX: number;

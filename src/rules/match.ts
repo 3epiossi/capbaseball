@@ -534,6 +534,35 @@ export function applyIntentionalWalk(state: MatchState): boolean {
   return true;
 }
 
+/** Official Pitch Clock duration: 15s bases empty (or HR Derby), 20s with runners on base. */
+export function getPitchClockSeconds(state: MatchState): number {
+  if (state.derby.active) return 15;
+  return state.bases.some((b) => b !== null) ? 20 : 15;
+}
+
+/** Apply a pitcher Pitch Clock violation: automatic ball (or walk on ball 4; forfeited pitch in HR Derby). */
+export function applyPitchClockViolation(state: MatchState): { applied: boolean; walked: boolean } {
+  if (state.isGameOver) return { applied: false, walked: false };
+  state.lastChallenge = null;
+  if (state.derby.active) {
+    applyDerbySwingResult(state, false);
+    state.lastEvent = 'Pitch clock violation (Derby pitch forfeited)';
+    return { applied: true, walked: false };
+  }
+  const batter = getCurrentBatter(state);
+  state.balls += 1;
+  if (state.balls >= 4) {
+    getBattingTeam(state).walks += 1;
+    advanceForcedChain(state, batter.id);
+    advanceBatter(state);
+    state.lastEvent = `${batter.name} walks on pitch clock violation`;
+    checkWalkOff(state);
+    return { applied: true, walked: true };
+  }
+  state.lastEvent = `Pitch clock violation — automatic ball (${state.balls}-${state.strikes})`;
+  return { applied: true, walked: false };
+}
+
 export function captureAbsPreSnapshot(state: MatchState): AbsPreSnapshot {
   return {
     balls: state.balls,

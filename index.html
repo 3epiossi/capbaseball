@@ -52,6 +52,7 @@
               <div class="sb-count-cell">
                 <div class="sb-inning-bs">
                   <span class="sb-inning" id="sb-inning">▲1</span>
+                  <span class="sb-clock" id="sb-pitch-clock" hidden title="Pitch Clock">15</span>
                   <span class="sb-bs" id="sb-bs">0-0</span>
                 </div>
                 <div class="sb-pips-row">
@@ -235,6 +236,13 @@
           <span class="abs-btn-bar" aria-hidden="true"><i id="abs-timer-fill"></i></span>
         </button>
       </div>
+
+      <!-- Server Update Available Refresh Banner -->
+      <div id="update-banner" class="update-banner" hidden role="status" aria-live="polite">
+        <span class="ub-text" data-i18n="updateBannerText">SERVER UPDATED · REFRESH FOR LATEST VERSION</span>
+        <button type="button" class="act-btn primary ub-refresh" id="btn-update-refresh" data-i18n="btnRefreshNow">REFRESH</button>
+        <button type="button" class="ub-dismiss" id="btn-update-dismiss" aria-label="Dismiss">✕</button>
+      </div>
     </main>
 
     <!-- Native <dialog> Modals (no role="dialog", no aria-modal) -->
@@ -315,6 +323,7 @@
           <li><strong data-i18n="rule4Head">MOBILE BATTING:</strong><span data-i18n="rule4Body"> Hold &amp; drag to move the bat, then release to swing — or quick-tap to swing immediately.</span></li>
           <li><strong data-i18n="rule5Head">ABS HAWK-EYE:</strong><span data-i18n="rule5Body"> 2 challenges per team (retained if overturned). Tap ABS or press C while the call is visible.</span></li>
           <li><strong data-i18n="rule6Head">EXTRA INNINGS:</strong><span data-i18n="rule6Body"> Tied after 3 → 4th-inning bases-loaded tie-breaker → still tied → 5-pitch HR Derby!</span></li>
+          <li><strong data-i18n="rule7Head">PITCH CLOCK:</strong><span data-i18n="rule7Body"> 15s bases empty / 20s with runners on base (paused during calls &amp; ABS). Violation = automatic ball.</span></li>
         </ul>
       </div>
       <form method="dialog" class="dlg-foot">

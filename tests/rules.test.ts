@@ -27,7 +27,9 @@ import {
   applyBattedOutcome,
   applyDerbySwingResult,
   applyIntentionalWalk,
+  applyPitchClockViolation,
   applyPitchResult,
+  getPitchClockSeconds,
   canIntentionalWalk,
   captureAbsPreSnapshot,
   createMatch,
@@ -573,6 +575,38 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     applyDerbySwingResult(match, false);
     expect(match.derby.half).toBe('home');
     applyDerbySwingResult(match, true);
+    expect(match.isGameOver).toBe(true);
+    expect(match.winner).toBe('home');
+  });
+
+  it('enforces Pitch Clock (15s bases empty / 20s runners on base) and walk-off violation walk', () => {
+    const match = createMatch('quick3');
+    expect(getPitchClockSeconds(match)).toBe(15);
+
+    const v1 = applyPitchClockViolation(match);
+    expect(v1.applied).toBe(true);
+    expect(v1.walked).toBe(false);
+    expect(match.balls).toBe(1);
+
+    applyPitchClockViolation(match);
+    applyPitchClockViolation(match);
+    const v4 = applyPitchClockViolation(match);
+    expect(v4.walked).toBe(true);
+    expect(match.balls).toBe(0);
+    expect(match.bases[0]).not.toBeNull();
+    // Runner on 1B -> clock switches to 20s
+    expect(getPitchClockSeconds(match)).toBe(20);
+
+    // Bases loaded, bottom of 3rd tied, 3 balls -> 4th ball clock violation triggers walk-off win!
+    match.inning = 3;
+    match.half = 'bottom';
+    match.away.totalRuns = 1;
+    match.home.totalRuns = 1;
+    match.bases = ['r1', 'r2', 'r3'];
+    match.balls = 3;
+    const walkOff = applyPitchClockViolation(match);
+    expect(walkOff.walked).toBe(true);
+    expect(match.home.totalRuns).toBe(2);
     expect(match.isGameOver).toBe(true);
     expect(match.winner).toBe('home');
   });
