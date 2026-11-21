@@ -19,6 +19,13 @@
 ### 1. 權威對戰迴圈與冪等防護
 
 - **配對與房間生命週期**：支援快速配對佇列（`quick3`／`official6`）、4 碼親友房建立與加入、即時觀戰（`list`／`watch`／`unwatch`）、交換主客場再戰（`rematch`）與 `45` 秒斷線寬限重連（`reconnect`）。
+- **斷線與房間回收（2026-11-21 修正手機「Room code not found／Room is full」）**：
+  - 房主在好友尚未加入時斷線，房間不再立刻刪除，改保留 `waitingGraceMs`（預設 `300` 秒）；手機切去 LINE 貼房號時連線被系統中止，好友仍能加入。好友在房主離線時加入，會收到 `opponent_disconnected`，並改用 `graceMs`（`45` 秒）計時，逾時由 `expireSeat` 判對手勝並回收房間。
+  - 房主對尚無好友的房間 `reconnect`，回傳 `room_created`（同房號與 `token`）而非 `state_sync`，避免被丟進對 `WAITING` 的球場。
+  - 同一座位再次 `reconnect` 時關閉舊連線並清除舊 client 的 `roomCode`／`side`；`reconnect` 也會移出配對佇列與觀戰。
+  - 死連線偵測：`lastPongAt` 超過 `deadSocketTimeoutMs`（預設 `max(10000, pingIntervalMs * 5)`）即 `terminate()`，交由正常斷線流程啟動寬限，避免失訊手機永遠佔著座位。
+  - `rematch` 遇到房間已不在或對手離線，回 `error` 碼 `opponent_left`，不再靜默無回應。
+  - 已知未修：親友房在伺服器忙碌時回 `server_busy` 會被客戶端導向 CPU 對戰；建房／加入按鈕沒有連點防護；`sendToRoom` 清除失效觀戰者時未重設 `watchingCode`。
 - **回合與序號驗證**：每球遞增 `pitchSeq`，伺服器僅接受符合當前 `turnState`（`awaiting_pitch` 或 `awaiting_swing`）、正確投打方且 `msg.pitchSeq === room.pitchSeq` 的指令，自動忽略重複、過期或越權封包。
 - **投打結算**：收到 `pitch_submit` 後，伺服器以加密安全亂數產生 `seed` 並呼叫 `solvePitchTrajectory`（`120` Hz）計算軌跡，廣播 `pitch_launch` 並啟動逾時自動判不揮棒計時器；收到 `swing_input`、`no_swing` 或逾時後，呼叫 `evaluateSwingResolution`、`checkCatcherCatch`、`evaluateUmpirePitchCall` 與 `applyPitchResult` 完成權威判決並廣播 `pitch_result`。
 

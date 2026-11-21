@@ -33,6 +33,11 @@
 - **子路徑自動偵測**：`getBasePath()` 檢查 `window.location.pathname` 是否為 `/capbaseball` 或 `/capbaseball/...`，`getWsUrl()` 據此自動組出 `ws(s)://<host>/capbaseball/ws` 或 `ws(s)://<host>/ws`，同時相容根目錄與反向代理子路徑佈署。
 - **斷線重連憑證**：`saveSession` 與 `loadSession` 將房間代碼 `code` 與權杖 `token` 存於 `sessionStorage`（鍵名 `capbaseball_online_session`），供重新整理或短暫斷線後透過 `reconnect(code, token)` 恢復對戰。
 
+- **自動恢復連線（2026-11-21）**：`main.ts` 的 `resumeSession()` 在 `loadSession()` 有憑證時，於 `onStatus(false)`、`visibilitychange`（可見）與 `pageshow`（`persisted`，iOS bfcache）觸發 `connect()` 後送 `reconnect`，失敗以 `1`、`2`、`4`、最多 `5` 秒退避重試；憑證被清除（`match_over`、`reconnect_failed`、`opponent_left`）即停止。
+- **`?room=` 邀請連結**：開機時讀取後立即用 `history.replaceState` 從網址移除；若已有同房號的憑證，改走 `reconnect` 而非再次 `join`，避免重新整理後被伺服器判為 `room_full`。
+- **舊連線防護**：`connect()` 的 `open`／`close`／`error` 都檢查 `this.ws === ws`，逾時被放棄的舊 socket 晚關閉時不會清掉新連線；預設連線逾時為 `6000` ms（行動網路喚醒較慢）。
+- **背景節流**：`document.hidden` 時不送探測，且丟棄 `> 3000` ms 的 RTT 樣本，避免切回前景後誤判 `poor` 而在佇列中被自動轉 CPU。
+
 ### 3. 2 秒 RTT／抖動探測與 `NetQuality` 分級
 
 `OnlineClient` 連線後啟動 `startPingLoop()`，每 `2000` ms 發送 `{ t: 'p', n: now }` 並以最近 5 筆樣本（`rttWindow`）計算平均延遲 `avgRttMs` 與抖動 `jitterMs = max(rttWindow) - min(rttWindow)`；若超過 `2500` ms 未收到回應則累計 `missedPings`。`recomputeNetQuality()` 依下列條件分級：

@@ -12,7 +12,7 @@
 |---|---|---|
 | [physics.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/physics.test.ts) | 5 | 驗證 6-DOF 投球積分無 `NaN`、4 種球路瞄準誤差 `< 0.025` m、時鐘方向變化量、四元數／法向量朝向、座標系轉換與擊球反彈／過牆行為。 |
 | [rules.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/rules.test.ts) | 9 | 驗證球場幾何、5.06／5.07 安打與全壘打判決、不死三振與暴投、6 局延長突破僵局與禁止再見敬遠、弱化外野守備、擦棒界外球、ABS 邊緣誤判／挑戰與 3 局全壘打大賽驟死賽。 |
-| [multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) | 9 | 啟動真實 `startServer(0)` 測試親友房／快配對戰、敬遠與不揮棒、冪等序號防護、斷線重連、即時觀戰、ABS 挑戰同步、v2 精簡封包大小、綠區負載卸載與安全防護。 |
+| [multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) | 15 | 啟動真實 `startServer(0)` 測試親友房／快配對戰、敬遠與不揮棒、冪等序號防護、斷線重連、即時觀戰、ABS 挑戰同步、v2 精簡封包大小、綠區負載卸載與安全防護。 |
 
 ---
 
@@ -38,7 +38,7 @@
 8. 驗證邊緣 6.5 cm 主審 ~26% 誤判率、挑戰成功時自 `preSnapshot` 完整回溯局數／出局數且不扣次數，以及維持原判扣除 1 次次數。
 9. 驗證 `quick3` 從 3 局正規賽 → 第 4 局滿壘突破僵局 → 5 球全壘打大賽 → 每輪 1 球驟死賽的完整升級流程。
 
-### 3. `multiplayer.test.ts`（9 項測試）
+### 3. `multiplayer.test.ts`（15 項測試）
 
 1. 親友房建立、加入與完整投球→揮棒→擊球結算同步。
 2. 快速配對、敬遠保送（`ibb`）與不揮棒（`no_swing`）好球判決。
@@ -49,6 +49,11 @@
 7. **精簡 v2 線路協定封包大小斷言**：驗證客戶端 `ps` `< 80` bytes、`ns` `< 28` bytes，伺服器 `pl` `< 130` bytes、`pr` `< 550` bytes。
 8. **綠區負載卸載閘門**：以 `getLoadOverride` 強制設為 `red` 時，驗證 `queue` 與 `create` 回傳 `server_busy`；恢復 `green` 後立即恢復建房。
 9. **安全強化斷言**：驗證 `/health` 回傳 `nosniff`、`DENY` 與 `CSP` 標頭，封鎖 `/.env`（回傳 `403`／`404`），並確認 `hello` 名稱中的 `<script>`／`<img>` 等 XSS 字元已被清除。
+10. 房主在好友加入前斷線，好友於寬限內加入成功，房主憑 `token` 重連取得 `state_sync` 並通知對手。
+11. 房主斷線後在好友加入前重連，收到同房號與 `token` 的 `room_created`。
+12. 等待中的房間在 `waitingGraceMs` 後回收，之後加入回 `room_not_found`；12b：好友在房主離線時加入，收到 `opponent_disconnected`，`graceMs` 後判勝。
+13. 不回應 ping 的連線會被伺服器 `terminate()`（`deadSocketTimeoutMs`）。
+14. 好友斷線後以 `token` `reconnect` 保住座位，另一個新連線 `join` 仍回 `room_full`。
 
 ---
 
