@@ -1,9 +1,11 @@
-# fallen skywalker — Cap Baseball（瓶蓋棒球）v1.0.0
+# fallen skywalker — Cap Baseball（瓶蓋棒球）
 
 以 **2025 年 2 月版瓶蓋棒球規則**為核心打造的 16-bit 像素風格 3D 競技網頁遊戲，支援單機對戰 CPU、本機雙人、打擊／投球練習、即時線上隨機配對（含自動降級 CPU 備援）、朋友私房對戰與即時觀戰。
 
+- **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
-- **目前里程碑**：`v1.0.0`（對應已部署版本 `20261121-035657`）
+- **目前里程碑**：`v1.0.0` 起步，Pi 現行部署版本 `20261121-164640`
+- **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
 
@@ -16,7 +18,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 23 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 31 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
