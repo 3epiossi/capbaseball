@@ -176,6 +176,7 @@ export type ServerMessage =
       pitchSeq: number;
     }
   | { type: 'emote'; side: OnlineSide; id: string }
+  | { type: 'pause_state'; pausedSides: OnlineSide[]; remainingSec: number }
   | { type: 'notice'; kind: string }
   | { type: 'error'; code: string; message: string; load?: ServerLoadStatus };
 
@@ -585,5 +586,9 @@ export class OnlineClient {
 
   sendEmote(id: string): void {
     this.sendRaw({ t: 'em', e: id });
+  }
+
+  sendMenuPause(paused: boolean): void {
+    this.sendRaw({ t: 'mp', p: paused ? 1 : 0 });
   }
 }

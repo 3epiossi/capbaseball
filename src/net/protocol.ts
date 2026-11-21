@@ -345,6 +345,8 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
       return { type: 'rematch' };
     case 'em':
       return { type: 'emote', id: raw.e };
+    case 'mp':
+      return { type: 'menu_pause', paused: raw.p === 1 || raw.p === true };
     default:
       return raw;
   }
@@ -549,6 +551,14 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         t: 'em',
         s: msg.side === 'home' ? 1 : 0,
         e: msg.id,
+      };
+    case 'pause_state':
+      return {
+        t: 'mp',
+        sd: Array.isArray(msg.pausedSides)
+          ? (msg.pausedSides as string[]).map((s) => (s === 'home' ? 1 : 0))
+          : [],
+        sec: typeof msg.remainingSec === 'number' ? msg.remainingSec : 0,
       };
     case 'error':
       return {
@@ -760,6 +770,12 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         type: 'emote',
         side: raw.s === 1 ? 'home' : 'away',
         id: raw.e,
+      };
+    case 'mp':
+      return {
+        type: 'pause_state',
+        pausedSides: Array.isArray(raw.sd) ? raw.sd.map((v) => (v === 1 ? 'home' : 'away')) : [],
+        remainingSec: typeof raw.sec === 'number' ? raw.sec : 0,
       };
     case 'er':
       return {

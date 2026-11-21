@@ -505,17 +505,19 @@ emoteCtrl.sfxEnabled = initialEmoteSfx;
 // Wire 4-tab Settings navigation
 const settingsTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-set-tab]'));
 const settingsPanes = Array.from(document.querySelectorAll<HTMLElement>('[data-set-pane]'));
+function selectSettingsTab(target: string): void {
+  for (const b of settingsTabButtons) {
+    const active = b.dataset.setTab === target;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
+  }
+  for (const p of settingsPanes) {
+    p.hidden = p.dataset.setPane !== target;
+  }
+}
 for (const tabBtn of settingsTabButtons) {
   tabBtn.addEventListener('click', () => {
-    const target = tabBtn.dataset.setTab;
-    for (const b of settingsTabButtons) {
-      const active = b.dataset.setTab === target;
-      b.classList.toggle('active', active);
-      b.setAttribute('aria-selected', String(active));
-    }
-    for (const p of settingsPanes) {
-      p.hidden = p.dataset.setPane !== target;
-    }
+    if (tabBtn.dataset.setTab) selectSettingsTab(tabBtn.dataset.setTab);
   });
 }
 
@@ -709,9 +711,14 @@ let totalHrBursts = 0;
 
 let absPromptTimer = 0;
 let absPromptMaxTimer = 2.5;
+let oppAbsWaitTimer = 0;
 let absReplay: AbsReplayState | null = null;
 const ONLINE_MENU_TIMEOUT_SEC = 20;
 let onlineMenuTimerSec = 0;
+let onlinePausedSides: OnlineSide[] = [];
+let onlinePauseRemainingSec = 0;
+let onlineOpponentDisconnected = false;
+let lastSentOnlineMenuPaused = false;
 let pitchClockSec = 15;
 let pitchClockLastWhole = 15;
 let detectedServerVersion: string | null = null;
@@ -719,6 +726,29 @@ let updateBannerDismissed = false;
 
 function isOnlineMenuTimerActive(): boolean {
   return isOnline && !spectating && !onTitleScreen && !match.isGameOver;
+}
+
+function isOnlineMatchFrozen(): boolean {
+  return isOnline && (onlinePausedSides.length > 0 || onlineOpponentDisconnected);
+}
+
+function syncOnlineMenuPauseState(): void {
+  const shouldPause =
+    isOnlineMenuTimerActive() && (menuDialog.open || rulesDialog.open || settingsDialog.open);
+  if (shouldPause !== lastSentOnlineMenuPaused) {
+    lastSentOnlineMenuPaused = shouldPause;
+    if (onlineClient.connected) {
+      onlineClient.sendMenuPause(shouldPause);
+    }
+  }
+}
+
+function resetOnlineFreezeState(): void {
+  onlinePausedSides = [];
+  onlinePauseRemainingSec = 0;
+  onlineOpponentDisconnected = false;
+  lastSentOnlineMenuPaused = false;
+  oppAbsWaitTimer = 0;
 }
 
 function updateOnlineMenuTimerUi(): void {
@@ -1033,6 +1063,8 @@ function isPlayCallActive(): boolean {
     presentationQueue.length > 0 ||
     onZoneFeedback !== null ||
     isAbsChallengeAvailable() ||
+    oppAbsWaitTimer > 0 ||
+    isOnlineMatchFrozen() ||
     Boolean(absReplay && absReplay.active) ||
     transitionDirector.isActive()
   );
@@ -1188,7 +1220,14 @@ function updateHudAndDocks(): void {
   const playCallBlocking = isPlayCallActive();
   btnThrow.disabled = playCallBlocking && phase === 'idle';
   if (phase === 'idle') {
-    btnThrow.textContent = playCallBlocking ? t('btnWait') : t('btnHoldToPitch');
+    if (onlineOpponentDisconnected) {
+      btnThrow.textContent = t('callOpponentOffline');
+    } else if (onlinePausedSides.length > 0) {
+      const rem = Math.max(1, Math.ceil(onlinePauseRemainingSec));
+      btnThrow.textContent = `${t('callOpponentPaused')} (${rem}s)`;
+    } else {
+      btnThrow.textContent = playCallBlocking ? t('btnWait') : t('btnHoldToPitch');
+    }
   }
   btnIbb.disabled = !canIntentionalWalk(match) || phase !== 'idle' || playCallBlocking;
   btnResign.hidden = !isOnline || spectating || onTitleScreen || match.isGameOver;
@@ -1329,6 +1368,7 @@ function returnToTitle(): void {
   btnMuteEmotes.hidden = true;
   btnAbsChallenge.hidden = true;
   resetSpringMeter();
+  resetOnlineFreezeState();
   absPromptTimer = 0;
   absReplay = null;
   capVisible = false;
@@ -1388,6 +1428,7 @@ function launchPitch(
   capVisible = false;
   capTrail = [];
   resetSpringMeter();
+  resetOnlineFreezeState();
   absPromptTimer = 0;
   absReplay = null;
   updateHudAndDocks();
@@ -2413,11 +2454,16 @@ btnRules.addEventListener('click', () => {
 });
 btnSettings.addEventListener('click', () => {
   if (menuDialog.open) menuDialog.close();
+  selectSettingsTab('controls');
   settingsDialog.showModal();
 });
 btnNickChip.addEventListener('click', () => {
-  settingsDialog.showModal();
+  cancelSpringCharge();
+  if (menuDialog.open) menuDialog.close();
+  selectSettingsTab('account');
+  if (!settingsDialog.open) settingsDialog.showModal();
   onlineNameInput.focus();
+  onlineNameInput.select();
 });
 
 // --- Online UI, Lobby Hub, Load/Stability Auto-CPU Failover & Spectating ---
@@ -2730,6 +2776,7 @@ function enterOnlineMatch(
   emoteCtrl.setOnlineSendEnabled(true);
   emoteCtrl.setVisible(true);
   btnMuteEmotes.hidden = false;
+  resetOnlineFreezeState();
   absPromptTimer = 0;
   absReplay = null;
   batterSwungThisPitch = false;
@@ -2987,6 +3034,14 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       showOnZoneFeedback(takePayload, getFeedbackDurationSec(), true);
       startAbsPromptWindow();
       presentationQueue.push({ kind: 'wait_abs' });
+    } else if (
+      !spectating &&
+      match.lastChallenge &&
+      !match.lastChallenge.challenged &&
+      match.absChallenges[match.lastChallenge.eligibleSide] > 0
+    ) {
+      // Opponent has a 2.2s ABS decision window; hold pitcher briefly so they cannot sneak-throw over ABS!
+      oppAbsWaitTimer = 2.2;
     }
     presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
   }
@@ -3114,6 +3169,7 @@ onlineClient.onMessage((msg) => {
       onlinePitchSeq = msg.pitchSeq;
       onlineTurnState = match.isGameOver ? 'game_over' : 'awaiting_pitch';
       absPromptTimer = 0;
+      oppAbsWaitTimer = 0;
       btnAbsChallenge.hidden = true;
       clearPresentationQueue();
       absReplay = {
@@ -3158,17 +3214,54 @@ onlineClient.onMessage((msg) => {
       updateHudAndDocks();
       break;
     }
+    case 'pause_state': {
+      const wasOppPaused =
+        onlineSide !== null && onlinePausedSides.some((s) => s !== onlineSide);
+      const wasSelfPaused =
+        onlineSide !== null && onlinePausedSides.includes(onlineSide);
+      onlinePausedSides = msg.pausedSides;
+      onlinePauseRemainingSec = msg.remainingSec;
+      const nowOppPaused =
+        onlineSide !== null && onlinePausedSides.some((s) => s !== onlineSide);
+      const nowSelfPaused =
+        onlineSide !== null && onlinePausedSides.includes(onlineSide);
+
+      if (nowOppPaused && !wasOppPaused) {
+        cancelSpringCharge();
+        emoteCtrl.showSystem(t('callOpponentPaused'), `${Math.max(1, Math.ceil(msg.remainingSec))}s`, '#f97316', 2800);
+      } else if (!nowOppPaused && wasOppPaused && onlinePausedSides.length === 0) {
+        emoteCtrl.showSystem(t('callPlayBall'), '', '#4ade80', 1800);
+      }
+      // If server's authoritative 20s timeout unpaused us while a dialog is still open, close it cleanly!
+      if (wasSelfPaused && !nowSelfPaused && (menuDialog.open || rulesDialog.open || settingsDialog.open)) {
+        if (rulesDialog.open) rulesDialog.close();
+        if (settingsDialog.open) settingsDialog.close();
+        if (menuDialog.open) menuDialog.close();
+        menuOnlineTimerEl.hidden = true;
+        onlineMenuTimerSec = 0;
+        lastSentOnlineMenuPaused = false;
+        emoteCtrl.showSystem(t('callMenuTimeout'), t('callResumingMatch'), '#f97316', 2400);
+      }
+      updateHudAndDocks();
+      break;
+    }
     case 'opponent_disconnected': {
+      onlineOpponentDisconnected = true;
+      cancelSpringCharge();
       emoteCtrl.showSystem(t('callOpponentOffline'), `${t('callWaitingReconnect')} (${msg.graceSec}s)...`, '#f97316', 3200);
+      updateHudAndDocks();
       break;
     }
     case 'opponent_reconnected': {
+      onlineOpponentDisconnected = false;
       emoteCtrl.showSystem(t('callReconnected'), t('callPlayBall'), '#4ade80', 2200);
+      updateHudAndDocks();
       break;
     }
     case 'match_over': {
       queuedOnlinePitchResult = null;
       pendingOnlineResult = null;
+      resetOnlineFreezeState();
       match = msg.match;
       onlineTurnState = 'game_over';
       phase = 'result';
@@ -3378,7 +3471,21 @@ function step(now: number): void {
       updateHudAndDocks();
     }
 
-    // Online mode menu pause countdown: force-close menu/rules/settings when timer hits 0 so match resumes
+    // Online mode menu pause sync & countdown: notify server so BOTH players' Pitch Clocks freeze!
+    syncOnlineMenuPauseState();
+    if (onlinePausedSides.length > 0 && onlinePauseRemainingSec > 0) {
+      const prevWhole = Math.ceil(onlinePauseRemainingSec);
+      onlinePauseRemainingSec = Math.max(0, onlinePauseRemainingSec - rawDt);
+      if (Math.ceil(onlinePauseRemainingSec) !== prevWhole) {
+        updateHudAndDocks();
+      }
+    }
+    if (oppAbsWaitTimer > 0) {
+      oppAbsWaitTimer = Math.max(0, oppAbsWaitTimer - rawDt);
+      if (oppAbsWaitTimer === 0) {
+        updateHudAndDocks();
+      }
+    }
     if (isOnlineMenuTimerActive() && (menuDialog.open || rulesDialog.open || settingsDialog.open)) {
       if (onlineMenuTimerSec <= 0) {
         onlineMenuTimerSec = ONLINE_MENU_TIMEOUT_SEC;
@@ -3390,6 +3497,7 @@ function step(now: number): void {
         if (settingsDialog.open) settingsDialog.close();
         if (menuDialog.open) menuDialog.close();
         menuOnlineTimerEl.hidden = true;
+        syncOnlineMenuPauseState();
         emoteCtrl.showSystem(t('callMenuTimeout'), t('callResumingMatch'), '#f97316', 2400);
       }
     } else if (onlineMenuTimerSec > 0) {

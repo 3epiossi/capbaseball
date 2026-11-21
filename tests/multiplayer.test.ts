@@ -1156,4 +1156,122 @@ describe('Online Multiplayer Server Integration', () => {
     expect(start1.code).toBe(roomA.code);
     expect(start2.code).toBe(roomA.code);
   });
+
+  it('24. Online menu_pause freezes server Pitch Clock, blocks opponent throws/IBB, and auto-resumes on timeout', async () => {
+    const pauseSrv = await startServer(0, {
+      pitchClockScale: 0.03, // ~450ms pitch clock
+      menuPauseMs: 500, // 500ms authoritative menu pause timeout
+      absWindowMs: 0,
+    });
+    const host = await connectClient(pauseSrv.port, 'PauseHost');
+    const guest = await connectClient(pauseSrv.port, 'PauseGuest');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'PauseHost' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      guest.send({ type: 'join', code: created.code, name: 'PauseGuest' });
+      await host.nextMsg((m) => m.type === 'match_start');
+      await guest.nextMsg((m) => m.type === 'match_start');
+
+      // Guest (batter) opens Menu -> BOTH sides receive pause_state and server Pitch Clock freezes!
+      guest.send({ type: 'menu_pause', paused: true });
+      const psH = await host.nextMsg((m) => m.type === 'pause_state');
+      const psG = await guest.nextMsg((m) => m.type === 'pause_state');
+      expect(psH.pausedSides).toEqual(['away']);
+      expect(psG.pausedSides).toEqual(['away']);
+
+      // While guest is paused, host (pitcher) tries to throw & IBB -> MUST be ignored!
+      host.send({
+        type: 'pitch_submit',
+        pitchSeq: 1,
+        pitchId: 'straight',
+        speedKmh: 70,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      host.send({ type: 'ibb', pitchSeq: 1 });
+
+      // Wait 320ms (well past pitchClock ~450ms if it hadn't frozen after start; ensure no launch or violation during pause)
+      await new Promise((r) => setTimeout(r, 320));
+      expect(host.queue.filter((m) => m.type === 'pitch_launch' || m.type === 'pitch_result').length).toBe(0);
+
+      // Authoritative 500ms menu pause auto-expires -> broadcasts empty pausedSides and resumes Pitch Clock -> clockViolation fires!
+      const unpausedH = await host.nextMsg((m) => m.type === 'pause_state' && Array.isArray(m.pausedSides) && m.pausedSides.length === 0, 2000);
+      expect(unpausedH.pausedSides).toEqual([]);
+
+      const violation = await host.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
+      expect(violation.clockViolation).toBe(true);
+    } finally {
+      await host.close();
+      await guest.close();
+      await pauseSrv.close();
+    }
+  });
+
+  it('25. ABS window protects batter from premature sneak-throws until window ends or ABS is triggered', async () => {
+    const absSrv = await startServer(0, {
+      pitchClockScale: 0,
+      absWindowMs: 350,
+    });
+    const host = await connectClient(absSrv.port, 'AbsHost');
+    const guest = await connectClient(absSrv.port, 'AbsGuest');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'AbsHost' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      guest.send({ type: 'join', code: created.code, name: 'AbsGuest' });
+      await host.nextMsg((m) => m.type === 'match_start');
+      await guest.nextMsg((m) => m.type === 'match_start');
+
+      // Pitch #1: strike taken -> batter (away) has ABS window for 350ms
+      host.send({
+        type: 'pitch_submit',
+        pitchSeq: 1,
+        pitchId: 'straight',
+        speedKmh: 70,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      await host.nextMsg((m) => m.type === 'pitch_launch');
+      await guest.nextMsg((m) => m.type === 'pitch_launch');
+      guest.send({ type: 'no_swing', pitchSeq: 1 });
+      await host.nextMsg((m) => m.type === 'pitch_result');
+      await guest.nextMsg((m) => m.type === 'pitch_result');
+
+      // Pitcher immediately attempts sneak-throw pitchSeq=2 during batter's ABS window -> rejected!
+      host.send({
+        type: 'pitch_submit',
+        pitchSeq: 2,
+        pitchId: 'straight',
+        speedKmh: 70,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      await new Promise((r) => setTimeout(r, 150));
+      expect(host.queue.filter((m) => m.type === 'pitch_launch').length).toBe(0);
+
+      // After ABS window expires, pitchSeq=2 succeeds cleanly!
+      await new Promise((r) => setTimeout(r, 260));
+      host.send({
+        type: 'pitch_submit',
+        pitchSeq: 2,
+        pitchId: 'straight',
+        speedKmh: 70,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      const launch2 = await host.nextMsg((m) => m.type === 'pitch_launch', 2000);
+      expect(launch2.pitchSeq).toBe(2);
+    } finally {
+      await host.close();
+      await guest.close();
+      await absSrv.close();
+    }
+  });
 });

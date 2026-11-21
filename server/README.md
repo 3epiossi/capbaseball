@@ -34,7 +34,9 @@
   - 已知未修：親友房在伺服器忙碌時回 `server_busy` 會被客戶端導向 CPU 對戰；建房／加入按鈕沒有連點防護；`sendToRoom` 清除失效觀戰者時未重設 `watchingCode`。
 - **回合與序號驗證**：每球遞增 `pitchSeq`，伺服器僅接受符合當前 `turnState`（`awaiting_pitch` 或 `awaiting_swing`）、正確投打方且 `msg.pitchSeq === room.pitchSeq` 的指令，自動忽略重複、過期或越權封包。
 - **投打結算**：收到 `pitch_submit` 後，伺服器以加密安全亂數產生 `seed` 並呼叫 `solvePitchTrajectory`（`120` Hz）計算軌跡，廣播 `pitch_launch` 並啟動逾時自動判不揮棒計時器；收到 `swing_input`、`no_swing` 或逾時後，呼叫 `evaluateSwingResolution`、`checkCatcherCatch`、`evaluateUmpirePitchCall` 與 `applyPitchResult` 完成權威判決並廣播 `pitch_result`。
-- **權威投球時鐘（Pitch Clock）**：開賽與每球結束進入 `awaiting_pitch` 時由 `armPitchClock` 啟動倒數（無跑者 `15` 秒／有跑者 `20` 秒＋結算緩衝，測試可透過 `pitchClockScale` 調整），斷線寬限期間自動暫停；逾時由 `applyPitchClockViolation` 判自動壞球／保送並廣播帶 `cv: 1` 的 `pitch_result`。
+- **權威投球時鐘（Pitch Clock）與線上暫停同步（2026-11-22 修正）**：
+  - **問題**：初版線上 20 秒選單倒數只在前端運作，伺服器與對手毫不知情，導致一方開選單時對手的計時鐘照常倒數、甚至可趁對手在看設定時直接偷投或觸發超時壞球；此外對手斷線期間前端時鐘未停、投手開精簡轉場時能搶在對手 2.2 秒 ABS 決策結束前出手，且固定 `3000`／`4200` ms 緩衝短於完整轉場演出總時長。
+  - **解法**：新增雙向 `menu_pause`／`pause_state`（精簡 v2 短鍵 `mp`），任一方開啟選單／規則／設定時，伺服器以 `pausePitchClock` 精確凍結剩餘毫秒數並廣播 `pause_state`，同時在 `pitch_submit`／`ibb` 鎖定雙方操作，並由伺服器執行權威 20 秒上限（`menuPauseMs`）逾時自動續算；斷線期間同步凍結時鐘與操作；新增 `absWindowUntil`（`2200` ms）阻擋 ABS 視窗內偷投；`finalizeNoContact` 與 `finalizeSwing` 依當球事件（ABS、三振、換局、飛球時長、全壘打）動態計算 `postCallBufferMs`。
 
 ### 2. 雙路徑服務、記憶體快取與流量監控端點
 

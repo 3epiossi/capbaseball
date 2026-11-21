@@ -4,7 +4,7 @@
 
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
-- **目前里程碑**：`v2.0.2`（語意化三段式版本號），Pi 現行部署版本 `20261122-051056`
+- **目前里程碑**：`v2.0.3`（語意化三段式版本號），Pi 現行部署版本 `20261122-052641`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -18,7 +18,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 42 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 44 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -172,3 +172,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **問題**：兩名玩家各自建立空房後，其中一方輸入對方房號加入時，[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 的 `if (client.roomCode) return;` 直接靜默丟棄請求造成雙方卡死。
   - **解法**：新增 `abandonWaitingRoomIfHost` 自動回收加入方的空等待房並直接開打；輸入自己房號或打錯房號時回傳明確錯誤且不誤刪原房，並於 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 新增第 23 項整合測試覆蓋。
 - **其餘 v2.0.0 系統升級**：外野滾地攔截守備（[src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts)）、扣倒制（2 局起 10 分差提前結束）、480 公開＋20 好友房保留席、捕手回傳演出（[src/render/catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts)）、4 分頁設定與行動版破除快取自動更新橫幅。
+- **v2.0.3 線上同步與設定入口修正（2026-11-22）**：
+  - **單方開選單時對手投球時鐘照走／偷投**：新增前後端雙向 `menu_pause`／`pause_state`（v2 短鍵 `mp`），任一方開啟選單、規則或設定時，伺服器精確凍結剩餘投球時鐘毫秒數並鎖定雙方投球與 `IBB`，同時以權威 20 秒上限自動續算恢復。
+  - **對手斷線與 ABS 視窗同步**：斷線寬限期間前後端同步凍結時鐘與投球鈕；伺服器新增 `absWindowUntil`（`2200` ms）搭配前端 `oppAbsWaitTimer`，防止投手在精簡轉場下搶在對手 ABS 決策結束前出手；`armPitchClock` 改依當球事件動態計算轉場緩衝秒數避免誤判超時。
+  - **點擊玩家名稱直達帳號分頁**：修正點擊右上角名稱按鈕（`#btn-nick-chip`）只開在第一個分頁的問題，改由 `selectSettingsTab('account')` 直接切到帳號頁並自動全選名稱輸入框。

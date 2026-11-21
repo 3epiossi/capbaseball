@@ -137,6 +137,12 @@ interface Room {
   activePitch: ActivePitchData | null;
   swingTimer: NodeJS.Timeout | null;
   pitchClockTimer: NodeJS.Timeout | null;
+  pitchClockDeadlineAt: number | null;
+  pitchClockRemainingMs: number | null;
+  pausedBy: Set<Side>;
+  pauseTimers: Record<Side, NodeJS.Timeout | null>;
+  pauseExpiresAt: Record<Side, number>;
+  absWindowUntil: number;
   players: {
     home: RoomPlayer;
     away: RoomPlayer | null;
@@ -158,6 +164,10 @@ export interface ServerOptions {
   swingTimeoutPaddingMs?: number;
   /** Scale factor for server Pitch Clock duration (1 = normal 15s/20s; 0 disables; <1 accelerates tests). */
   pitchClockScale?: number;
+  /** Max duration (ms) a single player's online menu pause can hold the match (default 20000). */
+  menuPauseMs?: number;
+  /** Protection window (ms) preventing pitcher sneak-throws while opponent decides on ABS (default 2200). */
+  absWindowMs?: number;
   maxRooms?: number;
   maxClients?: number;
   /** Soft cap for public matchmaking; clients above this up to maxClients are reserved for Friend Rooms (default maxClients - 20 = 480). */
@@ -303,6 +313,8 @@ export function startServer(
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const pitchClockScale = opts.pitchClockScale ?? 1;
+  const menuPauseMs = opts.menuPauseMs ?? 20_000;
+  const absWindowMs = opts.absWindowMs ?? 2_200;
   const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 80);
   const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 500);
   const publicClientCap =
@@ -593,22 +605,74 @@ export function startServer(
       clearTimeout(room.pitchClockTimer);
       room.pitchClockTimer = null;
     }
+    room.pitchClockDeadlineAt = null;
+    room.pitchClockRemainingMs = null;
   }
 
-  function armPitchClock(room: Room, postCallBufferMs = 2800) {
-    clearPitchClock(room);
+  function pausePitchClock(room: Room) {
+    if (room.pitchClockTimer) {
+      clearTimeout(room.pitchClockTimer);
+      room.pitchClockTimer = null;
+      if (room.pitchClockDeadlineAt !== null) {
+        room.pitchClockRemainingMs = Math.max(250, room.pitchClockDeadlineAt - Date.now());
+      }
+      room.pitchClockDeadlineAt = null;
+    }
+  }
+
+  function clearRoomPauses(room: Room) {
+    for (const s of ['home', 'away'] as const) {
+      if (room.pauseTimers[s]) {
+        clearTimeout(room.pauseTimers[s]!);
+        room.pauseTimers[s] = null;
+      }
+      room.pauseExpiresAt[s] = 0;
+    }
+    room.pausedBy.clear();
+  }
+
+  function getPauseRemainingSec(room: Room): number {
+    if (room.pausedBy.size === 0) return 0;
+    const nowTs = Date.now();
+    let maxMs = 0;
+    for (const s of room.pausedBy) {
+      maxMs = Math.max(maxMs, Math.max(0, room.pauseExpiresAt[s] - nowTs));
+    }
+    return Math.max(1, Math.ceil(maxMs / 1000));
+  }
+
+  function broadcastPauseState(room: Room) {
+    sendToRoom(room, {
+      type: 'pause_state',
+      pausedSides: Array.from(room.pausedBy),
+      remainingSec: getPauseRemainingSec(room),
+    });
+  }
+
+  function armPitchClockMs(room: Room, limitMs: number) {
+    if (room.pitchClockTimer) {
+      clearTimeout(room.pitchClockTimer);
+      room.pitchClockTimer = null;
+    }
+    room.pitchClockDeadlineAt = null;
+    room.pitchClockRemainingMs = null;
     if (pitchClockScale <= 0) return;
     if (!room.players.away || room.turnState !== 'awaiting_pitch' || room.match.isGameOver) return;
     if (!room.players.home.connected || !room.players.away.connected) return;
-    const limitMs = Math.max(
-      120,
-      Math.round((getPitchClockSeconds(room.match) * 1000 + postCallBufferMs) * pitchClockScale),
-    );
+    if (room.pausedBy.size > 0) {
+      room.pitchClockRemainingMs = Math.max(120, limitMs);
+      return;
+    }
+    const clampedMs = Math.max(120, Math.round(limitMs));
     const expectedSeq = room.pitchSeq;
+    room.pitchClockDeadlineAt = Date.now() + clampedMs;
     room.pitchClockTimer = setTimeout(() => {
       room.pitchClockTimer = null;
+      room.pitchClockDeadlineAt = null;
+      room.pitchClockRemainingMs = null;
       if (room.turnState !== 'awaiting_pitch' || room.match.isGameOver || room.pitchSeq !== expectedSeq) return;
       if (!room.players.home.connected || !room.players.away?.connected) return;
+      if (room.pausedBy.size > 0) return;
       const res = applyPitchClockViolation(room.match);
       if (!res.applied) return;
       monitor.pitchClockViolations += 1;
@@ -640,13 +704,40 @@ export function startServer(
       } else {
         armPitchClock(room, 2600);
       }
-    }, limitMs);
+    }, clampedMs);
+  }
+
+  function armPitchClock(room: Room, postCallBufferMs = 2800) {
+    if (pitchClockScale <= 0) {
+      clearPitchClock(room);
+      return;
+    }
+    const limitMs = Math.max(
+      120,
+      Math.round((getPitchClockSeconds(room.match) * 1000 + postCallBufferMs) * pitchClockScale),
+    );
+    armPitchClockMs(room, limitMs);
+  }
+
+  function resumePitchClock(room: Room) {
+    if (room.pausedBy.size > 0) return;
+    if (!room.players.away || !room.players.home.connected || !room.players.away.connected) return;
+    if (room.turnState !== 'awaiting_pitch' || room.match.isGameOver) return;
+    if (room.pitchClockTimer) return;
+    if (room.pitchClockRemainingMs !== null) {
+      const floorMs = Math.round(1500 * pitchClockScale);
+      const rem = Math.max(floorMs, room.pitchClockRemainingMs);
+      armPitchClockMs(room, rem);
+    } else {
+      armPitchClock(room, 1500);
+    }
   }
 
   function cleanupRoom(code: string) {
     const room = rooms.get(code);
     if (!room) return;
     clearPitchClock(room);
+    clearRoomPauses(room);
     if (room.swingTimer) {
       clearTimeout(room.swingTimer);
       room.swingTimer = null;
@@ -956,9 +1047,24 @@ export function startServer(
     });
 
     if (room.match.isGameOver) {
+      room.absWindowUntil = 0;
       recordMatchEnd(room, 'completed');
     } else {
-      armPitchClock(room, 3000);
+      const lc = room.match.lastChallenge;
+      const absEligible =
+        !swung &&
+        Boolean(lc && !lc.challenged && room.match.absChallenges[lc.eligibleSide] > 0);
+      room.absWindowUntil =
+        absEligible && absWindowMs > 0
+          ? Date.now() + Math.round(absWindowMs * (pitchClockScale > 0 ? Math.min(1, pitchClockScale) : 1))
+          : 0;
+      const struckOut = room.match.strikes === 0 && room.match.lastEvent.includes('strikes out');
+      const bufMs =
+        2400 +
+        (absEligible ? 2400 : 0) +
+        (struckOut ? 1400 : 0) +
+        (inningChanged ? 1200 : 0);
+      armPitchClock(room, bufMs);
     }
   }
 
@@ -1135,10 +1241,16 @@ export function startServer(
       match: room.match,
     });
 
+    room.absWindowUntil = 0;
     if (room.match.isGameOver) {
       recordMatchEnd(room, 'completed');
     } else {
-      armPitchClock(room, 4200);
+      const flightMs = resolution.contact ? Math.round(resolution.battedResult.flightTimeSec * 1000) : 0;
+      const bufMs =
+        Math.max(3200, flightMs + 2800) +
+        (outcome === 'HR' ? 1600 : 0) +
+        (inningChanged ? 1200 : 0);
+      armPitchClock(room, bufMs);
     }
   }
 
@@ -1206,6 +1318,12 @@ export function startServer(
         activePitch: null,
         swingTimer: null,
         pitchClockTimer: null,
+        pitchClockDeadlineAt: null,
+        pitchClockRemainingMs: null,
+        pausedBy: new Set(),
+        pauseTimers: { home: null, away: null },
+        pauseExpiresAt: { home: 0, away: 0 },
+        absWindowUntil: 0,
         players: {
           home: {
             token: crypto.randomUUID(),
@@ -1653,6 +1771,12 @@ export function startServer(
             activePitch: null,
             swingTimer: null,
             pitchClockTimer: null,
+            pitchClockDeadlineAt: null,
+            pitchClockRemainingMs: null,
+            pausedBy: new Set(),
+            pauseTimers: { home: null, away: null },
+            pauseExpiresAt: { home: 0, away: 0 },
+            absWindowUntil: 0,
             players: {
               home: {
                 token,
@@ -1806,8 +1930,14 @@ export function startServer(
           if (opp?.ws) {
             sendJson(opp.ws, { type: 'opponent_reconnected' });
           }
-          if (room.turnState === 'awaiting_pitch') {
-            armPitchClock(room, 1500);
+          if (room.pausedBy.size > 0) {
+            sendJson(ws, {
+              type: 'pause_state',
+              pausedSides: Array.from(room.pausedBy),
+              remainingSec: getPauseRemainingSec(room),
+            });
+          } else if (room.turnState === 'awaiting_pitch') {
+            resumePitchClock(room);
           }
           break;
         }
@@ -1826,12 +1956,22 @@ export function startServer(
         case 'ibb': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_pitch' || client.side !== getPitchingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
-            if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
+          if (
+            !room ||
+            !room.players.away ||
+            !room.players.home.connected ||
+            !room.players.away.connected ||
+            room.pausedBy.size > 0 ||
+            room.turnState !== 'awaiting_pitch' ||
+            client.side !== getPitchingSide(room.match) ||
+            msg.pitchSeq !== room.pitchSeq
+          ) {
+            if (room && room.turnState !== 'game_over' && room.pausedBy.size === 0) monitor.staleOrOutOfTurnIgnored += 1;
             return;
           }
           if (!canIntentionalWalk(room.match)) return;
           room.lastActivityAt = Date.now();
+          room.absWindowUntil = 0;
 
           clearPitchClock(room);
           applyIntentionalWalk(room.match);
@@ -1868,15 +2008,22 @@ export function startServer(
           if (
             !room ||
             !room.players.away ||
+            !room.players.home.connected ||
+            !room.players.away.connected ||
+            room.pausedBy.size > 0 ||
+            Date.now() < room.absWindowUntil ||
             room.turnState !== 'awaiting_pitch' ||
             client.side !== getPitchingSide(room.match) ||
             msg.pitchSeq !== room.pitchSeq ||
             room.solvingSeq === room.pitchSeq
           ) {
-            if (room && room.players.away && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
+            if (room && room.players.away && room.turnState !== 'game_over' && room.pausedBy.size === 0 && Date.now() >= room.absWindowUntil) {
+              monitor.staleOrOutOfTurnIgnored += 1;
+            }
             return;
           }
           room.lastActivityAt = Date.now();
+          room.absWindowUntil = 0;
 
           const pitchId = PITCH_IDS.includes(msg.pitchId as PitchId)
             ? (msg.pitchId as PitchId)
@@ -2136,6 +2283,7 @@ export function startServer(
           monitor.absChallengesTotal += 1;
           if (res.overturned) monitor.absOverturned += 1;
           room.lastActivityAt = Date.now();
+          room.absWindowUntil = 0;
 
           room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
           sendToRoom(room, {
@@ -2152,9 +2300,10 @@ export function startServer(
           });
           if (room.match.isGameOver) {
             clearPitchClock(room);
+            clearRoomPauses(room);
             recordMatchEnd(room, 'completed');
           } else {
-            armPitchClock(room, 2600);
+            armPitchClock(room, 3200);
           }
           break;
         }
@@ -2164,6 +2313,8 @@ export function startServer(
           const room = rooms.get(client.roomCode);
           if (!room || room.turnState === 'game_over') return;
           clearPitchClock(room);
+          clearRoomPauses(room);
+          room.absWindowUntil = 0;
           if (room.swingTimer) {
             clearTimeout(room.swingTimer);
             room.swingTimer = null;
@@ -2220,6 +2371,9 @@ export function startServer(
           if (awayClient) awayClient.side = 'away';
 
           room.rematchVotes.clear();
+          clearRoomPauses(room);
+          clearPitchClock(room);
+          room.absWindowUntil = 0;
           room.match = buildMatchState(room.mode, room.players.home.name, room.players.away.name, room.mercyRule);
           room.pitchSeq = 1;
           room.solvingSeq = null;
@@ -2242,6 +2396,47 @@ export function startServer(
           if (now - client.lastEmoteAt < 3000) return;
           client.lastEmoteAt = now;
           sendToRoom(room, { type: 'emote', side: client.side, id: emoteId });
+          break;
+        }
+
+        case 'menu_pause': {
+          if (!client.roomCode || !client.side) return;
+          const room = rooms.get(client.roomCode);
+          if (!room || !room.players.away || room.turnState === 'game_over') return;
+          const side = client.side;
+          const wantPause = Boolean(msg.paused);
+          room.lastActivityAt = now;
+
+          if (wantPause) {
+            if (!room.pausedBy.has(side)) {
+              room.pausedBy.add(side);
+              room.pauseExpiresAt[side] = now + menuPauseMs;
+              if (room.pauseTimers[side]) clearTimeout(room.pauseTimers[side]!);
+              room.pauseTimers[side] = setTimeout(() => {
+                room.pauseTimers[side] = null;
+                room.pauseExpiresAt[side] = 0;
+                if (!room.pausedBy.delete(side)) return;
+                if (rooms.get(room.code) !== room || room.turnState === 'game_over') return;
+                broadcastPauseState(room);
+                if (room.pausedBy.size === 0) {
+                  resumePitchClock(room);
+                }
+              }, menuPauseMs);
+              pausePitchClock(room);
+              broadcastPauseState(room);
+            }
+          } else if (room.pausedBy.has(side)) {
+            if (room.pauseTimers[side]) {
+              clearTimeout(room.pauseTimers[side]!);
+              room.pauseTimers[side] = null;
+            }
+            room.pauseExpiresAt[side] = 0;
+            room.pausedBy.delete(side);
+            broadcastPauseState(room);
+            if (room.pausedBy.size === 0) {
+              resumePitchClock(room);
+            }
+          }
           break;
         }
       }
@@ -2274,7 +2469,13 @@ export function startServer(
               // Already finished -> clean up immediately
               cleanupRoom(code);
             } else {
-              clearPitchClock(room);
+              if (room.pauseTimers[side]) {
+                clearTimeout(room.pauseTimers[side]!);
+                room.pauseTimers[side] = null;
+              }
+              room.pauseExpiresAt[side] = 0;
+              room.pausedBy.delete(side);
+              pausePitchClock(room);
               const oppSide: Side = side === 'home' ? 'away' : 'home';
               if (room.players.away) {
                 monitor.disconnectsInMatch += 1;
@@ -2307,6 +2508,7 @@ export function startServer(
     }
     for (const room of rooms.values()) {
       clearPitchClock(room);
+      clearRoomPauses(room);
       if (room.swingTimer) clearTimeout(room.swingTimer);
       for (const side of ['home', 'away'] as const) {
         const p = room.players[side];
