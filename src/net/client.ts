@@ -301,6 +301,8 @@ export class OnlineClient {
   }
 
   private recordRtt(ms: number): void {
+    if (ms > 3000) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
     const clamped = Math.max(1, Math.min(9999, Math.round(ms)));
     this.rttMs = clamped;
     this.missedPings = 0;
@@ -313,6 +315,7 @@ export class OnlineClient {
     this.stopPingLoop();
     const sendProbe = () => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (this.pendingPingAt > 0 && Date.now() - this.pendingPingAt >= 2500) {
         this.missedPings += 1;
         this.recomputeNetQuality();
@@ -346,7 +349,7 @@ export class OnlineClient {
     this.emitNet();
   }
 
-  connect(name?: string, timeoutMs = 2600): Promise<void> {
+  connect(name?: string, timeoutMs = 6000): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return Promise.resolve();
     }
@@ -361,6 +364,7 @@ export class OnlineClient {
         if (!settled) {
           settled = true;
           this.connectPromise = null;
+          if (this.ws === ws) this.ws = null;
           try {
             ws.close();
           } catch {
@@ -372,6 +376,18 @@ export class OnlineClient {
 
       ws.addEventListener('open', () => {
         window.clearTimeout(connectTimer);
+        if (this.ws !== ws) {
+          try {
+            ws.close();
+          } catch {
+            // ignore
+          }
+          if (!settled) {
+            settled = true;
+            reject(new Error('WebSocket superseded'));
+          }
+          return;
+        }
         settled = true;
         this.connectPromise = null;
         this.setConnected(true);
@@ -416,22 +432,25 @@ export class OnlineClient {
 
       ws.addEventListener('close', () => {
         window.clearTimeout(connectTimer);
-        this.setConnected(false);
-        this.ws = null;
-        this.connectPromise = null;
         if (!settled) {
           settled = true;
+          if (this.ws === ws) this.connectPromise = null;
           reject(new Error('WebSocket closed before open'));
         }
+        if (this.ws !== ws) return;
+        this.ws = null;
+        this.connectPromise = null;
+        this.setConnected(false);
       });
 
       ws.addEventListener('error', () => {
         window.clearTimeout(connectTimer);
         if (!settled) {
           settled = true;
-          this.connectPromise = null;
+          if (this.ws === ws) this.connectPromise = null;
           reject(new Error('WebSocket connection error'));
         }
+        if (this.ws !== ws) return;
       });
     });
 

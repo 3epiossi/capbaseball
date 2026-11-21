@@ -94,6 +94,7 @@ interface ClientMeta {
   watchingCode: string | null;
   queuedMode: OnlineMode | null;
   lastPingSentAt: number;
+  lastPongAt: number;
   msgWindowStart: number;
   msgCount: number;
 }
@@ -145,7 +146,10 @@ export interface ServerOptions {
   staticDir?: string;
   matchLogPath?: string;
   pingIntervalMs?: number;
+  deadSocketTimeoutMs?: number;
   graceMs?: number;
+  /** How long a room with no guest survives its host going offline (sharing the code on a phone). */
+  waitingGraceMs?: number;
   swingTimeoutPaddingMs?: number;
   maxRooms?: number;
   maxClients?: number;
@@ -244,7 +248,9 @@ export function startServer(
       fileURLToPath(new URL('../dist', import.meta.url)),
   );
   const pingIntervalMs = opts.pingIntervalMs ?? 2000;
+  const deadSocketTimeoutMs = opts.deadSocketTimeoutMs ?? Math.max(10_000, pingIntervalMs * 5);
   const graceMs = opts.graceMs ?? 45_000;
+  const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 20);
   const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 80);
@@ -372,6 +378,29 @@ export function startServer(
     room.spectators.clear();
     rooms.delete(code);
     checkDrainComplete();
+  }
+
+  /** A player's reconnect grace ran out: forfeit a started match, then free the room. */
+  function expireSeat(code: string, side: Side) {
+    const room = rooms.get(code);
+    const player = room?.players[side];
+    if (!room || !player) return;
+    player.disconnectTimer = null;
+    const oppSide: Side = side === 'home' ? 'away' : 'home';
+    if (room.players.away && room.turnState !== 'game_over') {
+      room.match.isGameOver = true;
+      room.match.winner = oppSide;
+      room.match.lastEvent = `${player.name} disconnected (timeout)`;
+      room.turnState = 'game_over';
+      recordMatchEnd(room, 'disconnect_timeout');
+      sendToRoom(room, {
+        type: 'match_over',
+        winner: oppSide,
+        reason: 'disconnect_timeout',
+        match: room.match,
+      });
+    }
+    cleanupRoom(code);
   }
 
   function recordMatchEnd(room: Room, reason: string) {
@@ -990,6 +1019,10 @@ export function startServer(
     const t = Date.now();
     for (const c of clients.values()) {
       if (c.ws.readyState === WebSocket.OPEN) {
+        if (t - c.lastPongAt > deadSocketTimeoutMs) {
+          c.ws.terminate();
+          continue;
+        }
         c.lastPingSentAt = t;
         sendJson(c.ws, { type: 'ping', t });
       }
@@ -1014,6 +1047,7 @@ export function startServer(
     ipConnCounts.set(ip, curIpConns + 1);
 
     const clientId = crypto.randomUUID();
+    const nowOnConnect = Date.now();
     const client: ClientMeta = {
       id: clientId,
       ws,
@@ -1025,8 +1059,9 @@ export function startServer(
       side: null,
       watchingCode: null,
       queuedMode: null,
-      lastPingSentAt: Date.now(),
-      msgWindowStart: Date.now(),
+      lastPingSentAt: nowOnConnect,
+      lastPongAt: nowOnConnect,
+      msgWindowStart: nowOnConnect,
       msgCount: 0,
     };
     clients.set(clientId, client);
@@ -1062,6 +1097,7 @@ export function startServer(
         }
 
         case 'pong': {
+          client.lastPongAt = Date.now();
           const sentAt = typeof msg.t === 'number' ? msg.t : client.lastPingSentAt;
           client.rttMs = Math.max(0, Math.min(9999, Date.now() - sentAt));
           break;
@@ -1216,11 +1252,24 @@ export function startServer(
             side: 'away',
           });
           startMatchInRoom(room);
+          const host = room.players.home;
+          if (host.disconnectTimer) {
+            // Host went offline while waiting; the match has started, so fall back to the normal grace.
+            clearTimeout(host.disconnectTimer);
+            host.disconnectTimer = setTimeout(() => expireSeat(code, 'home'), graceMs);
+            sendJson(ws, { type: 'opponent_disconnected', graceSec: Math.round(graceMs / 1000) });
+          }
           broadcastStats();
           break;
         }
 
         case 'reconnect': {
+          removeFromQueues(clientId);
+          if (client.watchingCode) {
+            const watched = rooms.get(client.watchingCode);
+            watched?.spectators.delete(client);
+            client.watchingCode = null;
+          }
           const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
           const token = typeof msg.token === 'string' ? msg.token : '';
           const room = rooms.get(code);
@@ -1242,12 +1291,35 @@ export function startServer(
             clearTimeout(player.disconnectTimer);
             player.disconnectTimer = null;
           }
+          if (player.ws && player.ws !== ws) {
+            const oldClient = player.clientId ? clients.get(player.clientId) : null;
+            if (oldClient) {
+              oldClient.roomCode = null;
+              oldClient.side = null;
+            }
+            try {
+              player.ws.close(1000, 'replaced_by_reconnect');
+            } catch {
+              // ignore
+            }
+          }
           player.clientId = clientId;
           player.ws = ws;
           player.connected = true;
           client.roomCode = code;
           client.side = matchedSide;
           client.name = player.name;
+
+          if (!room.players.away) {
+            sendJson(ws, {
+              type: 'room_created',
+              code,
+              mode: room.mode,
+              token: player.token,
+              side: 'home',
+            });
+            break;
+          }
 
           sendStateSync(room, matchedSide);
           const oppSide: Side = matchedSide === 'home' ? 'away' : 'home';
@@ -1543,14 +1615,25 @@ export function startServer(
         }
 
         case 'rematch': {
-          if (!client.roomCode || !client.side) return;
+          if (!client.roomCode || !client.side) {
+            sendJson(ws, { type: 'error', code: 'opponent_left', message: 'Opponent left' });
+            return;
+          }
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'game_over' || !room.players.away) return;
+          if (!room || room.turnState !== 'game_over' || !room.players.away) {
+            sendJson(ws, { type: 'error', code: 'opponent_left', message: 'Opponent left' });
+            return;
+          }
+          const oppSide: Side = client.side === 'home' ? 'away' : 'home';
+          const opp = room.players[oppSide];
+          if (!opp || !opp.connected || !opp.ws || opp.ws.readyState !== WebSocket.OPEN) {
+            sendJson(ws, { type: 'error', code: 'opponent_left', message: 'Opponent left' });
+            return;
+          }
 
           room.rematchVotes.add(client.side);
           if (room.rematchVotes.size < 2) {
-            const oppSide: Side = client.side === 'home' ? 'away' : 'home';
-            sendJson(room.players[oppSide]?.ws, { type: 'rematch_requested', side: client.side });
+            sendJson(opp.ws, { type: 'rematch_requested', side: client.side });
             return;
           }
 
@@ -1601,31 +1684,21 @@ export function startServer(
             player.connected = false;
             player.ws = null;
 
-            if (!room.players.away || room.turnState === 'game_over') {
-              // Room hasn't started or already finished -> clean up immediately
+            if (room.turnState === 'game_over') {
+              // Already finished -> clean up immediately
               cleanupRoom(code);
             } else {
               const oppSide: Side = side === 'home' ? 'away' : 'home';
-              sendJson(room.players[oppSide]?.ws, {
-                type: 'opponent_disconnected',
-                graceSec: Math.round(graceMs / 1000),
-              });
-              player.disconnectTimer = setTimeout(() => {
-                if (room.turnState !== 'game_over') {
-                  room.match.isGameOver = true;
-                  room.match.winner = oppSide;
-                  room.match.lastEvent = `${player.name} disconnected (timeout)`;
-                  room.turnState = 'game_over';
-                  recordMatchEnd(room, 'disconnect_timeout');
-                  sendToRoom(room, {
-                    type: 'match_over',
-                    winner: oppSide,
-                    reason: 'disconnect_timeout',
-                    match: room.match,
-                  });
-                }
-                cleanupRoom(code);
-              }, graceMs);
+              if (room.players.away) {
+                sendJson(room.players[oppSide]?.ws, {
+                  type: 'opponent_disconnected',
+                  graceSec: Math.round(graceMs / 1000),
+                });
+              }
+              player.disconnectTimer = setTimeout(
+                () => expireSeat(code, side),
+                room.players.away ? graceMs : waitingGraceMs,
+              );
             }
           }
         }

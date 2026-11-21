@@ -563,4 +563,172 @@ describe('Online Multiplayer Server Integration', () => {
     expect(String(w.name)).not.toContain('<');
     expect(String(w.name)).not.toContain('>');
   });
+
+  it('10. Host disconnects while waiting, guest joins within grace, host reconnects into started match', async () => {
+    const host = await connectClient(srv.port, 'Host');
+    host.send({ type: 'create', mode: 'quick3', name: 'Host' });
+    const created = await host.nextMsg((m) => m.type === 'room_created');
+    const code = created.code as string;
+    const hostToken = created.token as string;
+
+    await host.close();
+
+    const guest = await connectClient(srv.port, 'Guest');
+    openClients.push(guest);
+    guest.send({ type: 'join', code, name: 'Guest' });
+    const joined = await guest.nextMsg((m) => m.type === 'room_joined' || m.type === 'error');
+    expect(joined.type).toBe('room_joined');
+    expect(joined.code).toBe(code);
+    await guest.nextMsg((m) => m.type === 'match_start');
+
+    const hostReconnected = await connectClient(srv.port, 'Host');
+    openClients.push(hostReconnected);
+    hostReconnected.send({ type: 'reconnect', code, token: hostToken });
+    const sync = await hostReconnected.nextMsg((m) => m.type === 'state_sync');
+    expect(sync.code).toBe(code);
+    expect(sync.side).toBe('home');
+    expect((sync.names as { away: string }).away).toBe('Guest');
+
+    const oppBack = await guest.nextMsg((m) => m.type === 'opponent_reconnected');
+    expect(oppBack.type).toBe('opponent_reconnected');
+  });
+
+  it('11. Host disconnects and reconnects before any guest -> gets room_created with same code', async () => {
+    const host = await connectClient(srv.port, 'Host');
+    host.send({ type: 'create', mode: 'quick3', name: 'Host' });
+    const created = await host.nextMsg((m) => m.type === 'room_created');
+    const code = created.code as string;
+    const token = created.token as string;
+
+    await host.close();
+
+    const host2 = await connectClient(srv.port, 'Host');
+    openClients.push(host2);
+    host2.send({ type: 'reconnect', code, token });
+    const msg = await host2.nextMsg((m) => m.type === 'room_created' || m.type === 'state_sync');
+    expect(msg.type).toBe('room_created');
+    expect(msg.code).toBe(code);
+    expect(msg.side).toBe('home');
+    expect(msg.token).toBe(token);
+  });
+
+  it('12. Waiting room is deleted after waitingGraceMs if host never returns', async () => {
+    const shortSrv = await startServer(0, {
+      matchLogPath: path.join(tmpDir, 'short-grace.jsonl'),
+      pingIntervalMs: 5000,
+      graceMs: 60_000,
+      waitingGraceMs: 120,
+    });
+    const host = await connectClient(shortSrv.port, 'Host');
+    const guest = await connectClient(shortSrv.port, 'Guest');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'Host' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      const code = created.code as string;
+
+      await host.close();
+      expect(shortSrv.rooms.has(code)).toBe(true);
+
+      await new Promise((r) => setTimeout(r, 220));
+      expect(shortSrv.rooms.has(code)).toBe(false);
+
+      guest.send({ type: 'join', code, name: 'Guest' });
+      const err = await guest.nextMsg((m) => m.type === 'error');
+      expect(err.code).toBe('room_not_found');
+    } finally {
+      await guest.close();
+      await shortSrv.close();
+    }
+  });
+
+  it('12b. Guest joining while host is offline gets opponent_disconnected and wins after graceMs, not waitingGraceMs', async () => {
+    const shortSrv = await startServer(0, {
+      matchLogPath: path.join(tmpDir, 'join-offline-host.jsonl'),
+      pingIntervalMs: 5000,
+      graceMs: 150,
+      waitingGraceMs: 60_000,
+    });
+    const host = await connectClient(shortSrv.port, 'Host');
+    const guest = await connectClient(shortSrv.port, 'Guest');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'Host' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      const code = created.code as string;
+      await host.close();
+
+      guest.send({ type: 'join', code, name: 'Guest' });
+      await guest.nextMsg((m) => m.type === 'room_joined');
+      const off = await guest.nextMsg((m) => m.type === 'opponent_disconnected');
+      expect(off.graceSec).toBe(0);
+      const over = await guest.nextMsg((m) => m.type === 'match_over', 2000);
+      expect(over.winner).toBe('away');
+      expect(over.reason).toBe('disconnect_timeout');
+      expect(shortSrv.rooms.has(code)).toBe(false);
+    } finally {
+      await guest.close();
+      await shortSrv.close();
+    }
+  });
+
+  it('13. Client that stops answering pings is terminated by heartbeat', async () => {
+    const hbSrv = await startServer(0, {
+      matchLogPath: path.join(tmpDir, 'hb.jsonl'),
+      pingIntervalMs: 30,
+      deadSocketTimeoutMs: 100,
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${hbSrv.port}`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => {
+          ws.send(JSON.stringify({ type: 'hello', name: 'Silent' }));
+          resolve();
+        });
+        ws.once('error', reject);
+      });
+
+      const closed = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), 1500);
+        ws.once('close', () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+      expect(closed).toBe(true);
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) ws.close();
+      await hbSrv.close();
+    }
+  });
+
+  it('14. Guest reconnect with token keeps its seat while a second join gets room_full', async () => {
+    const host = await connectClient(srv.port, 'Host');
+    const guest = await connectClient(srv.port, 'Guest');
+    openClients.push(host);
+
+    host.send({ type: 'create', mode: 'quick3', name: 'Host' });
+    const created = await host.nextMsg((m) => m.type === 'room_created');
+    const code = created.code as string;
+
+    guest.send({ type: 'join', code, name: 'Guest' });
+    const joined = await guest.nextMsg((m) => m.type === 'room_joined');
+    const guestToken = joined.token as string;
+    await host.nextMsg((m) => m.type === 'match_start');
+    await guest.nextMsg((m) => m.type === 'match_start');
+
+    await guest.close();
+    await host.nextMsg((m) => m.type === 'opponent_disconnected');
+
+    const intruder = await connectClient(srv.port, 'Intruder');
+    openClients.push(intruder);
+    intruder.send({ type: 'join', code, name: 'Intruder' });
+    const fullErr = await intruder.nextMsg((m) => m.type === 'error');
+    expect(fullErr.code).toBe('room_full');
+
+    const guest2 = await connectClient(srv.port, 'Guest');
+    openClients.push(guest2);
+    guest2.send({ type: 'reconnect', code, token: guestToken });
+    const sync = await guest2.nextMsg((m) => m.type === 'state_sync');
+    expect(sync.code).toBe(code);
+    expect(sync.side).toBe('away');
+  });
 });

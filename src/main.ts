@@ -1922,6 +1922,7 @@ onlineClient.onMessage((msg) => {
       saveSession({ code: msg.code, token: msg.token });
       roomCodeDisplay.textContent = msg.code;
       roomCreatedBox.hidden = false;
+      if (!friendDialog.open) friendDialog.showModal(); // also after resuming a waiting room
       friendStatusMsg.textContent = `ROOM ${msg.code} READY · WAITING FOR FRIEND...`;
       break;
     }
@@ -2027,6 +2028,9 @@ onlineClient.onMessage((msg) => {
       if (msg.code === 'server_busy') {
         autoFallbackToCpu('SERVER BUSY', 'AUTO-MATCHED VS CPU');
       } else if (msg.code === 'reconnect_failed') {
+        saveSession(null);
+      } else if (msg.code === 'opponent_left') {
+        showCallout('OPPONENT LEFT', msg.message.toUpperCase(), '#f97316', 2.2);
         saveSession(null);
       }
       break;
@@ -2653,22 +2657,105 @@ void loadSprites().then((loaded) => {
   sprites = loaded;
 });
 
+// --- Auto-resume active online session on socket drop / app switch / bfcache ---
+let resumeTimer: number | null = null;
+let resumeAttempt = 0;
+let resumeInFlight = false;
+
+function clearResumeTimer(): void {
+  if (resumeTimer !== null) {
+    window.clearTimeout(resumeTimer);
+    resumeTimer = null;
+  }
+}
+
+function resumeSession(): void {
+  const session = loadSession();
+  if (!session) {
+    clearResumeTimer();
+    resumeAttempt = 0;
+    return;
+  }
+  if (document.visibilityState !== 'visible') return;
+  if (onlineClient.connected || resumeInFlight) return;
+
+  clearResumeTimer();
+  resumeInFlight = true;
+  void onlineClient
+    .connect(getOnlinePlayerName())
+    .then(() => {
+      const latest = loadSession();
+      if (latest) {
+        onlineClient.reconnect(latest.code, latest.token);
+      }
+      resumeAttempt = 0;
+    })
+    .catch(() => {
+      if (!loadSession()) {
+        resumeAttempt = 0;
+        return;
+      }
+      const delayMs = Math.min(5000, 1000 * 2 ** resumeAttempt);
+      resumeAttempt += 1;
+      clearResumeTimer();
+      resumeTimer = window.setTimeout(() => {
+        resumeTimer = null;
+        resumeSession();
+      }, delayMs);
+    })
+    .finally(() => {
+      resumeInFlight = false;
+    });
+}
+
+onlineClient.onStatus((connected) => {
+  if (!connected) {
+    resumeSession();
+  } else {
+    clearResumeTimer();
+    resumeAttempt = 0;
+  }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    resumeSession();
+  }
+});
+
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) {
+    resumeSession();
+  }
+});
+
 // Connect silently on boot for live online counter + handle ?room=XXXX or reconnect
-const urlRoom = new URLSearchParams(window.location.search).get('room');
-if (urlRoom && /^[A-Za-z0-9]{4}$/.test(urlRoom.trim())) {
-  const code = urlRoom.trim().toUpperCase();
-  roomCodeInput.value = code;
+const urlParams = new URLSearchParams(window.location.search);
+const urlRoomRaw = urlParams.get('room');
+const urlCode =
+  urlRoomRaw && /^[A-Za-z0-9]{4}$/.test(urlRoomRaw.trim()) ? urlRoomRaw.trim().toUpperCase() : null;
+if (urlParams.has('room')) {
+  urlParams.delete('room');
+  const nextSearch = urlParams.toString();
+  window.history.replaceState(
+    null,
+    '',
+    `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`,
+  );
+}
+const prevSession = loadSession();
+if (urlCode && (!prevSession || prevSession.code !== urlCode)) {
+  roomCodeInput.value = urlCode;
   if (!friendDialog.open) friendDialog.showModal();
   void onlineClient
     .connect(getOnlinePlayerName())
     .then(() => {
-      onlineClient.joinRoom(code, getOnlinePlayerName());
+      onlineClient.joinRoom(urlCode, getOnlinePlayerName());
     })
     .catch(() => {
       friendStatusMsg.textContent = 'UNABLE TO REACH SERVER';
     });
 } else {
-  const prevSession = loadSession();
   void onlineClient
     .connect(getOnlinePlayerName())
     .then(() => {
@@ -2677,7 +2764,9 @@ if (urlRoom && /^[A-Za-z0-9]{4}$/.test(urlRoom.trim())) {
       }
     })
     .catch(() => {
-      // ignore silent boot connect failure
+      if (prevSession) {
+        resumeSession();
+      }
     });
 }
 
