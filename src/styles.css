@@ -677,6 +677,26 @@ select {
   color: var(--gold-hi);
 }
 
+.hamburger-btn {
+  min-width: 34px;
+  padding: 0 0.48rem;
+}
+
+.hamburger-icon {
+  display: block;
+}
+
+.menu-util-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.45rem;
+}
+
+.menu-util-row .act-btn {
+  padding: 0.56rem 0.4rem;
+  font-size: 0.76rem;
+}
+
 .act-btn.danger-btn {
   border-color: var(--crimson);
   color: #fda4af;
@@ -1111,25 +1131,17 @@ select {
 .spring-chamber {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
   cursor: pointer;
   touch-action: none;
 }
 
-.spring-coil-svg {
-  display: block;
-  width: 100%;
-  height: 22px;
-  background: #0a1122;
-  border: 1.5px solid #243454;
-}
-
-/* Single unbroken continuous gradient track: 0-62% NORMAL, 62-82% BEST, 82-100% OVER */
+/* Unified Spring-on-Spectrum Track: 0-62% NORMAL, 62-82% BEST, 82-100% OVER with live spring coil directly on top */
 .spring-rail {
   position: relative;
   width: 100%;
-  height: 12px;
-  border: 1.5px solid #e2e8f0;
+  height: 28px;
+  border: 2px solid #e2e8f0;
   background: linear-gradient(
     90deg,
     #1d4ed8 0%,
@@ -1140,7 +1152,21 @@ select {
     #f97316 88%,
     #e11d48 100%
   );
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.2), inset 0 -2px 0 rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 3px 0 rgba(0, 0, 0, 0.25), inset 0 -3px 0 rgba(0, 0, 0, 0.35);
+  overflow: visible;
+}
+
+.spring-coil-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: none;
+  z-index: 2;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgba(4, 7, 15, 0.95));
 }
 
 /* Subtle top/bottom notch ticks highlighting the BEST sweet-spot band (62%..82%) without breaking the rail */
@@ -1970,19 +1996,19 @@ dialog::backdrop {
   }
 
   .spring-chamber {
-    gap: 3px;
+    gap: 0;
   }
 
   .spring-coil-svg {
-    height: 14px;
+    height: 100%;
   }
 
   .spring-rail {
-    height: 10px;
+    height: 24px;
   }
 
   .spring-zone-labels {
-    font-size: 0.44rem;
+    font-size: 0.5rem;
   }
 
   .throw-btn,
@@ -2092,16 +2118,196 @@ dialog::backdrop {
   }
 
   .pitcher-wheel-dock .spring-coil-svg {
-    height: 12px;
+    height: 100%;
   }
 
   .pitcher-wheel-dock .spring-rail {
-    height: 9px;
+    height: 20px;
   }
 
   .pitcher-wheel-dock .throw-btn,
   .pitcher-wheel-dock .ibb-btn {
     min-block-size: 36px;
     padding: 0.24rem 0.36rem;
+  }
+}
+
+/* ==========================================================================
+   Desktop Enhanced Readability: Larger Scorebug & Pitcher Dock with Bigger Fonts
+   ========================================================================== */
+@media (min-width: 900px) and (min-height: 540px) {
+  .scorebug {
+    min-width: 430px;
+    max-width: min(56dvw, 560px);
+  }
+
+  .sb-teams {
+    min-width: 168px;
+  }
+
+  .sb-team-row {
+    padding: 0.32rem 0.58rem 0.32rem 0;
+    gap: 0.5rem;
+  }
+
+  .sb-team-name {
+    font-size: 1.08rem;
+  }
+
+  .sb-team-runs {
+    font-size: 1.2rem;
+    min-width: 30px;
+    padding: 0.1rem 0.32rem;
+  }
+
+  .sb-diamond-cell {
+    padding: 0 0.85rem;
+  }
+
+  .sb-diamond {
+    width: 44px;
+    height: 36px;
+  }
+
+  .sb-diamond .base {
+    width: 13px;
+    height: 13px;
+  }
+
+  .sb-diamond .b2 {
+    top: 2px;
+    left: 15px;
+  }
+
+  .sb-diamond .b3 {
+    top: 15px;
+    left: 2px;
+  }
+
+  .sb-diamond .b1 {
+    top: 15px;
+    right: 2px;
+  }
+
+  .sb-count-cell {
+    padding: 0.3rem 0.72rem;
+    min-width: 150px;
+    gap: 0.28rem;
+  }
+
+  .sb-inning {
+    font-size: 1.02rem;
+  }
+
+  .sb-clock {
+    min-width: 32px;
+    padding: 0.08rem 0.36rem;
+    font-size: 0.92rem;
+  }
+
+  .sb-bs {
+    font-size: 1.14rem;
+  }
+
+  .sb-outs,
+  .sb-abs {
+    font-size: 0.74rem;
+    gap: 4px;
+  }
+
+  .pip {
+    width: 10px;
+    height: 10px;
+  }
+
+  .sb-ticker-row {
+    padding: 0.34rem 0.62rem;
+    font-size: 0.88rem;
+    gap: 0.4rem 0.56rem;
+  }
+
+  .sb-tag {
+    font-size: 0.68rem;
+    padding: 0.06rem 0.28rem;
+  }
+
+  .sb-telemetry-text {
+    font-size: 0.8rem;
+  }
+
+  .pitcher-wheel-dock {
+    width: 296px;
+    top: 56%;
+    padding: 0.72rem 0.8rem 0.78rem;
+    gap: 0.64rem;
+  }
+
+  .dock-label {
+    font-size: 0.8rem;
+  }
+
+  .dock-sub {
+    font-size: 0.98rem;
+  }
+
+  .pitch-diamond {
+    grid-template-columns: 1fr 54px 1fr;
+    gap: 0.34rem;
+  }
+
+  .pitch-btn {
+    padding: 0.44rem 0.34rem;
+    gap: 0.1rem;
+  }
+
+  .pitch-btn kbd {
+    font-size: 0.64rem;
+    top: 3px;
+    left: 5px;
+  }
+
+  .pitch-btn strong {
+    font-size: 0.92rem;
+  }
+
+  .pitch-btn span {
+    font-size: 0.88rem;
+  }
+
+  .diamond-crest {
+    width: 44px;
+    height: 44px;
+    font-size: 0.76rem;
+  }
+
+  .spring-meter {
+    padding: 0.48rem 0.54rem;
+    gap: 0.3rem;
+  }
+
+  .sm-title {
+    font-size: 0.74rem;
+  }
+
+  .sm-readout {
+    font-size: 0.82rem;
+  }
+
+  .spring-rail {
+    height: 34px;
+  }
+
+  .spring-zone-labels {
+    font-size: 0.68rem;
+  }
+
+  .throw-btn {
+    padding: 0.62rem 0.58rem;
+    font-size: 0.9rem;
+  }
+
+  .ibb-btn {
+    padding: 0.62rem 0.68rem;
+    font-size: 0.82rem;
   }
 }

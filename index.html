@@ -101,10 +101,13 @@
           <nav class="header-actions" aria-label="Game utility menu">
             <button type="button" class="hdr-btn bat-opt" id="btn-hand" hidden title="Batter handedness">LHB</button>
             <button type="button" class="hdr-btn bat-opt" id="btn-swing-type" aria-pressed="false" hidden title="Swing power mode">NORMAL</button>
-            <button type="button" class="hdr-btn" id="btn-rules" data-i18n="btnRules">RULES</button>
-            <button type="button" class="hdr-btn" id="btn-settings" data-i18n="btnSet">SET</button>
-            <button type="button" class="hdr-btn" id="btn-sound" aria-pressed="false">SFX</button>
-            <button type="button" class="hdr-btn menu-btn" id="btn-menu" hidden title="Game Menu (Esc)" data-i18n="btnMenu">MENU</button>
+            <button type="button" class="hdr-btn menu-btn hamburger-btn" id="btn-menu" aria-label="Menu" title="Menu (Esc)">
+              <svg class="hamburger-icon" viewBox="0 0 18 14" width="16" height="13" aria-hidden="true">
+                <rect x="0" y="0" width="18" height="2.5" fill="currentColor" />
+                <rect x="0" y="5.75" width="18" height="2.5" fill="currentColor" />
+                <rect x="0" y="11.5" width="18" height="2.5" fill="currentColor" />
+              </svg>
+            </button>
           </nav>
         </header>
       </div>
@@ -186,24 +189,23 @@
             tabindex="0"
             aria-label="Hold to compress pitch spring, release to launch and set peak power"
           >
-            <svg id="spring-coil-svg" class="spring-coil-svg" viewBox="0 0 180 24" preserveAspectRatio="none" aria-hidden="true">
-              <rect x="0" y="2" width="5" height="20" fill="#94a3b8" />
-              <rect id="spring-compress-fill" x="5" y="2" width="0" height="20" fill="rgba(56, 189, 248, 0.22)" />
-              <path
-                id="spring-coil-path"
-                d="M 5 12 L 10 4 L 15 20 L 20 4 L 25 20 L 30 4 L 35 20 L 40 4 L 45 20 L 50 4 L 54 12"
-                fill="none"
-                stroke="#38bdf8"
-                stroke-width="2.4"
-                stroke-linejoin="miter"
-                stroke-linecap="square"
-              />
-              <rect id="spring-plunger" x="54" y="2" width="7" height="20" fill="#f8fafc" />
-            </svg>
-
-            <div class="spring-rail" id="spring-rail">
+            <div class="spring-rail spring-unified-track" id="spring-rail">
               <div class="spring-peak-trail" id="spring-peak-trail" aria-hidden="true"></div>
               <div class="spring-best-ticks" aria-hidden="true"></div>
+              <svg id="spring-coil-svg" class="spring-coil-svg" viewBox="0 0 200 28" preserveAspectRatio="none" aria-hidden="true">
+                <rect x="0" y="2" width="4" height="24" fill="#e2e8f0" />
+                <rect id="spring-compress-fill" x="4" y="2" width="0" height="24" fill="rgba(7, 11, 20, 0.35)" />
+                <path
+                  id="spring-coil-path"
+                  d="M 4 14 L 8 5 L 12 23 L 16 5 L 20 23 L 24 5 L 28 23 L 32 14"
+                  fill="none"
+                  stroke="#f8fafc"
+                  stroke-width="2.8"
+                  stroke-linejoin="miter"
+                  stroke-linecap="square"
+                />
+                <rect id="spring-plunger" x="32" y="1" width="6" height="26" fill="#ffffff" stroke="#070b14" stroke-width="1.2" />
+              </svg>
               <div class="spring-needle" id="spring-needle"></div>
             </div>
           </div>
@@ -253,6 +255,11 @@
       </div>
       <div class="dlg-body menu-actions">
         <button type="button" class="act-btn primary" id="btn-menu-back" data-i18n="btnBack" autofocus>BACK</button>
+        <div class="menu-util-row">
+          <button type="button" class="act-btn" id="btn-rules" data-i18n="btnRules">RULES</button>
+          <button type="button" class="act-btn" id="btn-settings" data-i18n="btnSet">SET</button>
+          <button type="button" class="act-btn" id="btn-sound" aria-pressed="false">SFX</button>
+        </div>
         <button type="button" class="act-btn" id="btn-menu-title" data-i18n="btnMainMenu">MAIN MENU</button>
         <button type="button" class="act-btn danger-btn" id="btn-resign" data-i18n="btnForfeit" hidden>FORFEIT</button>
       </div>

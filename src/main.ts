@@ -534,15 +534,15 @@ function evaluateSpring(
 }
 
 function buildSpringCoilPath(startX: number, endX: number, coils = 10): string {
-  const span = Math.max(6, endX - startX);
+  const span = Math.max(5, endX - startX);
   const stepX = span / (coils * 2);
-  let d = `M ${startX.toFixed(1)} 12`;
+  let d = `M ${startX.toFixed(1)} 14`;
   for (let i = 1; i < coils * 2; i++) {
     const x = startX + stepX * i;
-    const y = i % 2 === 1 ? 4 : 20;
+    const y = i % 2 === 1 ? 5 : 23;
     d += ` L ${x.toFixed(1)} ${y}`;
   }
-  d += ` L ${endX.toFixed(1)} 12`;
+  d += ` L ${endX.toFixed(1)} 14`;
   return d;
 }
 
@@ -550,56 +550,49 @@ function renderSpringMeterUi(): void {
   const stage = springMeter.stage;
   springMeterEl.dataset.stage = stage;
 
-  const restPlungerX = 54;
+  const restPlungerX = 32;
   let plungerX = restPlungerX;
-  let coilColor = '#38bdf8';
-  let plungerColor = '#f8fafc';
+  let coilColor = '#ffffff';
+  let plungerColor = '#ffffff';
   let fillWidth = 0;
-  let fillColor = 'rgba(56, 189, 248, 0.22)';
+  let fillColor = 'rgba(7, 11, 20, 0.32)';
+  let coils = 8;
 
   if (stage === 'idle') {
     springMeterEl.dataset.zone = 'IDLE';
     springTitleEl.textContent = t('springTitle');
     const [minS, maxS] = PITCH_SPECS[selectedPitch].speedRangeKmh;
     springReadoutEl.textContent = `${minS}–${maxS} km/h`;
-    springNeedleEl.style.left = '0%';
+    springNeedleEl.style.left = `${(restPlungerX / 2).toFixed(1)}%`;
     springPeakTrailEl.style.width = '0%';
   } else if (stage === 'charging') {
     const c = Math.max(0, Math.min(1, springMeter.charge));
-    // Compress plunger leftward from 54 -> 14 against left wall x=5
-    plungerX = restPlungerX - c * 40;
-    fillWidth = Math.max(0, plungerX - 5);
+    // Compress plunger tightly leftward (32 -> 9) directly on the left end of the NORMAL-BEST-OVER track
+    plungerX = restPlungerX - c * 23;
+    fillWidth = Math.max(0, plungerX - 4);
     const estPeak = Math.max(0.1, Math.min(1, 0.1 + 0.9 * Math.pow(c, 0.95)));
-    const tensionCol = estPeak > SPRING_OVER_START ? '#f43f5e' : estPeak > SPRING_BEST_START ? '#f4c41c' : '#38bdf8';
-    coilColor = tensionCol;
-    plungerColor = estPeak > SPRING_OVER_START ? '#fda4af' : estPeak > SPRING_BEST_START ? '#ffe066' : '#f8fafc';
-    fillColor =
-      estPeak > SPRING_OVER_START
-        ? 'rgba(244, 63, 94, 0.28)'
-        : estPeak > SPRING_BEST_START
-          ? 'rgba(244, 196, 28, 0.24)'
-          : 'rgba(56, 189, 248, 0.22)';
-    // Keep spectrum needle poised at 0% until released so player watches it spring out to its apex!
+    coilColor = estPeak > SPRING_OVER_START ? '#fda4af' : estPeak > SPRING_BEST_START ? '#ffe066' : '#e0f2fe';
+    plungerColor = estPeak > SPRING_OVER_START ? '#fda4af' : estPeak > SPRING_BEST_START ? '#ffe066' : '#ffffff';
+    fillColor = 'rgba(7, 11, 20, 0.48)';
     springMeterEl.dataset.zone = estPeak > SPRING_OVER_START ? 'OVER' : 'IDLE';
     springTitleEl.textContent = t('springCharging');
     springReadoutEl.textContent = `${Math.round(c * 100)}%`;
-    springNeedleEl.style.left = '0%';
+    springNeedleEl.style.left = `${(plungerX / 2).toFixed(1)}%`;
     springPeakTrailEl.style.width = '0%';
   } else {
-    // Rebounding or Locked at Apex on the NORMAL - BEST - OVER spectrum
+    // Rebounding or Locked at Apex: spring stretches right across the NORMAL - BEST - OVER spectrum!
     const p = Math.max(0, Math.min(1, springMeter.pos));
     const evalRes = evaluateSpring(p, selectedPitch);
     springMeterEl.dataset.zone = evalRes.zone;
+    plungerX = Math.max(10, Math.min(193, p * 193));
+    coils = Math.max(8, Math.round(7 + p * 8));
+    fillWidth = Math.max(0, plungerX - 4);
+    fillColor = 'rgba(7, 11, 20, 0.22)';
 
     if (stage === 'rebounding') {
-      const u = Math.max(0, Math.min(1, springMeter.reboundTime / Math.max(0.05, springMeter.reboundDur)));
-      // Snappy damped coil spring-back past restPlungerX
-      const kick = Math.exp(-u * 5.2) * Math.sin(u * Math.PI * 3.5) * (32 * springMeter.charge);
-      plungerX = Math.max(14, Math.min(168, restPlungerX + kick));
       springTitleEl.textContent = t('springRebounding');
       springReadoutEl.textContent = `${evalRes.speedKmh} km/h`;
     } else {
-      plungerX = restPlungerX;
       const zoneLbl =
         evalRes.zone === 'BEST'
           ? t('springBest')
@@ -610,14 +603,14 @@ function renderSpringMeterUi(): void {
       springReadoutEl.textContent = `${evalRes.speedKmh} km/h`;
     }
 
-    coilColor = evalRes.zone === 'BEST' ? '#f4c41c' : evalRes.zone === 'OVER' ? '#f43f5e' : '#38bdf8';
-    plungerColor = evalRes.zone === 'BEST' ? '#ffe066' : evalRes.zone === 'OVER' ? '#fda4af' : '#f8fafc';
+    coilColor = evalRes.zone === 'BEST' ? '#ffe066' : evalRes.zone === 'OVER' ? '#fecdd3' : '#ffffff';
+    plungerColor = evalRes.zone === 'BEST' ? '#ffe066' : evalRes.zone === 'OVER' ? '#fda4af' : '#ffffff';
     springNeedleEl.style.left = `${(p * 100).toFixed(1)}%`;
     springPeakTrailEl.style.width = `${(p * 100).toFixed(1)}%`;
   }
 
   springPlungerEl.setAttribute('x', plungerX.toFixed(1));
-  springCoilPathEl.setAttribute('d', buildSpringCoilPath(5, plungerX, 10));
+  springCoilPathEl.setAttribute('d', buildSpringCoilPath(4, plungerX, coils));
   springCoilPathEl.setAttribute('stroke', coilColor);
   springPlungerEl.setAttribute('fill', plungerColor);
   springCompressFillEl.setAttribute('width', fillWidth.toFixed(1));
@@ -828,7 +821,9 @@ function updateHudAndDocks(): void {
   }
   btnIbb.disabled = !canIntentionalWalk(match) || phase !== 'idle' || playCallBlocking;
   btnResign.hidden = !isOnline || spectating || onTitleScreen || match.isGameOver;
-  btnMenu.hidden = onTitleScreen && !onlineWaitingQueue;
+  btnMenuBack.hidden = onTitleScreen;
+  btnMenuTitle.hidden = onTitleScreen;
+  btnMenu.hidden = false;
   btnAbsChallenge.hidden = !isAbsChallengeAvailable();
   updateSafeCameraFraming(false);
 }
@@ -1692,8 +1687,14 @@ btnResign.addEventListener('click', () => {
     onlineClient.resign();
   }
 });
-btnRules.addEventListener('click', () => rulesDialog.showModal());
-btnSettings.addEventListener('click', () => settingsDialog.showModal());
+btnRules.addEventListener('click', () => {
+  if (menuDialog.open) menuDialog.close();
+  rulesDialog.showModal();
+});
+btnSettings.addEventListener('click', () => {
+  if (menuDialog.open) menuDialog.close();
+  settingsDialog.showModal();
+});
 btnNickChip.addEventListener('click', () => {
   settingsDialog.showModal();
   onlineNameInput.focus();
