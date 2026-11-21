@@ -11,7 +11,7 @@ export const EMOTE_CATALOG: readonly QuickChatDef[] = [
   { id: 'nice', fallbackLabel: 'Yarimasu ne!', accent: '#4ade80' },
   { id: 'clap', fallbackLabel: 'Oh yeah, nice one!', accent: '#facc15' },
   { id: 'k', fallbackLabel: 'Three times, three!', accent: '#f43f5e' },
-  { id: 'hr', fallbackLabel: 'The royal road!', accent: '#ffd23f' },
+  { id: 'hr', fallbackLabel: 'Give me a break!', accent: '#ffd23f' },
   { id: 'wow', fallbackLabel: 'Hmm?', accent: '#38bdf8' },
   { id: 'sweat', fallbackLabel: 'This is bad!', accent: '#60a5fa' },
   { id: 'gg', fallbackLabel: "Let's play again!", accent: '#a78bfa' },
