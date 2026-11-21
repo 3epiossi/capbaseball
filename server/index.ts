@@ -130,6 +130,7 @@ interface Room {
   mode: OnlineMode;
   isMatchmaking: boolean;
   createdAt: number;
+  lastActivityAt: number;
   match: MatchState;
   pitchSeq: number;
   turnState: TurnState;
@@ -472,6 +473,7 @@ export function startServer(
   }
 
   function buildMonitorSnapshot(): ServerSnapshotInput {
+    const now = Date.now();
     let inMatchClients = 0;
     let spectatingClients = 0;
     for (const c of clients.values()) {
@@ -479,15 +481,55 @@ export function startServer(
       else if (c.watchingCode) spectatingClients += 1;
     }
     let matchmakingRooms = 0;
+    let startedRooms = 0;
+    let waitingRooms = 0;
+    let stalledRooms = 0;
+    let disconnectedRooms = 0;
+    let highInningRooms = 0;
+    let extremeRunDiffRooms = 0;
+    let zeroPitchOldRooms = 0;
+    let oldestAgeMs = 0;
+    let startedPitchSum = 0;
+    let maxMatchRuns = 0;
+
     for (const r of rooms.values()) {
       if (r.isMatchmaking) matchmakingRooms += 1;
+      const ageMs = Math.max(0, now - r.createdAt);
+      if (ageMs > oldestAgeMs) oldestAgeMs = ageMs;
+
+      if (!r.players.away) {
+        waitingRooms += 1;
+        if (ageMs > 60_000) zeroPitchOldRooms += 1;
+        continue;
+      }
+
+      if (r.turnState !== 'game_over') {
+        startedRooms += 1;
+        startedPitchSum += r.match.stats.totalPitches;
+        const bothConnected = r.players.home.connected && r.players.away.connected;
+        if (!bothConnected) {
+          disconnectedRooms += 1;
+        } else if (now - r.lastActivityAt > 45_000) {
+          stalledRooms += 1;
+        }
+        if (ageMs > 60_000 && r.match.stats.totalPitches === 0) {
+          zeroPitchOldRooms += 1;
+        }
+      }
+
+      if (r.match.inning >= 8) highInningRooms += 1;
+      const runDiff = Math.abs(r.match.home.totalRuns - r.match.away.totalRuns);
+      if (runDiff >= 15) extremeRunDiffRooms += 1;
+      const topRuns = Math.max(r.match.home.totalRuns, r.match.away.totalRuns);
+      if (topRuns > maxMatchRuns) maxMatchRuns = topRuns;
     }
+
     let maxConnsSingleIp = 0;
     for (const cnt of ipConnCounts.values()) {
       if (cnt > maxConnsSingleIp) maxConnsSingleIp = cnt;
     }
     return {
-      uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
+      uptimeSec: Math.floor((now - startedAt) / 1000),
       version,
       draining,
       load: getServerLoad(),
@@ -500,6 +542,18 @@ export function startServer(
       maxConnsSingleIp,
       staticCacheFiles: staticCache.size,
       staticCacheMb: Math.round((staticCacheBytes / (1024 * 1024)) * 10) / 10,
+      roomsHealth: {
+        startedRooms,
+        waitingRooms,
+        stalledRooms,
+        disconnectedRooms,
+        highInningRooms,
+        extremeRunDiffRooms,
+        zeroPitchOldRooms,
+        oldestRoomAgeMin: Number((oldestAgeMs / 60_000).toFixed(1)),
+        avgMatchPitches: startedRooms > 0 ? Number((startedPitchSum / startedRooms).toFixed(1)) : 0,
+        maxMatchRuns,
+      },
     };
   }
 
@@ -533,6 +587,8 @@ export function startServer(
       if (!room.players.home.connected || !room.players.away?.connected) return;
       const res = applyPitchClockViolation(room.match);
       if (!res.applied) return;
+      monitor.pitchClockViolations += 1;
+      room.lastActivityAt = Date.now();
       const solvedSeq = room.pitchSeq;
       room.pitchSeq += 1;
       room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
@@ -612,6 +668,8 @@ export function startServer(
         reason: 'disconnect_timeout',
         match: room.match,
       });
+    } else if (!room.players.away) {
+      monitor.waitingExpired += 1;
     }
     cleanupRoom(code);
   }
@@ -619,6 +677,9 @@ export function startServer(
   function recordMatchEnd(room: Room, reason: string) {
     if (room.recorded) return;
     room.recorded = true;
+    if (reason === 'completed') monitor.matchesCompleted += 1;
+    else if (reason === 'resign') monitor.matchesResigned += 1;
+    else if (reason === 'disconnect_timeout') monitor.matchesDisconnectTimeout += 1;
     appendMatchLog(
       {
         ts: new Date().toISOString(),
@@ -889,6 +950,16 @@ export function startServer(
       return;
     }
 
+    if (
+      !Number.isFinite(resolution.exitSpeedKmh) ||
+      !Number.isFinite(resolution.distanceM) ||
+      !resolution.hitField.every(Number.isFinite) ||
+      (resolution.battedResult.firstLandingPos !== null &&
+        !resolution.battedResult.firstLandingPos.every(Number.isFinite))
+    ) {
+      monitor.nanSanityErrors += 1;
+    }
+
     const plateField = simToField(traj.plateCrossPos);
     const prevInning = room.match.inning;
     const prevHalf = room.match.half;
@@ -994,6 +1065,8 @@ export function startServer(
     const away = room.players.away;
     if (!away) return;
 
+    room.lastActivityAt = Date.now();
+    monitor.matchesStarted += 1;
     const names = { home: home.name, away: away.name };
     for (const side of ['home', 'away'] as const) {
       const p = room.players[side]!;
@@ -1041,6 +1114,7 @@ export function startServer(
         mode,
         isMatchmaking: true,
         createdAt: Date.now(),
+        lastActivityAt: Date.now(),
         match: buildMatchState(mode, homeClient.name, awayClient.name),
         pitchSeq: 1,
         turnState: 'awaiting_pitch',
@@ -1453,6 +1527,7 @@ export function startServer(
             mode,
             isMatchmaking: false,
             createdAt: Date.now(),
+            lastActivityAt: Date.now(),
             match: buildMatchState(mode, client.name, 'Opponent'),
             pitchSeq: 1,
             turnState: 'awaiting_pitch',
@@ -1547,6 +1622,7 @@ export function startServer(
           const token = typeof msg.token === 'string' ? msg.token : '';
           const room = rooms.get(code);
           if (!room || !token) {
+            monitor.reconnectsFailed += 1;
             sendJson(ws, { type: 'error', code: 'reconnect_failed', message: 'Room ended or invalid token' });
             return;
           }
@@ -1555,9 +1631,12 @@ export function startServer(
           else if (room.players.away?.token === token) matchedSide = 'away';
 
           if (!matchedSide) {
+            monitor.reconnectsFailed += 1;
             sendJson(ws, { type: 'error', code: 'reconnect_failed', message: 'Invalid reconnect token' });
             return;
           }
+          monitor.reconnectsSucceeded += 1;
+          room.lastActivityAt = Date.now();
 
           const player = room.players[matchedSide]!;
           if (player.disconnectTimer) {
@@ -1620,10 +1699,12 @@ export function startServer(
         case 'ibb': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_pitch') return;
-          if (client.side !== getPitchingSide(room.match)) return;
-          if (msg.pitchSeq !== room.pitchSeq) return;
+          if (!room || room.turnState !== 'awaiting_pitch' || client.side !== getPitchingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
+            if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
+            return;
+          }
           if (!canIntentionalWalk(room.match)) return;
+          room.lastActivityAt = Date.now();
 
           clearPitchClock(room);
           applyIntentionalWalk(room.match);
@@ -1657,18 +1738,21 @@ export function startServer(
         case 'pitch_submit': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_pitch') return;
-          if (!room.players.away) return;
-          if (client.side !== getPitchingSide(room.match)) return;
-          if (msg.pitchSeq !== room.pitchSeq) return;
+          if (!room || !room.players.away || room.turnState !== 'awaiting_pitch' || client.side !== getPitchingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
+            if (room && room.players.away && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
+            return;
+          }
+          room.lastActivityAt = Date.now();
 
           const pitchId = PITCH_IDS.includes(msg.pitchId as PitchId)
             ? (msg.pitchId as PitchId)
             : 'straight';
           const spec = PITCH_SPECS[pitchId];
           const rawSpeed = Number(msg.speedKmh);
+          const minSpd = spec.speedRangeKmh[0];
+          const maxSpd = spec.speedRangeKmh[1] + 4;
           const speedKmh = Number.isFinite(rawSpeed)
-            ? Math.max(spec.speedRangeKmh[0], Math.min(spec.speedRangeKmh[1] + 4, rawSpeed))
+            ? Math.max(minSpd, Math.min(maxSpd, rawSpeed))
             : spec.defaultSpeedKmh;
           const rawTargetX = Number(msg.targetX);
           const rawTargetY = Number(msg.targetY);
@@ -1679,6 +1763,16 @@ export function startServer(
           const errorX = Number.isFinite(rawErrX) ? Math.max(-0.35, Math.min(0.35, rawErrX)) : 0;
           const errorY = Number.isFinite(rawErrY) ? Math.max(-0.35, Math.min(0.35, rawErrY)) : 0;
 
+          if (
+            (msg.speedKmh !== undefined && (!Number.isFinite(rawSpeed) || rawSpeed < minSpd - 2 || rawSpeed > maxSpd + 2)) ||
+            (msg.targetX !== undefined && (!Number.isFinite(rawTargetX) || rawTargetX < -0.65 || rawTargetX > 0.65)) ||
+            (msg.targetY !== undefined && (!Number.isFinite(rawTargetY) || rawTargetY < 0.0 || rawTargetY > 1.7)) ||
+            (msg.errorX !== undefined && (!Number.isFinite(rawErrX) || Math.abs(rawErrX) > 0.45)) ||
+            (msg.errorY !== undefined && (!Number.isFinite(rawErrY) || Math.abs(rawErrY) > 0.45))
+          ) {
+            monitor.outOfRangeInputsClamped += 1;
+          }
+
           const seed = crypto.randomInt(1, 2147483647);
           const solveStart = performance.now();
           const trajectory = solvePitchTrajectory(pitchId, speedKmh, targetX, targetY, {
@@ -1688,6 +1782,9 @@ export function startServer(
             seed,
           });
           monitor.recordPhysicsSolve(performance.now() - solveStart);
+          if (!trajectory.plateCrossPos.every(Number.isFinite) || !Number.isFinite(trajectory.flightTimeSec)) {
+            monitor.nanSanityErrors += 1;
+          }
           const breakCm = Math.round(
             Math.hypot(trajectory.breakDelta[1], trajectory.breakDelta[2]) * 100,
           );
@@ -1709,6 +1806,8 @@ export function startServer(
 
           const timeoutMs = Math.round(trajectory.flightTimeSec * 1000) + swingTimeoutPaddingMs;
           room.swingTimer = setTimeout(() => {
+            monitor.swingTimeouts += 1;
+            room.lastActivityAt = Date.now();
             finalizeSwing(room, false, null);
           }, timeoutMs);
 
@@ -1731,16 +1830,22 @@ export function startServer(
         case 'swing_input': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_swing') return;
-          if (client.side !== getBattingSide(room.match)) return;
-          if (msg.pitchSeq !== room.pitchSeq) return;
+          if (!room || room.turnState !== 'awaiting_swing' || client.side !== getBattingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
+            if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
+            return;
+          }
 
           const flightTimeSec = Number(msg.flightTimeSec);
           const batX = Number(msg.batX);
           const batY = Number(msg.batY);
           if (!Number.isFinite(flightTimeSec) || !Number.isFinite(batX) || !Number.isFinite(batY)) {
+            monitor.outOfRangeInputsClamped += 1;
             return;
           }
+          if (flightTimeSec < 0.05 || flightTimeSec > 3.5 || batX < -0.65 || batX > 0.65 || batY < 0 || batY > 1.7) {
+            monitor.outOfRangeInputsClamped += 1;
+          }
+          room.lastActivityAt = Date.now();
           const swingMode: SwingMode = msg.swingMode === 'power' ? 'power' : 'normal';
           const batterSide: 'R' | 'L' = msg.batterSide === 'L' || msg.batterSide === 'left' ? 'L' : 'R';
           room.batterSide = batterSide;
@@ -1758,9 +1863,11 @@ export function startServer(
         case 'no_swing': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_swing') return;
-          if (client.side !== getBattingSide(room.match)) return;
-          if (msg.pitchSeq !== room.pitchSeq) return;
+          if (!room || room.turnState !== 'awaiting_swing' || client.side !== getBattingSide(room.match) || msg.pitchSeq !== room.pitchSeq) {
+            if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
+            return;
+          }
+          room.lastActivityAt = Date.now();
 
           finalizeSwing(room, false, null);
           break;
@@ -1841,16 +1948,23 @@ export function startServer(
         case 'abs_challenge': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_pitch') return;
+          if (!room || room.turnState !== 'awaiting_pitch') {
+            if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
+            return;
+          }
           if (!room.match.lastChallenge) return;
           if (
             typeof msg.pitchSeq === 'number' &&
             msg.pitchSeq !== room.match.lastChallenge.pitchSeq
           ) {
+            monitor.staleOrOutOfTurnIgnored += 1;
             return;
           }
           const res = applyAbsChallenge(room.match, client.side);
           if (!res.ok) return;
+          monitor.absChallengesTotal += 1;
+          if (res.overturned) monitor.absOverturned += 1;
+          room.lastActivityAt = Date.now();
 
           room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
           sendToRoom(room, {
@@ -1941,6 +2055,7 @@ export function startServer(
           room.batterSide = 'L';
           room.activePitch = null;
           room.recorded = false;
+          monitor.rematchesStarted += 1;
 
           startMatchInRoom(room);
           break;
@@ -1978,6 +2093,7 @@ export function startServer(
               clearPitchClock(room);
               const oppSide: Side = side === 'home' ? 'away' : 'home';
               if (room.players.away) {
+                monitor.disconnectsInMatch += 1;
                 sendJson(room.players[oppSide]?.ws, {
                   type: 'opponent_disconnected',
                   graceSec: Math.round(graceMs / 1000),

@@ -142,6 +142,24 @@ export const MONITOR_HTML = `<!doctype html>
       <div class="kv"><span>Terminated: Dead Pong</span><strong id="f-dead">-</strong></div>
       <div class="kv"><span>HTTP 4xx / 5xx</span><strong id="f-http">-</strong></div>
     </div>
+
+    <div class="card">
+      <h2>Match Lifecycle &amp; Live Scan</h2>
+      <div class="kv"><span>Started / Completed / Rematch</span><strong id="g-started">-</strong></div>
+      <div class="kv"><span>Resigned / DC Timeout / Wait Exp</span><strong id="g-ended">-</strong></div>
+      <div class="kv"><span>ABS Challenge (Overturned)</span><strong id="g-abs">-</strong></div>
+      <div class="kv"><span>Oldest Room / Avg Pitches</span><strong id="g-age">-</strong></div>
+      <div class="kv"><span>High Inning (8+) / Diff (15+)</span><strong id="g-extreme">-</strong></div>
+    </div>
+
+    <div class="card">
+      <h2>Gameplay Anomalies &amp; Sync</h2>
+      <div class="kv"><span>Stalled (&gt;45s) / DC Wait Rooms</span><strong id="g-stalled">-</strong></div>
+      <div class="kv"><span>Pitch Clock / Swing Timeouts</span><strong id="g-clocks">-</strong></div>
+      <div class="kv"><span>Stale / Out-of-Turn Ignored</span><strong id="g-stale">-</strong></div>
+      <div class="kv"><span>In-Match DC / Reconn OK / Fail</span><strong id="g-reconn">-</strong></div>
+      <div class="kv"><span>Clamped Inputs / NaN Physics</span><strong id="g-integrity">-</strong></div>
+    </div>
   </section>
 
   <section class="charts">
@@ -273,6 +291,31 @@ export const MONITOR_JS = `(() => {
       setText('f-rate', fj.rateLimit, fj.rateLimit > 0);
       setText('f-dead', fj.deadPongTimeout, fj.deadPongTimeout > 0);
       setText('f-http', tr.httpStatuses['4xx'] + ' / ' + tr.httpStatuses['5xx']);
+
+      const gp = d.gameplay || {};
+      const rh = gp.roomsHealth || {};
+      setText('g-started', (gp.matchesStarted || 0) + ' / ' + (gp.matchesCompleted || 0) + ' / ' + (gp.rematchesStarted || 0));
+      setText('g-ended', (gp.matchesResigned || 0) + ' / ' + (gp.matchesDisconnectTimeout || 0) + ' / ' + (gp.waitingExpired || 0));
+      setText('g-abs', (gp.absChallengesTotal || 0) + ' (' + (gp.absOverturned || 0) + ')');
+      setText('g-age', (rh.oldestRoomAgeMin || 0) + 'm / ' + (rh.avgMatchPitches || 0) + 'p (max ' + (rh.maxMatchRuns || 0) + 'r)');
+      setText(
+        'g-extreme',
+        (rh.highInningRooms || 0) + ' / ' + (rh.extremeRunDiffRooms || 0),
+        (rh.highInningRooms || 0) > 0 || (rh.extremeRunDiffRooms || 0) > 0
+      );
+      setText(
+        'g-stalled',
+        (rh.stalledRooms || 0) + ' / ' + (rh.disconnectedRooms || 0),
+        (rh.stalledRooms || 0) > 0
+      );
+      setText('g-clocks', (gp.pitchClockViolations || 0) + ' / ' + (gp.swingTimeouts || 0));
+      setText('g-stale', gp.staleOrOutOfTurnIgnored || 0, (gp.staleOrOutOfTurnIgnored || 0) >= 20);
+      setText('g-reconn', (gp.disconnectsInMatch || 0) + ' / ' + (gp.reconnectsSucceeded || 0) + ' / ' + (gp.reconnectsFailed || 0), (gp.reconnectsFailed || 0) > 0);
+      setText(
+        'g-integrity',
+        (gp.outOfRangeInputsClamped || 0) + ' / ' + (gp.nanSanityErrors || 0),
+        (gp.outOfRangeInputsClamped || 0) > 0 || (gp.nanSanityErrors || 0) > 0
+      );
 
       const hist = d.history || [];
       renderSpark('chart-clients', hist.map((x) => x.clients), '#38bdf8', hist.map((x) => x.rooms), '#f4c41c', '');

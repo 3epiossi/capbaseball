@@ -42,6 +42,19 @@ export interface PiSystemStats {
   tcpEstab8788: number | null;
 }
 
+export interface RoomHealthSnapshot {
+  startedRooms: number;
+  waitingRooms: number;
+  stalledRooms: number;
+  disconnectedRooms: number;
+  highInningRooms: number;
+  extremeRunDiffRooms: number;
+  zeroPitchOldRooms: number;
+  oldestRoomAgeMin: number;
+  avgMatchPitches: number;
+  maxMatchRuns: number;
+}
+
 export interface ServerSnapshotInput {
   uptimeSec: number;
   version: string | null;
@@ -64,6 +77,7 @@ export interface ServerSnapshotInput {
   maxConnsSingleIp: number;
   staticCacheFiles: number;
   staticCacheMb: number;
+  roomsHealth?: RoomHealthSnapshot;
 }
 
 export class ServerMonitor {
@@ -98,6 +112,31 @@ export class ServerMonitor {
   physicsSolvesTotal = 0;
   private physicsTotalMs = 0;
   physicsMaxMs = 0;
+
+  // Match lifecycle & gameplay anomaly counters
+  matchesStarted = 0;
+  matchesCompleted = 0;
+  matchesResigned = 0;
+  matchesDisconnectTimeout = 0;
+  waitingExpired = 0;
+  rematchesStarted = 0;
+
+  pitchClockViolations = 0;
+  swingTimeouts = 0;
+  staleOrOutOfTurnIgnored = 0;
+  disconnectsInMatch = 0;
+  reconnectsSucceeded = 0;
+  reconnectsFailed = 0;
+
+  absChallengesTotal = 0;
+  absOverturned = 0;
+  outOfRangeInputsClamped = 0;
+  nanSanityErrors = 0;
+
+  private lastSwingTimeouts = 0;
+  private lastStaleIgnored = 0;
+  private lastInputsClamped = 0;
+  private lastNanErrors = 0;
 
   private readonly msgTypeCountsIn = new Map<string, number>();
   private readonly msgTypeCountsOut = new Map<string, number>();
@@ -317,6 +356,60 @@ export class ServerMonitor {
       this.pushAlert('warn', 'LAG_SPIKE', `Event loop p95 lag spiked to ${snap.load.eventLoopLagMs}ms`);
     }
 
+    // Gameplay & match-state anomaly alerts
+    const rh = snap.roomsHealth;
+    if (rh) {
+      if (rh.stalledRooms > 0) {
+        this.pushAlert(
+          'warn',
+          'ROOM_STALLED',
+          `${rh.stalledRooms} active room(s) stalled >45s with both players connected`,
+        );
+      }
+      if (rh.highInningRooms > 0) {
+        this.pushAlert('warn', 'HIGH_INNING', `${rh.highInningRooms} room(s) reached inning 8+`);
+      }
+      if (rh.extremeRunDiffRooms > 0) {
+        this.pushAlert('warn', 'EXTREME_SCORE', `${rh.extremeRunDiffRooms} room(s) have run differential >= 15`);
+      }
+    }
+    if (this.nanSanityErrors > this.lastNanErrors) {
+      this.pushAlert(
+        'crit',
+        'PHYSICS_NAN',
+        `Physics solver produced non-finite value (total=${this.nanSanityErrors})`,
+        10_000,
+      );
+    }
+    this.lastNanErrors = this.nanSanityErrors;
+
+    if (this.swingTimeouts - this.lastSwingTimeouts >= 5) {
+      this.pushAlert(
+        'warn',
+        'SWING_TIMEOUT_SPIKE',
+        `+${this.swingTimeouts - this.lastSwingTimeouts} swing timeouts in 2s (total=${this.swingTimeouts})`,
+      );
+    }
+    this.lastSwingTimeouts = this.swingTimeouts;
+
+    if (this.staleOrOutOfTurnIgnored - this.lastStaleIgnored >= 15) {
+      this.pushAlert(
+        'warn',
+        'DESYNC_SPIKE',
+        `+${this.staleOrOutOfTurnIgnored - this.lastStaleIgnored} stale/out-of-turn packets ignored in 2s`,
+      );
+    }
+    this.lastStaleIgnored = this.staleOrOutOfTurnIgnored;
+
+    if (this.outOfRangeInputsClamped - this.lastInputsClamped >= 3) {
+      this.pushAlert(
+        'warn',
+        'INPUT_OUT_OF_RANGE',
+        `+${this.outOfRangeInputsClamped - this.lastInputsClamped} out-of-range pitch/swing inputs clamped`,
+      );
+    }
+    this.lastInputsClamped = this.outOfRangeInputsClamped;
+
     const sample: MetricsSample = {
       ts: now,
       clients: snap.load.clients,
@@ -437,6 +530,36 @@ export class ServerMonitor {
         physicsMaxMs: Number(this.physicsMaxMs.toFixed(2)),
       },
       pi: this.piStats,
+      gameplay: {
+        matchesStarted: this.matchesStarted,
+        matchesCompleted: this.matchesCompleted,
+        matchesResigned: this.matchesResigned,
+        matchesDisconnectTimeout: this.matchesDisconnectTimeout,
+        waitingExpired: this.waitingExpired,
+        rematchesStarted: this.rematchesStarted,
+        pitchClockViolations: this.pitchClockViolations,
+        swingTimeouts: this.swingTimeouts,
+        staleOrOutOfTurnIgnored: this.staleOrOutOfTurnIgnored,
+        disconnectsInMatch: this.disconnectsInMatch,
+        reconnectsSucceeded: this.reconnectsSucceeded,
+        reconnectsFailed: this.reconnectsFailed,
+        absChallengesTotal: this.absChallengesTotal,
+        absOverturned: this.absOverturned,
+        outOfRangeInputsClamped: this.outOfRangeInputsClamped,
+        nanSanityErrors: this.nanSanityErrors,
+        roomsHealth: snap.roomsHealth ?? {
+          startedRooms: 0,
+          waitingRooms: 0,
+          stalledRooms: 0,
+          disconnectedRooms: 0,
+          highInningRooms: 0,
+          extremeRunDiffRooms: 0,
+          zeroPitchOldRooms: 0,
+          oldestRoomAgeMin: 0,
+          avgMatchPitches: 0,
+          maxMatchRuns: 0,
+        },
+      },
       alerts: this.alerts,
       history: this.history,
     };

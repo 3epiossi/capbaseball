@@ -959,4 +959,89 @@ describe('Online Multiplayer Server Integration', () => {
     const w3 = await g1.nextMsg((m) => m.type === 'welcome');
     expect(w3.name).toBe('ABCDEFGHIJKL');
   });
+
+  it('20. /metrics tracks match gameplay anomalies (clamped inputs, stale packets, clock violations, room scan)', async () => {
+    const anomSrv = await startServer(0, {
+      pitchClockScale: 0.015,
+      swingTimeoutPaddingMs: 30,
+      graceMs: 1000,
+    });
+    const host = await connectClient(anomSrv.port, 'AnomHost');
+    const guest = await connectClient(anomSrv.port, 'AnomGuest');
+
+    const getMetrics = () =>
+      new Promise<Record<string, unknown>>((resolve, reject) => {
+        http
+          .get(`http://127.0.0.1:${anomSrv.port}/capbaseball/metrics`, (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => (body += c));
+            res.on('end', () => resolve(JSON.parse(body)));
+          })
+          .on('error', reject);
+      });
+
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'AnomHost' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      const code = created.code as string;
+
+      guest.send({ type: 'join', code, name: 'AnomGuest' });
+      await host.nextMsg((m) => m.type === 'match_start');
+      await guest.nextMsg((m) => m.type === 'match_start');
+
+      // 1. Trigger a Pitch Clock violation (do not throw)
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000),
+        guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000),
+      ]);
+
+      // 2. Submit out-of-range pitch speed (triggers outOfRangeInputsClamped) + send stale pitchSeq (triggers staleOrOutOfTurnIgnored)
+      host.send({
+        type: 'pitch_submit',
+        pitchSeq: 2,
+        pitchId: 'straight',
+        speedKmh: 999,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      await host.nextMsg((m) => m.type === 'pitch_launch');
+      await guest.nextMsg((m) => m.type === 'pitch_launch');
+
+      // Stale pitchSeq swing ignored -> increments staleOrOutOfTurnIgnored
+      guest.send({ type: 'no_swing', pitchSeq: 1 });
+
+      // Wait for swingTimer timeout -> increments swingTimeouts
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'pitch_result', 3000),
+        guest.nextMsg((m) => m.type === 'pitch_result', 3000),
+      ]);
+
+      const report = (await getMetrics()) as {
+        gameplay: {
+          matchesStarted: number;
+          pitchClockViolations: number;
+          swingTimeouts: number;
+          staleOrOutOfTurnIgnored: number;
+          outOfRangeInputsClamped: number;
+          nanSanityErrors: number;
+          roomsHealth: { startedRooms: number; stalledRooms: number };
+        };
+      };
+      expect(report.gameplay.matchesStarted).toBe(1);
+      expect(report.gameplay.pitchClockViolations).toBeGreaterThanOrEqual(1);
+      expect(report.gameplay.swingTimeouts).toBe(1);
+      expect(report.gameplay.staleOrOutOfTurnIgnored).toBe(1);
+      expect(report.gameplay.outOfRangeInputsClamped).toBe(1);
+      expect(report.gameplay.nanSanityErrors).toBe(0);
+      expect(report.gameplay.roomsHealth.startedRooms).toBe(1);
+      expect(report.gameplay.roomsHealth.stalledRooms).toBe(0);
+    } finally {
+      await host.close();
+      await guest.close();
+      await anomSrv.close();
+    }
+  });
 });
