@@ -59,7 +59,7 @@
 - **低負擔心跳**：伺服器主動 ping 預設調為 `pingIntervalMs = 5000` ms（`deadSocketTimeoutMs = 25000` ms），且任何有效進站 WebSocket 封包均同步更新 `lastPongAt`，避免活躍玩家因偶發排程抖動被誤踢。
 - **HTTP 安全標頭**：所有 HTTP 回應均附加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Permissions-Policy: camera=(), microphone=(), geolocation=()` 與嚴格 `Content-Security-Policy`（`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'self'; frame-ancestors 'none'`）。
 - **隱藏檔與路徑穿越封鎖**：拒絕任何包含空位元組（`\0`）、以 `.` 開頭的路徑區段（如 `/.env`）或超出範圍的請求，回傳 `403 Forbidden`。
-- **玩家名稱淨化（`sanitizeName`）**：移除控制字元與 `<>'"`&`，裁切至最多 16 字元；空字串則退回隨機 `PlayerXXXX`。
+- **玩家名稱淨化（`sanitizeName`）**：移除控制字元與 `<>'"`&`，裁切至最多 12 字元；空字串或預設 `PLAYER` 則自動配發 6 碼不重複英數訪客代號（如 `K7M2Q9`，且避開目前在線名稱）。
 - **WebSocket 防護**：`WebSocketServer` 設定 `maxPayload: 16 * 1024`（16 KB）並關閉 `perMessageDeflate: false`；連線時檢查來源 IP（支援 `cf-connecting-ip`／`x-forwarded-for`）並限制單一 IP 最多 `maxConnPerIp`（預設 `48`，兼容校園／宿舍與行動 CGNAT 共享 IP）條連線；每條連線套用 1 秒滑動視窗頻率限制，超過 `maxMsgsPerSec`（預設 `30`）則回傳 `rate_limited` 並以代碼 `1008` 關閉連線。
 
 ### 5. 優雅 `SIGTERM` 排空（Drain）

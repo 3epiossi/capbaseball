@@ -937,4 +937,26 @@ describe('Online Multiplayer Server Integration', () => {
       await cacheSrv.close();
     }
   });
+
+  it('19. Default guest names fall back to 6 unique random alphanumeric characters', async () => {
+    const g1 = await connectClient(srv.port, '');
+    const g2 = await connectClient(srv.port, 'PLAYER');
+    openClients.push(g1, g2);
+
+    g1.send({ type: 'hello', name: '' });
+    const w1 = await g1.nextMsg((m) => m.type === 'welcome');
+    g2.send({ type: 'hello', name: 'PLAYER' });
+    const w2 = await g2.nextMsg((m) => m.type === 'welcome');
+
+    expect(w1.name).toMatch(/^[A-Z0-9]{6}$/);
+    expect(new Set(String(w1.name)).size).toBe(6);
+    expect(w2.name).toMatch(/^[A-Z0-9]{6}$/);
+    expect(new Set(String(w2.name)).size).toBe(6);
+    expect(w1.name).not.toBe(w2.name);
+
+    // Custom names longer than 12 characters are truncated to 12 characters
+    g1.send({ type: 'hello', name: 'ABCDEFGHIJKLMNO' });
+    const w3 = await g1.nextMsg((m) => m.type === 'welcome');
+    expect(w3.name).toBe('ABCDEFGHIJKL');
+  });
 });

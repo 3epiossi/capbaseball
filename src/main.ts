@@ -1720,26 +1720,70 @@ btnNickChip.addEventListener('click', () => {
 });
 
 // --- Online UI, Lobby Hub, Load/Stability Auto-CPU Failover & Spectating ---
+function generateGuestName(): string {
+  const pool = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+  const rand = new Uint32Array(6);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(rand);
+  } else {
+    for (let i = 0; i < 6; i++) rand[i] = Math.floor(Math.random() * 0x100000000);
+  }
+  let out = '';
+  for (let i = 0; i < 6; i++) {
+    const idx = i + (rand[i] % (pool.length - i));
+    const ch = pool[idx];
+    pool[idx] = pool[i];
+    out += ch;
+  }
+  return out;
+}
+
+const GUEST_NICK_KEY = 'capbaseball_guest_nick';
+let guestNick = localStorage.getItem(GUEST_NICK_KEY);
+if (!guestNick || !/^[A-Z0-9]{6}$/.test(guestNick) || new Set(guestNick).size !== 6) {
+  guestNick = generateGuestName();
+  localStorage.setItem(GUEST_NICK_KEY, guestNick);
+}
+
 const savedNickRaw = localStorage.getItem('capbaseball_nick');
-const savedNick = savedNickRaw && savedNickRaw !== '瓶蓋玩家' ? savedNickRaw : null;
+const savedNick =
+  savedNickRaw && savedNickRaw !== '瓶蓋玩家' && savedNickRaw !== 'PLAYER'
+    ? savedNickRaw.trim().slice(0, 12)
+    : null;
+if (savedNickRaw === '瓶蓋玩家' || savedNickRaw === 'PLAYER') {
+  localStorage.removeItem('capbaseball_nick');
+} else if (savedNick && savedNick !== savedNickRaw) {
+  localStorage.setItem('capbaseball_nick', savedNick);
+}
+onlineNameInput.placeholder = guestNick;
 if (savedNick) {
   onlineNameInput.value = savedNick;
   nickChipLabel.textContent = savedNick;
+} else {
+  nickChipLabel.textContent = guestNick;
 }
 onlineNameInput.addEventListener('change', () => {
-  const n = onlineNameInput.value.trim().slice(0, 16) || 'PLAYER';
-  localStorage.setItem('capbaseball_nick', n);
-  nickChipLabel.textContent = n;
+  const raw = onlineNameInput.value.trim().slice(0, 12);
+  if (raw && raw !== '瓶蓋玩家' && raw !== 'PLAYER') {
+    onlineNameInput.value = raw;
+    localStorage.setItem('capbaseball_nick', raw);
+    nickChipLabel.textContent = raw;
+  } else {
+    localStorage.removeItem('capbaseball_nick');
+    onlineNameInput.value = '';
+    nickChipLabel.textContent = guestNick!;
+  }
 });
 
 function getOnlinePlayerName(): string {
-  const n = onlineNameInput.value.trim().slice(0, 16);
-  if (n && n !== '瓶蓋玩家') {
+  const n = onlineNameInput.value.trim().slice(0, 12);
+  if (n && n !== '瓶蓋玩家' && n !== 'PLAYER') {
     localStorage.setItem('capbaseball_nick', n);
     nickChipLabel.textContent = n;
     return n;
   }
-  return 'PLAYER';
+  nickChipLabel.textContent = guestNick!;
+  return guestNick!;
 }
 
 function cancelQueueToCpu(): void {

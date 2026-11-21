@@ -171,15 +171,31 @@ export interface ServerOptions {
 const wsCompactMode = new WeakMap<WebSocket, boolean>();
 const wsMonitorMap = new WeakMap<WebSocket, ServerMonitor>();
 
-function sanitizeName(raw: unknown): string {
+function generateGuestName(isTaken?: (candidate: string) => boolean): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const pool = chars.split('');
+    let out = '';
+    for (let i = 0; i < 6; i++) {
+      const idx = i + crypto.randomInt(0, pool.length - i);
+      const ch = pool[idx];
+      pool[idx] = pool[i];
+      out += ch;
+    }
+    if (!isTaken || !isTaken(out)) return out;
+  }
+  return generateGuestName();
+}
+
+function sanitizeName(raw: unknown, isTaken?: (candidate: string) => boolean): string {
   if (typeof raw === 'string') {
     const cleaned = raw
       .replace(/[\x00-\x1f\x7f<>'"`&]/g, '')
       .trim()
-      .slice(0, 16);
-    if (cleaned.length > 0) return cleaned;
+      .slice(0, 12);
+    if (cleaned.length > 0 && cleaned.toUpperCase() !== 'PLAYER') return cleaned;
   }
-  return `Player${String(crypto.randomInt(0, 10000)).padStart(4, '0')}`;
+  return generateGuestName(isTaken);
 }
 
 function generateRoomCode(rooms: Map<string, Room>): string {
@@ -1289,6 +1305,13 @@ export function startServer(
     monitor.connAcceptedTotal += 1;
     wsMonitorMap.set(ws, monitor);
 
+    const isNameTaken = (candidate: string): boolean => {
+      for (const c of clients.values()) {
+        if (c.name === candidate) return true;
+      }
+      return false;
+    };
+
     const clientId = crypto.randomUUID();
     const nowOnConnect = Date.now();
     const client: ClientMeta = {
@@ -1296,7 +1319,7 @@ export function startServer(
       ws,
       ip,
       compactV2: false,
-      name: sanitizeName(null),
+      name: sanitizeName(null, isNameTaken),
       rttMs: 0,
       roomCode: null,
       side: null,
@@ -1355,7 +1378,7 @@ export function startServer(
             client.compactV2 = true;
             wsCompactMode.set(ws, true);
           }
-          client.name = sanitizeName(msg.name);
+          client.name = sanitizeName(msg.name, isNameTaken);
           sendJson(ws, {
             type: 'welcome',
             clientId,
@@ -1384,7 +1407,7 @@ export function startServer(
             return;
           }
           if (client.roomCode) return;
-          if (msg.name) client.name = sanitizeName(msg.name);
+          if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
           const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
           removeFromQueues(clientId);
           client.queuedMode = mode;
@@ -1420,7 +1443,7 @@ export function startServer(
           }
           if (client.roomCode) return;
           removeFromQueues(clientId);
-          if (msg.name) client.name = sanitizeName(msg.name);
+          if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
           const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
           const code = generateRoomCode(rooms);
           const token = crypto.randomUUID();
@@ -1480,7 +1503,7 @@ export function startServer(
             return;
           }
           removeFromQueues(clientId);
-          if (msg.name) client.name = sanitizeName(msg.name);
+          if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
           const token = crypto.randomUUID();
           room.players.away = {
             token,
