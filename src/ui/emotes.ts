@@ -1,4 +1,12 @@
-export type EmoteId = 'nice' | 'wow' | 'fire' | 'sweat' | 'clap' | 'gg' | 'k' | 'hr';
+export type EmoteId =
+  | 'nice'
+  | 'gg'
+  | 'hr'
+  | 'fire'
+  | 'clap'
+  | 'sweat'
+  | 'k'
+  | 'wow';
 
 export interface QuickChatDef {
   id: EmoteId;
@@ -7,15 +15,17 @@ export interface QuickChatDef {
 }
 
 export const EMOTE_CATALOG: readonly QuickChatDef[] = [
-  { id: 'fire', fallbackLabel: 'Come on! Bring it!', accent: '#f97316' },
-  { id: 'k', fallbackLabel: 'Three times, three!', accent: '#f43f5e' },
-  { id: 'nice', fallbackLabel: 'Yarimasu ne!', accent: '#4ade80' },
-  { id: 'clap', fallbackLabel: 'Oh yeah, nice one!', accent: '#facc15' },
-  { id: 'wow', fallbackLabel: 'Hmm?', accent: '#38bdf8' },
+  { id: 'nice', fallbackLabel: 'Not bad at all!', accent: '#4ade80' },
+  { id: 'gg', fallbackLabel: 'Not at all!', accent: '#a78bfa' },
+  { id: 'hr', fallbackLabel: 'A new era begins!', accent: '#ffd23f' },
+  { id: 'fire', fallbackLabel: 'Alright! Bring it!', accent: '#f97316' },
+  { id: 'clap', fallbackLabel: 'Tables turned!', accent: '#facc15' },
   { id: 'sweat', fallbackLabel: 'This is bad!', accent: '#60a5fa' },
-  { id: 'hr', fallbackLabel: 'Give me a break!', accent: '#ffd23f' },
-  { id: 'gg', fallbackLabel: "Let's play again!", accent: '#a78bfa' },
+  { id: 'k', fallbackLabel: 'Three times, three!', accent: '#f43f5e' },
+  { id: 'wow', fallbackLabel: 'Hmm?', accent: '#38bdf8' },
 ];
+
+export const ALL_EMOTE_IDS: readonly EmoteId[] = EMOTE_CATALOG.map((e) => e.id);
 
 const CHAT_MAP = new Map<string, QuickChatDef>(EMOTE_CATALOG.map((e) => [e.id, e]));
 
@@ -49,7 +59,7 @@ const MAX_HISTORY = 5;
 
 /**
  * Unified Speech-Bubble Chat & Broadcast Hub:
- * - Hosts all text-only opponent quick-chat presets (3s client + server rate limit)
+ * - Hosts 8 fixed text-only quick-chat presets
  * - Hosts all non-pitch game broadcasts (Next Batter, IBB, Pitch Clock) & online system notices
  * - Fully localized into zh-TW / ja / en with zero sticker/emoji graphics
  */
@@ -147,6 +157,12 @@ export class EmoteController {
     }
   }
 
+  getPhraseById(id: EmoteId): string {
+    const def = CHAT_MAP.get(id);
+    if (!def) return id;
+    return this.getPhrase(def);
+  }
+
   private getPhrase(def: QuickChatDef): string {
     return this.labelOverrides[def.id] || def.fallbackLabel;
   }
@@ -202,7 +218,7 @@ export class EmoteController {
     }
     this.tray.appendChild(logBox);
 
-    // Quick-chat text options (online matches) or concise offline note
+    // Quick-chat text options (8 fixed presets in online matches) or concise offline note
     if (this.onlineSendEnabled) {
       const grid = document.createElement('div');
       grid.className = 'chat-options-grid';

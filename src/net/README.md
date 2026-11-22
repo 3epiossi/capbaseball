@@ -21,12 +21,12 @@
 
 為降低 Raspberry Pi 伺服器頻寬與行動網路傳輸延遲，客戶端在 `open` 時發送 `{ t: 'hi', n: name, v: 2 }` 啟用 v2 協定，每球封包體積相較原始 JSON 縮減約 75% 至 80%：
 
-- **短標籤對應**：將訊息類型縮寫為 1 至 2 字元標籤，例如 `p`（`ping`）、`po`（`pong`）、`ps`（`pitch_submit`）、`sw`（`swing_input`）、`ns`（`no_swing`）、`pl`（`pitch_launch`）、`pr`（`pitch_result`）、`st`（`stats`）、`ms`（`match_start`）、`ss`（`state_sync`）、`sp`（`spectate_sync`）、`ab`（`abs_challenge`／`abs_result`）、`er`（`error`）。
+- **短標籤對應**：將訊息類型縮寫為 1 至 2 字元標籤，例如 `p`（`ping`）、`po`（`pong`）、`ps`（`pitch_submit`）、`sw`（`swing_input`）、`ns`（`no_swing`）、`pl`（`pitch_launch`）、`pr`（`pitch_result`）、`st`（`stats`）、`ms`（`match_start`）、`ss`（`state_sync`）、`sp`（`spectate_sync`）、`ab`（`abs_challenge`／`abs_result`）、`sj`/`sl`/`os`/`or`/`of`/`ox`（CPU 候補邀約流程）、`er`（`error`）。
 - **`packMatch` 與 `unpackMatch`**：
-  - 將三壘包狀態編碼為 3-bit 整數遮罩 `basesMask`（`0..7`，分別對應一、二、三壘）。
+  - 將三壘包狀態編碼為 3-bit 整數遮罩 `basesMask`（`0..7`，分別對應一、二、三壘），並以 `er` 編碼比賽結束原因（`1=mercy`、`2=disconnect`、`3=resign`）。
   - 將兩隊得分／安打／用球數／打序／保送／三振壓縮為長度 12 的元組 `t`，局數／半局／球數／出局／壘包／ABS 挑戰壓縮為長度 10 的元組 `g`，比賽統計壓縮為長度 4 的元組 `s`。
   - 省略固定先發打序陣列，由 `unpackMatch` 在接收端以 `DEFAULT_AWAY_LINEUP`／`DEFAULT_HOME_LINEUP` 重建，並同時向下相容舊版完整 JSON 訊息。
-- **浮點數精度控制**：透過 `round2`（球速、距離、邊緣公分）與 `round3`（座標、擊球時機與速度向量）將浮點數限制在 2 至 3 位小數，消除 17 位 IEEE-754 尾數雜訊；`pitch_result` 的 `catchInfo` 同步攜帶 4 人守備攔截座標（`fielderId`、`catchPos`、`blockPos`、`blockTimeSec`），供雙端與觀戰者繪製一致的守備跑位。
+- **浮點數精度控制與揮空真值回傳**：透過 `round2` 與 `round3` 限制浮點小數位；`pitch_result` 的 `catchInfo` 同步攜帶 4 人守備攔截座標，且揮空（`r.c = 0`）一併回傳 `swingData` 與真實 `dtTiming`/`detail`/`hitField`，避免前端退回 `dtTiming = 0` 假象。`match_start`、`state_sync`、`spectate_sync` 與 `room_list` 亦攜帶 `roomKind`（`live`／`friend`）。
 
 ### 2. 子路徑偵測與會話儲存（`client.ts`）
 

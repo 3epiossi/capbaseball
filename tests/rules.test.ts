@@ -25,7 +25,6 @@ import {
 import {
   applyAbsChallenge,
   applyBattedOutcome,
-  applyDerbySwingResult,
   applyIntentionalWalk,
   applyPitchClockViolation,
   applyPitchResult,
@@ -199,7 +198,7 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     expect(match.stats.wildPitches).toBe(1);
   });
 
-  it('completes a 6-inning game and triggers extra-inning tie-breaker (1 out, bases loaded)', () => {
+  it('completes a 6-inning game and triggers extra-inning tie-breaker (0 outs, bases loaded)', () => {
     const match = createMatch('official6');
 
     // Play 6 tied innings (0-0)
@@ -211,23 +210,24 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
       for (let o = 0; o < 3; o++) applyBattedOutcome(match, 'OUT');
     }
 
-    // Now in top of 7th (extra inning): 1 out, bases loaded!
+    // Now in top of 7th (extra inning): 0 outs, bases loaded!
     expect(match.isGameOver).toBe(false);
     expect(match.inning).toBe(7);
     expect(match.half).toBe('top');
-    expect(match.outs).toBe(1);
+    expect(match.outs).toBe(0);
     expect(match.bases.every((b) => b !== null)).toBe(true);
 
     // Intentional walk is allowed in top of 7th
     expect(canIntentionalWalk(match)).toBe(true);
 
-    // Away fails to score (2 outs)
+    // Away fails to score (3 outs)
+    applyBattedOutcome(match, 'OUT');
     applyBattedOutcome(match, 'OUT');
     applyBattedOutcome(match, 'OUT');
 
-    // Bottom of 7th: 1 out, bases loaded, tied 0-0 -> walk-off IBB disallowed per 5.01(D)
+    // Bottom of 7th: 0 outs, bases loaded, tied 0-0 -> walk-off IBB disallowed per 5.01(D)
     expect(match.half).toBe('bottom');
-    expect(match.outs).toBe(1);
+    expect(match.outs).toBe(0);
     expect(match.bases.every((b) => b !== null)).toBe(true);
     expect(canIntentionalWalk(match)).toBe(false);
     expect(applyIntentionalWalk(match)).toBe(false);
@@ -301,10 +301,10 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
       expect(Math.hypot(f.pos[0], f.pos[2])).toBeLessThanOrEqual(FENCE_DIST - 0.55 + 1e-6);
     }
 
-    // 5. Reachable fly balls have deterministic bobble/drop rate across seeds
+    // 5. Reachable high fly balls have low deterministic bobble/drop rate (4%..12%) across seeds
     let caughtCount = 0;
     let bobbledCount = 0;
-    for (let seed = 1; seed <= 40; seed++) {
+    for (let seed = 1; seed <= 120; seed++) {
       const res = simulateDeterministicCatch(reachableFly, fielders, {
         exitSpeedMs: 13.0,
         launchAngleDeg: 28,
@@ -317,8 +317,9 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
         expect(judgeBattedCap(reachableFly, { caughtInAir: res.caught })).not.toBe('OUT');
       }
     }
-    expect(caughtCount).toBeGreaterThan(0);
+    expect(caughtCount).toBeGreaterThan(95);
     expect(bobbledCount).toBeGreaterThan(0);
+    expect(bobbledCount).toBeLessThan(25);
   });
 
   it('produces foul balls on early/late timing band and PCI-edge grazes instead of pure whiffs', () => {
@@ -532,7 +533,7 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     expect(match.absChallenges.home).toBe(1);
   });
 
-  it('escalates quick3 from 3 regulation innings -> 4th bases-loaded tie-breaker -> 5-pitch MLB All-Star HR Derby', () => {
+  it('continues quick3 extra innings with 0 outs & bases loaded (no HR Derby) until a winner is decided', () => {
     const match = createMatch('quick3');
     expect(match.regulationInnings).toBe(3);
 
@@ -542,57 +543,35 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
       for (let o = 0; o < 3; o++) applyBattedOutcome(match, 'OUT');
     }
 
-    // 4th inning: bases loaded, 1 out for both top & bottom
+    // 4th inning: bases loaded, 0 outs for both top & bottom
     expect(match.inning).toBe(4);
     expect(match.half).toBe('top');
-    expect(match.outs).toBe(1);
+    expect(match.outs).toBe(0);
     expect(match.bases.every((b) => b !== null)).toBe(true);
-    applyBattedOutcome(match, 'OUT');
-    applyBattedOutcome(match, 'OUT');
+    for (let o = 0; o < 3; o++) applyBattedOutcome(match, 'OUT');
 
     expect(match.half).toBe('bottom');
-    expect(match.outs).toBe(1);
+    expect(match.outs).toBe(0);
     expect(match.bases.every((b) => b !== null)).toBe(true);
-    applyBattedOutcome(match, 'OUT');
-    applyBattedOutcome(match, 'OUT');
+    for (let o = 0; o < 3; o++) applyBattedOutcome(match, 'OUT');
 
-    // Still tied after 4th -> MLB All-Star 5-Pitch HR Derby!
+    // Still tied after 4th -> NO HR Derby! Continues into 5th inning bases-loaded 0-outs tie-breaker!
     expect(match.isGameOver).toBe(false);
-    expect(match.derby.active).toBe(true);
-    expect(match.derby.round).toBe(1);
-    expect(match.derby.half).toBe('away');
-    expect(match.derby.awayPitchesLeft).toBe(5);
-    expect(match.derby.homePitchesLeft).toBe(5);
+    expect(match.derby.active).toBe(false);
+    expect(match.inning).toBe(5);
+    expect(match.half).toBe('top');
+    expect(match.outs).toBe(0);
+    expect(match.bases.every((b) => b !== null)).toBe(true);
 
-    // Away hits 2 HRs in 5 swings
-    applyDerbySwingResult(match, true);
-    applyDerbySwingResult(match, false);
-    applyDerbySwingResult(match, true);
-    applyDerbySwingResult(match, false);
-    applyDerbySwingResult(match, false);
-    expect(match.derby.awayHR).toBe(2);
-    expect(match.derby.awayPitchesLeft).toBe(0);
-    expect(match.derby.half).toBe('home');
-
-    // Home hits 2 HRs in 5 swings -> tied 2-2 -> Sudden Death Round 2!
-    applyDerbySwingResult(match, true);
-    applyDerbySwingResult(match, false);
-    applyDerbySwingResult(match, true);
-    applyDerbySwingResult(match, false);
-    applyDerbySwingResult(match, false);
-    expect(match.isGameOver).toBe(false);
-    expect(match.derby.round).toBe(2);
-    expect(match.derby.pitchesPerSide).toBe(1);
-    expect(match.derby.half).toBe('away');
-    expect(match.derby.awayPitchesLeft).toBe(1);
-    expect(match.derby.homePitchesLeft).toBe(1);
-
-    // Sudden death: Away hits 0, Home hits HR -> Walk-off win for Home!
-    applyDerbySwingResult(match, false);
-    expect(match.derby.half).toBe('home');
-    applyDerbySwingResult(match, true);
+    // Away fails to score in top 5th; Home walks off in bottom 5th
+    for (let o = 0; o < 3; o++) applyBattedOutcome(match, 'OUT');
+    expect(match.half).toBe('bottom');
+    expect(match.outs).toBe(0);
+    expect(match.bases.every((b) => b !== null)).toBe(true);
+    applyBattedOutcome(match, '1B');
     expect(match.isGameOver).toBe(true);
     expect(match.winner).toBe('home');
+    expect(match.home.totalRuns).toBe(1);
   });
 
   it('enforces Pitch Clock (15s bases empty / 20s runners on base) and walk-off violation walk', () => {

@@ -63,7 +63,7 @@ ln -sfn "releases/$B" current
 if [[ $MODE == --now ]] && systemctl --user is-active -q capbaseball; then
   systemctl --user kill -s SIGINT capbaseball
 else
-  echo "等進行中的對局打完再換版（最多 5 分鐘）…"
+  echo "提前 60 秒預告更新並等進行中的對局打完再換版（最多 6 分鐘）…"
   systemctl --user reset-failed capbaseball 2>/dev/null || true
   systemctl --user restart capbaseball
 fi

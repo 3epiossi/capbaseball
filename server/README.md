@@ -22,9 +22,9 @@
 
 ### 1. 權威對戰迴圈與冪等防護
 
-- **配對與房間生命週期**：支援快速配對佇列（`quick3`／`official6`）、4 碼親友房建立與加入、即時觀戰（`list`／`watch`／`unwatch`）、交換主客場再戰（`rematch`）與 `45` 秒斷線寬限重連（`reconnect`）。
+- **配對與房間生命週期**：支援快速配對佇列（`quick3`／`official6`，標記為 `roomKind: 'live'`）、CPU 候補邀約（`standby_join` → `match_offer` → `offer_shown` 20 秒倒數 → `offer_reply` 接受建房或拒絕／逾時自動轉邀下一位）、4 碼親友房建立與加入（標記為 `roomKind: 'friend'`）、即時觀戰（`list` 回傳 `roomKind` 與 `outs`）、交換主客場再戰（`rematch`）與 **`20` 秒**斷線寬限重連（`reconnect`，逾時判勝並設定 `match.endReason = 'disconnect'`）。
 - **斷線與房間回收（2026-11-21 修正手機「Room code not found／Room is full」）**：
-  - 房主在好友尚未加入時斷線，房間不再立刻刪除，改保留 `waitingGraceMs`（預設 `300` 秒）；手機切去 LINE 貼房號時連線被系統中止，好友仍能加入。好友在房主離線時加入，會收到 `opponent_disconnected`，並改用 `graceMs`（`45` 秒）計時，逾時由 `expireSeat` 判對手勝並回收房間。
+  - 房主在好友尚未加入時斷線，房間不再立刻刪除，改保留 `waitingGraceMs`（預設 `300` 秒）；手機切去 LINE 貼房號時連線被系統中止，好友仍能加入。好友在房主離線時加入，會收到 `opponent_disconnected`，並改用 `graceMs`（`20` 秒）計時，逾時由 `expireSeat` 判對手勝並回收房間。
   - 房主對尚無好友的房間 `reconnect`，回傳 `room_created`（同房號與 `token`）而非 `state_sync`，避免被丟進對 `WAITING` 的球場。
   - 同一座位再次 `reconnect` 時關閉舊連線並清除舊 client 的 `roomCode`／`side`；`reconnect` 也會移出配對佇列與觀戰。
   - 死連線偵測：`lastPongAt` 超過 `deadSocketTimeoutMs`（預設 `max(10000, pingIntervalMs * 5)`）即 `terminate()`，交由正常斷線流程啟動寬限，避免失訊手機永遠佔著座位。
@@ -33,7 +33,7 @@
   - **快捷對話 3 秒防洗頻（`emote`，含觀戰觀眾）**：僅允許白名單內的 8 組訊息 ID（`nice`、`wow`、`fire`、`sweat`、`clap`、`gg`、`k`、`hr`），選手與觀戰觀眾皆可發送並由接收端依語系自動翻譯；伺服器強制限制單人間隔 `3000` ms，並對觀戰觀眾額外施加單房 `1200` ms 總節流避免洗版干擾對戰。
   - 已知未修：親友房在伺服器忙碌時回 `server_busy` 會被客戶端導向 CPU 對戰；建房／加入按鈕沒有連點防護；`sendToRoom` 清除失效觀戰者時未重設 `watchingCode`。
 - **回合與序號驗證**：每球遞增 `pitchSeq`，伺服器僅接受符合當前 `turnState`（`awaiting_pitch` 或 `awaiting_swing`）、正確投打方且 `msg.pitchSeq === room.pitchSeq` 的指令，自動忽略重複、過期或越權封包。
-- **投打結算**：收到 `pitch_submit` 後，伺服器以加密安全亂數產生 `seed` 並呼叫 `solvePitchTrajectory`（`120` Hz）計算軌跡，廣播 `pitch_launch` 並啟動逾時自動判不揮棒計時器；收到 `swing_input`、`no_swing` 或逾時後，呼叫 `evaluateSwingResolution`、`checkCatcherCatch`、`evaluateUmpirePitchCall` 與 `applyPitchResult` 完成權威判決並廣播 `pitch_result`。
+- **投打結算與揮空真值回傳（2026-11-23 修正）**：收到 `pitch_submit` 後，伺服器以加密安全亂數產生 `seed` 並呼叫 `solvePitchTrajectory`（`120` Hz）計算軌跡，廣播 `pitch_launch` 並啟動逾時自動判不揮棒計時器；收到 `swing_input`、`no_swing` 或逾時後，呼叫 `evaluateSwingResolution`、`checkCatcherCatch`、`evaluateUmpirePitchCall` 與 `applyPitchResult` 完成權威判決並廣播 `pitch_result`。修正舊版揮空時 `resolveNoContactPitch` 丟棄 `swingData` 與 `resolution`（導致前端假造 `dtTiming = 0` 與正中棒框）的問題，揮空亦完整回傳真實出棒位置與時機誤差。
 - **權威投球時鐘（Pitch Clock）與線上暫停同步（2026-11-22 修正）**：
   - **問題**：初版線上 20 秒選單倒數只在前端運作，伺服器與對手毫不知情，導致一方開選單時對手的計時鐘照常倒數、甚至可趁對手在看設定時直接偷投或觸發超時壞球；此外對手斷線期間前端時鐘未停、投手開精簡轉場時能搶在對手 2.2 秒 ABS 決策結束前出手，且固定 `3000`／`4200` ms 緩衝短於完整轉場演出總時長。
   - **解法**：新增雙向 `menu_pause`／`pause_state`（精簡 v2 短鍵 `mp`），任一方開啟選單／規則／設定時，伺服器以 `pausePitchClock` 精確凍結剩餘毫秒數並廣播 `pause_state`，同時在 `pitch_submit`／`ibb` 鎖定雙方操作，並由伺服器執行權威 20 秒上限（`menuPauseMs`）逾時自動續算；斷線期間同步凍結時鐘與操作；新增 `absWindowUntil`（`2200` ms）阻擋 ABS 視窗內偷投；`finalizeNoContact` 與 `finalizeSwing` 依當球事件（ABS、三振、換局、飛球時長、全壘打）動態計算 `postCallBufferMs`。
@@ -69,12 +69,12 @@
 - **玩家名稱淨化（`sanitizeName`）**：移除控制字元與 `<>'"`&`，裁切至最多 12 字元；空字串或預設 `PLAYER` 則自動配發 6 碼不重複英數訪客代號（如 `K7M2Q9`，且避開目前在線名稱）。
 - **WebSocket 防護**：`WebSocketServer` 設定 `maxPayload: 16 * 1024`（16 KB）並關閉 `perMessageDeflate: false`；連線時檢查來源 IP（支援 `cf-connecting-ip`／`x-forwarded-for`）並限制單一 IP 最多 `maxConnPerIp`（預設 `48`，兼容校園／宿舍與行動 CGNAT 共享 IP）條連線；每條連線套用 1 秒滑動視窗頻率限制，超過 `maxMsgsPerSec`（預設 `30`）則回傳 `rate_limited` 並以代碼 `1008` 關閉連線。
 
-### 5. 優雅 `SIGTERM` 排空（Drain）
+### 5. 兩階段優雅 `SIGTERM` 排空（60 秒提前預告＋活性對局判斷）
 
-獨立執行時若收到 `SIGTERM` 訊號，伺服器進入 `draining = true` 狀態：
+獨立執行時若收到 `SIGTERM` 訊號，伺服器進入 `draining = true` 狀態並採兩階段換版：
 
-1. 向所有連線廣播 `{ type: 'notice', kind: 'draining' }` 並停止接受新的 `queue` 與 `create` 請求。
-2. 等待所有進行中房間（`rooms.size === 0`）自然結束，最長等待 `DRAIN_SECONDS`（預設 `300` 秒）後關閉伺服器並結束行程；若再次收到 `SIGTERM` 或 `SIGINT` 則立即關閉退出。
+1. **60 秒預告期（`PRE_DRAIN_SECONDS=60`）**：立刻停止接受 `queue`、`create`、`join`、`rematch` 與 `standby_join`，清除排隊與候補邀約，向全體連線廣播 `{ type: 'notice', kind: 'draining', countdownSec, updateAtMs }`（`welcome` 與 `/health` 同步附帶 `updateAtMs`）。
+2. **等待進行中對局打完**：60 秒倒數結束後，以 `countActiveMatches()` 只計算進行中的雙人房（排除已結束的 `game_over` 房間與無人加入的空等待房，避免白等滿 5 分鐘）。若當下為 0 場則立即退出切換新版；否則等待最後一場結束並保留 3 秒結果送達緩衝後優雅關閉，最長等待 `DRAIN_SECONDS`（預設 `300` 秒，`TimeoutStopSec=390`）。若再次收到 `SIGTERM` 或 `SIGINT` 則立即退出。
 
 ---
 

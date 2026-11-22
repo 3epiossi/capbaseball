@@ -12,7 +12,7 @@
 |---|---|
 | [field.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/field.ts) | 定義 2025-02 球場尺寸常數，以及界內外、內外野、全壘打牆延伸線與好球帶的幾何判斷函式。 |
 | [judge.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/judge.ts) | 實作投球判決 `judgePitch`、主審好球帶邊緣誤判模擬 `evaluateUmpirePitchCall` 與擊球結果判決 `judgeBattedCap`。 |
-| [match.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/match.ts) | 管理 `MatchState` 比賽狀態機，包含局數推進、強迫進壘、敬遠檢查、ABS 挑戰回溯與 3 局制突破僵局／全壘打大賽。 |
+| [match.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/match.ts) | 管理 `MatchState` 比賽狀態機，包含局數推進、強迫進壘、敬遠檢查、ABS 挑戰回溯、滿壘無人出局延長突破僵局與比賽結束原因（`endReason`）。 |
 
 ---
 
@@ -45,13 +45,12 @@
   - 若 `trueCall !== umpireCall`（挑戰成功／改判）：自 `preSnapshot` 還原球數、出局數、壘包、分數與打序，扣減重複計算的投球數，再以 `forceCall: lc.trueCall` 重新執行 `applyPitchResult`，且**不扣除**挑戰次數。
   - 若維持原判（`UPHELD`）：扣除挑戰方 `1` 次挑戰機會。
 
-### 4. 比賽進程、延長突破僵局與 5 球全壘打大賽（`match.ts`）
+### 4. 比賽進程與延長突破僵局（`match.ts`）
 
 - **模式設定**：`official6` 為 6 局制，`quick3` 為 3 局制；`practice_bat` 與 `practice_pitch` 無限循環局數且每次換打者重置 ABS 挑戰次數。
-- **延長突破僵局**：進入超過正規局數的延長局（如 3 局制的第 4 局）時，`transitionHalfInning` 依規則 7.01(A)(3) 自動設定為 **1 出局滿壘**（由當前打序前三位打者佔據一、二、三壘）。
-- **5 球全壘打大賽（HR Derby）**：在 3 局制（`regulationInnings === 3`）中，若打完第 4 局突破僵局仍平手，狀態機轉入 `derby.active = true`。雙方各打 `5` 球（`pitchesPerSide = 5`），後攻主隊若提前超前即再見勝，先攻客隊領先大於主隊剩餘球數亦提前獲勝；若 5 球結束仍平手則進入每輪 1 球的驟死賽（Sudden Death）。
-- **扣倒制（Mercy Rule / Cold Game）**：自第 2 局起，只要半局結束（或下半局主隊領先）分差達 `10` 分以上且已啟用 `mercyRule`（預設開啟，好友房建房時可切換），比賽直接提前結束並標記 `mercyTriggered = true`。
-- **投球時鐘規則（`getPitchClockSeconds` / `applyPitchClockViolation`）**：壘上無人或全壘打大賽為 `15` 秒，壘上有跑者為 `20` 秒；超時判自動壞球（第 4 球四壞保送、支援滿壘再見保送；全壘打大賽則沒收該球）。
+- **延長突破僵局（滿壘無人出局，取消全壘打大賽）**：正規局數結束若仍平手，每一個延長半局均由 `transitionHalfInning` 自動設定為 **0 出局滿壘**（由當前打序前三位打者佔據一、二、三壘），持續進行直到分出勝負（不再於第 4 局後切換全壘打大賽）。
+- **扣倒制（Mercy Rule / Cold Game）與結束原因（`endReason`）**：自第 2 局起，只要半局結束（或下半局主隊領先）分差達 `10` 分以上且已啟用 `mercyRule`（預設開啟，好友房建房時可切換），比賽直接提前結束並標記 `mercyTriggered = true` 與 `endReason = 'mercy'`；線上對戰另區分 `disconnect`（對手斷線逾時）與 `resign`（對手棄權）。
+- **投球時鐘規則（`getPitchClockSeconds` / `applyPitchClockViolation`）**：壘上無人為 `15` 秒，壘上有跑者為 `20` 秒；超時判自動壞球（第 4 球四壞保送、支援滿壘再見保送）。
 
 ---
 

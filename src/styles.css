@@ -581,6 +581,32 @@ select {
   display: none;
 }
 
+.sb-room-kind {
+  margin-left: auto;
+  padding: 0.06rem 0.36rem;
+  font-family: var(--font-pixel);
+  font-size: 0.54rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  border: 1px solid currentColor;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.sb-room-kind[hidden] {
+  display: none;
+}
+
+.sb-room-kind[data-kind='live'] {
+  color: #fb7185;
+  background: rgba(244, 63, 94, 0.16);
+}
+
+.sb-room-kind[data-kind='friend'] {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.16);
+}
+
 /* ==========================================================================
    Top-Right Single-Row Broadcast Status & Hamburger Menu
    ========================================================================== */
@@ -1494,6 +1520,153 @@ select {
 }
 
 /* ==========================================================================
+   Server Pre-Update Countdown Banner & Non-Blocking Standby Match Offer
+   ========================================================================== */
+.pre-update-banner {
+  position: fixed;
+  top: calc(0.42rem + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 145;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: min(94vw, 540px);
+  padding: 0.44rem 0.85rem;
+  background: rgba(28, 12, 14, 0.96);
+  border: 2px solid #f97316;
+  box-shadow: 0 0 0 2px #070b14, 0 8px 24px rgba(0, 0, 0, 0.72);
+  pointer-events: none;
+}
+
+.pre-update-banner[hidden] {
+  display: none;
+}
+
+.pub-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #fb923c;
+  box-shadow: 0 0 10px #f97316;
+  flex-shrink: 0;
+  animation: abs-pulse 0.7s ease-in-out infinite alternate;
+}
+
+.pub-text {
+  font-family: var(--font-broadcast);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fed7aa;
+  line-height: 1.25;
+}
+
+.match-offer-toast {
+  position: fixed;
+  top: calc(4.6rem + env(safe-area-inset-top, 0px));
+  right: calc(0.7rem + env(safe-area-inset-right, 0px));
+  z-index: 135;
+  width: min(90vw, 304px);
+  padding: 0.62rem 0.72rem 0.66rem;
+  background: rgba(8, 15, 31, 0.96);
+  background-image: var(--scanlines);
+  border: 2px solid var(--gold);
+  box-shadow:
+    inset 0 0 0 2px #0a1020,
+    0 10px 28px rgba(0, 0, 0, 0.74);
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+  pointer-events: auto;
+}
+
+.match-offer-toast[hidden] {
+  display: none;
+}
+
+.mot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.mot-badge {
+  font-family: var(--font-pixel);
+  font-size: 0.64rem;
+  font-weight: 800;
+  color: var(--gold-hi);
+  letter-spacing: 0.05em;
+}
+
+.mot-timer {
+  font-family: var(--font-pixel);
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: #38bdf8;
+  font-variant-numeric: tabular-nums;
+}
+
+.mot-body {
+  font-family: var(--font-broadcast);
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #f8fafc;
+  line-height: 1.25;
+}
+
+.mot-bar-track {
+  height: 4px;
+  width: 100%;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.mot-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #38bdf8, #f4c41c);
+  transition: width 0.12s linear;
+}
+
+.mot-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.42rem;
+}
+
+.mot-btn {
+  padding: 0.42rem 0.48rem;
+  font-size: 0.72rem;
+  min-block-size: 36px;
+}
+
+@media (max-width: 720px) {
+  .pre-update-banner {
+    top: calc(3.05rem + env(safe-area-inset-top, 0px));
+    width: min(94vw, 390px);
+    padding: 0.38rem 0.65rem;
+  }
+
+  .hud-top-region:has(#scoreboard:not([hidden])) ~ .pre-update-banner {
+    top: calc(6.05rem + env(safe-area-inset-top, 0px));
+  }
+
+  .pub-text {
+    font-size: 0.7rem;
+  }
+
+  .match-offer-toast {
+    top: calc(5.2rem + env(safe-area-inset-top, 0px));
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(92vw, 316px);
+  }
+}
+
+/* ==========================================================================
    Server Update Available Refresh Banner
    ========================================================================== */
 .update-banner {
@@ -1783,30 +1956,206 @@ dialog::backdrop {
   letter-spacing: 0.14em;
 }
 
+dialog.watch-dialog {
+  width: min(95vw, 540px);
+}
+
 .watch-list {
   display: flex;
   flex-direction: column;
-  gap: 0.48rem;
+  gap: 0.5rem;
+  max-height: 62dvh;
+  overflow-y: auto;
+  padding-right: 0.12rem;
 }
 
 .watch-empty {
-  margin: 0.4rem 0;
+  margin: 0.8rem 0;
   text-align: center;
   font-family: var(--font-pixel);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: var(--text-muted);
 }
 
 .watch-item {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) 44px 86px;
+  align-items: center;
+  gap: 0.55rem;
+  background: linear-gradient(135deg, rgba(6, 13, 30, 0.96), rgba(10, 22, 48, 0.93));
+  border: 1.5px solid rgba(110, 155, 225, 0.45);
+  border-radius: 10px;
+  padding: 0.52rem 0.72rem;
+  box-shadow: inset 0 1px 0 rgba(148, 197, 255, 0.12), 0 4px 12px rgba(2, 6, 18, 0.55);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.watch-item:hover {
+  border-color: rgba(244, 196, 28, 0.75);
+}
+
+.wi-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+  gap: 0.16rem;
+}
+
+.wi-inning {
+  font-family: var(--font-broadcast);
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: #f4c41c;
+  font-variant-numeric: tabular-nums;
+}
+
+.wi-outs {
+  font-family: var(--font-broadcast);
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  letter-spacing: 0.02em;
+}
+
+.wi-players {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  min-width: 0;
+}
+
+.wi-player-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  background: #0a1224;
-  border: 2px solid #2b3c5e;
-  padding: 0.48rem 0.6rem;
-  font-size: 0.8rem;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.wi-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  font-weight: 800;
+  border: 1.5px solid rgba(255, 255, 255, 0.28);
+}
+
+.wi-avatar.away {
+  background: linear-gradient(135deg, #1e293b 55%, #475569 100%);
+  color: #f8fafc;
+}
+
+.wi-avatar.home {
+  background: linear-gradient(135deg, #eab308 55%, #fde047 100%);
+  color: #0b1120;
+}
+
+.wi-name {
+  font-family: var(--font-broadcast);
+  font-size: 0.92rem;
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wi-name.away {
+  color: #f8fafc;
+}
+
+.wi-name.home {
+  color: #fde68a;
+}
+
+.wi-scores {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.32rem;
+}
+
+.wi-score {
+  font-family: var(--font-broadcast);
+  font-size: 1.02rem;
+  font-weight: 800;
+  line-height: 22px;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.wi-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.24rem;
+}
+
+.wi-kind {
+  font-family: var(--font-pixel);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+}
+
+.wi-kind.live {
+  color: #fb7185;
+  text-shadow: 0 0 8px rgba(244, 63, 94, 0.45);
+}
+
+.wi-kind.friend {
+  color: #38bdf8;
+  text-shadow: 0 0 8px rgba(56, 189, 248, 0.45);
+}
+
+.wi-watch-btn {
+  width: 100%;
+  padding: 0.34rem 0.58rem;
+  border-radius: 999px;
+  border: 1.5px solid #e2e8f0;
+  background: rgba(2, 6, 23, 0.88);
+  color: #f8fafc;
+  font-family: var(--font-broadcast);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.wi-watch-btn:hover {
+  background: #f4c41c;
+  border-color: #f4c41c;
+  color: #0b1120;
+}
+
+@media (max-width: 500px) {
+  .watch-item {
+    grid-template-columns: 48px minmax(0, 1fr) 32px 74px;
+    gap: 0.38rem;
+    padding: 0.45rem 0.52rem;
+  }
+
+  .wi-name {
+    font-size: 0.84rem;
+  }
+
+  .wi-score {
+    font-size: 0.94rem;
+  }
+
+  .wi-watch-btn {
+    font-size: 0.72rem;
+    padding: 0.3rem 0.42rem;
+  }
 }
 
 .setting-row {
@@ -1840,6 +2189,18 @@ dialog::backdrop {
   padding: 0.45rem;
   background: #0a1224;
   border: 2px solid var(--gold);
+}
+
+.result-reason-badge {
+  align-self: center;
+  padding: 0.2rem 0.68rem;
+  font-family: var(--font-broadcast);
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #fde68a;
+  background: rgba(244, 196, 28, 0.14);
+  border: 1.5px solid rgba(244, 196, 28, 0.65);
+  letter-spacing: 0.04em;
 }
 
 .result-lines {
@@ -2832,22 +3193,23 @@ dialog::backdrop {
 .settings-tabs {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 0.25rem;
-  padding: 0.45rem 0.75rem 0;
+  gap: 0.2rem;
+  padding: 0.45rem 0.6rem 0;
   background: #0c1427;
   border-bottom: 2px solid #243454;
 }
 
 .set-tab {
-  padding: 0.45rem 0.25rem;
+  padding: 0.45rem 0.18rem;
   font-family: var(--font-broadcast);
-  font-size: 0.74rem;
+  font-size: 0.7rem;
   font-weight: 700;
   color: #94a3b8;
   background: transparent;
   border: none;
   border-bottom: 3px solid transparent;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .set-tab.active {

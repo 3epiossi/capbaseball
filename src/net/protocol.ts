@@ -7,7 +7,7 @@
  * - 3-decimal float rounding to eliminate 17-digit IEEE-754 serialization noise
  */
 import type { PitchId } from '../physics/pitches';
-import type { GameMode, MatchState, PlayerSlot } from '../rules/match';
+import type { GameMode, MatchEndReason, MatchState, PlayerSlot } from '../rules/match';
 
 export type ServerLoadStatus = 'green' | 'yellow' | 'red';
 
@@ -65,6 +65,8 @@ export interface CompactMatch {
   /** mercy rule off flag (omitted when enabled) & triggered flag */
   mr?: 0;
   mt?: 1;
+  /** match end reason code: 1=mercy, 2=disconnect, 3=resign */
+  er?: 1 | 2 | 3;
   /** optional challengeable call [pitchSeq, eligibleSide(0=away,1=home), challenged(0|1)] */
   lc?: [number, number, number];
 }
@@ -130,6 +132,9 @@ export function packMatch(m: MatchState): CompactMatch {
   if (m.home.runsByInning.length > 0) cm.hr = m.home.runsByInning;
   if (m.mercyRule === false) cm.mr = 0;
   if (m.mercyTriggered) cm.mt = 1;
+  if (m.endReason === 'mercy') cm.er = 1;
+  else if (m.endReason === 'disconnect') cm.er = 2;
+  else if (m.endReason === 'resign') cm.er = 3;
   if (m.winner) {
     cm.w = m.winner === 'home' ? 'h' : m.winner === 'away' ? 'a' : 't';
   }
@@ -191,6 +196,17 @@ export function unpackMatch(cm: CompactMatch): MatchState {
     winner,
     mercyRule: cm.mr !== 0,
     mercyTriggered: cm.mt === 1,
+    endReason: (
+      cm.er === 1
+        ? 'mercy'
+        : cm.er === 2
+          ? 'disconnect'
+          : cm.er === 3
+            ? 'resign'
+            : cm.mt === 1
+              ? 'mercy'
+              : undefined
+    ) as MatchEndReason | undefined,
     lastEvent: '',
     stats: {
       totalPitches,
@@ -347,6 +363,14 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
       return { type: 'emote', id: raw.e };
     case 'mp':
       return { type: 'menu_pause', paused: raw.p === 1 || raw.p === true };
+    case 'sj':
+      return { type: 'standby_join', mode: raw.m === 1 ? 'official6' : 'quick3' };
+    case 'sl':
+      return { type: 'standby_leave' };
+    case 'os':
+      return { type: 'offer_shown', offerId: raw.id };
+    case 'or':
+      return { type: 'offer_reply', offerId: raw.id, accept: raw.a === 1 || raw.a === true };
     default:
       return raw;
   }
@@ -377,6 +401,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         q: s.queued,
         l: encodeLoad(s.load ?? 'green'),
         lg: s.lagMs ?? 0,
+        ...(typeof msg.updateAtMs === 'number' && msg.updateAtMs > 0 ? { ua: msg.updateAtMs } : {}),
       };
     }
     case 'pitch_launch':
@@ -396,7 +421,18 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
     case 'pitch_result': {
       const res = msg.resolution as Record<string, unknown> | null;
       let cr: Record<string, unknown> | undefined;
-      if (res) {
+      if (res && res.contact === false) {
+        const hf = res.hitField as number[];
+        cr = {
+          c: 0,
+          lb: res.label,
+          fb: res.feedback,
+          dt: res.detail,
+          cl: res.color,
+          tm: round3(Number(res.dtTiming)),
+          hf: [round3(hf[0]), round3(hf[1]), round3(hf[2])],
+        };
+      } else if (res) {
         const bp = res.battedParams as { position: number[]; velocity: number[]; seed?: number };
         const ci = res.catchInfo as {
           caught: boolean;
@@ -486,6 +522,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         t: msg.type === 'match_start' ? 'ms' : 'ss',
         c: msg.code,
         m: msg.mode === 'official6' ? 1 : 0,
+        rk: msg.roomKind === 'friend' ? 1 : 0,
         sd: msg.side === 'home' ? 1 : 0,
         q: msg.pitchSeq,
         ts: msg.turnState === 'awaiting_swing' ? 1 : msg.turnState === 'game_over' ? 2 : 0,
@@ -516,6 +553,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         t: 'sp',
         c: msg.code,
         m: msg.mode === 'official6' ? 1 : 0,
+        rk: msg.roomKind === 'friend' ? 1 : 0,
         q: msg.pitchSeq,
         ts: msg.turnState === 'awaiting_swing' ? 1 : msg.turnState === 'game_over' ? 2 : 0,
         bs: msg.batterSide === 'R' ? 1 : 0,
@@ -573,6 +611,20 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
           : [],
         sec: typeof msg.remainingSec === 'number' ? msg.remainingSec : 0,
       };
+    case 'match_offer':
+      return {
+        t: 'of',
+        id: msg.offerId,
+        n: msg.opponentName,
+        m: msg.mode === 'official6' ? 1 : 0,
+        ts: typeof msg.timeoutSec === 'number' ? msg.timeoutSec : 20,
+      };
+    case 'offer_cancelled':
+      return {
+        t: 'ox',
+        id: msg.offerId,
+        r: msg.reason,
+      };
     case 'error':
       return {
         t: 'er',
@@ -629,6 +681,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         clientId: raw.id,
         name: raw.n,
         version: raw.v ?? null,
+        updateAtMs: typeof raw.ua === 'number' ? raw.ua : null,
         stats: {
           online: raw.o,
           rooms: raw.r,
@@ -654,7 +707,18 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
     case 'pr': {
       const r = raw.r as Record<string, unknown> | undefined;
       let resolution: Record<string, unknown> | null = null;
-      if (r) {
+      if (r && r.c === 0) {
+        resolution = {
+          contact: false,
+          label: r.lb,
+          feedback: r.fb,
+          detail: r.dt,
+          color: r.cl,
+          quality: 'weak',
+          dtTiming: r.tm,
+          hitField: r.hf,
+        };
+      } else if (r) {
         const bp = r.bp as number[];
         const ci = r.ci as number | number[];
         const decodeFielderId = (code: number): 'LF' | 'RF' | 'P' | 'C' =>
@@ -741,6 +805,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         type: raw.t === 'ms' ? 'match_start' : 'state_sync',
         code: raw.c,
         mode: raw.m === 1 ? 'official6' : 'quick3',
+        roomKind: raw.rk === 1 ? 'friend' : 'live',
         side: raw.sd === 1 ? 'home' : 'away',
         token: raw.k,
         pitchSeq: raw.q,
@@ -758,6 +823,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         type: 'spectate_sync',
         code: raw.c,
         mode: raw.m === 1 ? 'official6' : 'quick3',
+        roomKind: raw.rk === 1 ? 'friend' : 'live',
         awayName: match.away.name,
         homeName: match.home.name,
         match,
@@ -800,6 +866,20 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         type: 'pause_state',
         pausedSides: Array.isArray(raw.sd) ? raw.sd.map((v) => (v === 1 ? 'home' : 'away')) : [],
         remainingSec: typeof raw.sec === 'number' ? raw.sec : 0,
+      };
+    case 'of':
+      return {
+        type: 'match_offer',
+        offerId: raw.id,
+        opponentName: raw.n,
+        mode: raw.m === 1 ? 'official6' : 'quick3',
+        timeoutSec: typeof raw.ts === 'number' ? raw.ts : 20,
+      };
+    case 'ox':
+      return {
+        type: 'offer_cancelled',
+        offerId: raw.id,
+        reason: raw.r,
       };
     case 'er':
       return {

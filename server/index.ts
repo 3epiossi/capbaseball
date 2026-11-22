@@ -41,6 +41,7 @@ import {
   type MatchState,
   type PlayerSlot,
 } from '../src/rules/match';
+import { ALL_EMOTE_IDS } from '../src/ui/emotes';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -93,6 +94,7 @@ interface ClientMeta {
   side: Side | null;
   watchingCode: string | null;
   queuedMode: OnlineMode | null;
+  standbyMode: OnlineMode | null;
   lastPingSentAt: number;
   lastPongAt: number;
   lastEmoteAt: number;
@@ -169,6 +171,8 @@ export interface ServerOptions {
   menuPauseMs?: number;
   /** Protection window (ms) preventing pitcher sneak-throws while opponent decides on ABS (default 2200). */
   absWindowMs?: number;
+  /** How long (ms) a standby player has to accept/decline an online match offer once shown (default 20000). */
+  offerTimeoutMs?: number;
   maxRooms?: number;
   maxClients?: number;
   /** Soft cap for public matchmaking; clients above this up to maxClients are reserved for Friend Rooms (default maxClients - 20 = 480). */
@@ -291,7 +295,7 @@ function buildMatchState(mode: OnlineMode, homeName: string, awayName: string, m
   });
 }
 
-const VALID_EMOTE_IDS = new Set(['nice', 'wow', 'fire', 'sweat', 'clap', 'gg', 'k', 'hr']);
+const VALID_EMOTE_IDS = new Set<string>(ALL_EMOTE_IDS);
 
 export function startServer(
   port = Number(process.env.PORT) || 8788,
@@ -310,12 +314,13 @@ export function startServer(
   );
   const pingIntervalMs = opts.pingIntervalMs ?? 12_000;
   const deadSocketTimeoutMs = opts.deadSocketTimeoutMs ?? Math.max(35_000, pingIntervalMs * 3);
-  const graceMs = opts.graceMs ?? 45_000;
+  const graceMs = opts.graceMs ?? 20_000;
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const pitchClockScale = opts.pitchClockScale ?? 1;
   const menuPauseMs = opts.menuPauseMs ?? 20_000;
   const absWindowMs = opts.absWindowMs ?? 2_200;
+  const offerTimeoutMs = opts.offerTimeoutMs ?? 20_000;
   const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 80);
   const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 500);
   const publicClientCap =
@@ -395,6 +400,9 @@ export function startServer(
 
   const startedAt = Date.now();
   let draining = false;
+  let preDrainComplete = true;
+  let updateAtMs: number | null = null;
+  let preDrainTimer: NodeJS.Timeout | null = null;
   const drainWaiters = new Set<() => void>();
   const clients = new Map<string, ClientMeta>();
   const ipConnCounts = new Map<string, number>();
@@ -403,6 +411,19 @@ export function startServer(
     quick3: [],
     official6: [],
   };
+  const standbyQueues: Record<OnlineMode, string[]> = {
+    quick3: [],
+    official6: [],
+  };
+  interface PendingOffer {
+    offerId: string;
+    mode: OnlineMode;
+    standbyClientId: string;
+    waitingClientId: string;
+    timer: NodeJS.Timeout | null;
+    shown: boolean;
+  }
+  const pendingOffers = new Map<string, PendingOffer>();
 
   function sampleEventLoopLag(): number {
     const rawP95 = eld.percentile(95);
@@ -594,11 +615,34 @@ export function startServer(
     };
   }
 
+  function countActiveMatches(): number {
+    let active = 0;
+    for (const r of rooms.values()) {
+      if (r.players.away && r.turnState !== 'game_over') active += 1;
+    }
+    return active;
+  }
+
+  let drainGraceTimer: NodeJS.Timeout | null = null;
+
   function checkDrainComplete() {
-    if (draining && rooms.size === 0) {
+    if (draining && preDrainComplete && countActiveMatches() === 0) {
+      if (drainGraceTimer) {
+        clearTimeout(drainGraceTimer);
+        drainGraceTimer = null;
+      }
       for (const resolve of drainWaiters) resolve();
       drainWaiters.clear();
     }
+  }
+
+  function scheduleDrainCompleteCheck(delayMs = 3000) {
+    if (!draining || !preDrainComplete || countActiveMatches() > 0) return;
+    if (drainGraceTimer) return;
+    drainGraceTimer = setTimeout(() => {
+      drainGraceTimer = null;
+      checkDrainComplete();
+    }, delayMs);
   }
 
   function clearPitchClock(room: Room) {
@@ -775,6 +819,7 @@ export function startServer(
     if (room.players.away && room.turnState !== 'game_over') {
       room.match.isGameOver = true;
       room.match.winner = oppSide;
+      room.match.endReason = 'disconnect';
       room.match.lastEvent = `${player.name} disconnected (timeout)`;
       room.turnState = 'game_over';
       recordMatchEnd(room, 'disconnect_timeout');
@@ -811,6 +856,40 @@ export function startServer(
       },
       opts.matchLogPath,
     );
+    // Allow 3s for final pitch_result / match_over delivery before draining server exits
+    scheduleDrainCompleteCheck(3000);
+  }
+
+  function removeFromStandby(clientId: string) {
+    for (const m of ['quick3', 'official6'] as const) {
+      const idx = standbyQueues[m].indexOf(clientId);
+      if (idx !== -1) standbyQueues[m].splice(idx, 1);
+    }
+    const c = clients.get(clientId);
+    if (c) c.standbyMode = null;
+  }
+
+  function cancelOffersForClient(clientId: string, reason: string, requeueStandby = true) {
+    for (const [offerId, offer] of [...pendingOffers.entries()]) {
+      if (offer.waitingClientId === clientId) {
+        if (offer.timer) clearTimeout(offer.timer);
+        pendingOffers.delete(offerId);
+        const sc = clients.get(offer.standbyClientId);
+        if (sc && sc.ws.readyState === WebSocket.OPEN) {
+          sendJson(sc.ws, { type: 'offer_cancelled', offerId, reason });
+          if (requeueStandby && !sc.roomCode && !draining) {
+            removeFromStandby(sc.id);
+            sc.standbyMode = offer.mode;
+            standbyQueues[offer.mode].unshift(sc.id);
+          }
+        }
+      } else if (offer.standbyClientId === clientId) {
+        if (offer.timer) clearTimeout(offer.timer);
+        pendingOffers.delete(offerId);
+        const mode = offer.mode;
+        tryOfferToStandby(mode);
+      }
+    }
   }
 
   function removeFromQueues(clientId: string) {
@@ -820,6 +899,8 @@ export function startServer(
     }
     const c = clients.get(clientId);
     if (c) c.queuedMode = null;
+    removeFromStandby(clientId);
+    cancelOffersForClient(clientId, 'expired', true);
   }
 
   /**
@@ -869,6 +950,7 @@ export function startServer(
       type: 'state_sync',
       code: room.code,
       mode: room.mode,
+      roomKind: room.isMatchmaking ? 'live' : 'friend',
       side,
       pitchSeq: room.pitchSeq,
       turnState: room.turnState,
@@ -895,7 +977,27 @@ export function startServer(
     });
   }
 
-  function resolveNoContactPitch(room: Room, swung: boolean) {
+  function resolveNoContactPitch(
+    room: Room,
+    swung: boolean,
+    swingData: {
+      flightTimeSec: number;
+      batX: number;
+      batY: number;
+      swingMode: SwingMode;
+      batterSide: 'R' | 'L';
+    } | null = null,
+    missResolution: {
+      contact: false;
+      feedback: string;
+      label: string;
+      detail: string;
+      color: string;
+      quality: 'weak';
+      dtTiming: number;
+      hitField: readonly [number, number, number];
+    } | null = null,
+  ) {
     if (!room.activePitch) return;
     const traj = room.activePitch.trajectory;
     const plateField = simToField(traj.plateCrossPos);
@@ -1037,8 +1139,8 @@ export function startServer(
       pitchSeq: solvedSeq,
       nextPitchSeq: room.pitchSeq,
       swung,
-      swingData: null,
-      resolution: null,
+      swingData,
+      resolution: missResolution,
       outcome: outcomeStr,
       callout,
       inningChanged,
@@ -1128,7 +1230,16 @@ export function startServer(
     }
 
     if (!resolution.contact) {
-      resolveNoContactPitch(room, true);
+      resolveNoContactPitch(room, true, swingData, {
+        contact: false,
+        feedback: resolution.feedback,
+        label: resolution.label,
+        detail: resolution.detail,
+        color: resolution.color,
+        quality: 'weak',
+        dtTiming: resolution.dtTiming,
+        hitField: resolution.hitField,
+      });
       return;
     }
 
@@ -1270,6 +1381,7 @@ export function startServer(
         type: 'match_start',
         code: room.code,
         mode: room.mode,
+        roomKind: room.isMatchmaking ? 'live' : 'friend',
         side,
         token: p.token,
         pitchSeq: room.pitchSeq,
@@ -1280,6 +1392,137 @@ export function startServer(
       });
     }
     armPitchClock(room, 1500);
+  }
+
+  function createMatchmakingRoom(mode: OnlineMode, c1: ClientMeta, c2: ClientMeta) {
+    removeFromQueues(c1.id);
+    removeFromQueues(c2.id);
+
+    const code = generateRoomCode(rooms);
+    const homeFirst = crypto.randomInt(0, 2) === 0;
+    const homeClient = homeFirst ? c1 : c2;
+    const awayClient = homeFirst ? c2 : c1;
+
+    const room: Room = {
+      code,
+      mode,
+      isMatchmaking: true,
+      mercyRule: true,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+      match: buildMatchState(mode, homeClient.name, awayClient.name),
+      pitchSeq: 1,
+      solvingSeq: null,
+      turnState: 'awaiting_pitch',
+      batterSide: 'L',
+      activePitch: null,
+      swingTimer: null,
+      pitchClockTimer: null,
+      pitchClockDeadlineAt: null,
+      pitchClockRemainingMs: null,
+      pausedBy: new Set(),
+      pauseTimers: { home: null, away: null },
+      pauseExpiresAt: { home: 0, away: 0 },
+      absWindowUntil: 0,
+      lastSpectatorEmoteAt: 0,
+      players: {
+        home: {
+          token: crypto.randomUUID(),
+          name: homeClient.name,
+          clientId: homeClient.id,
+          ws: homeClient.ws,
+          connected: true,
+          disconnectTimer: null,
+        },
+        away: {
+          token: crypto.randomUUID(),
+          name: awayClient.name,
+          clientId: awayClient.id,
+          ws: awayClient.ws,
+          connected: true,
+          disconnectTimer: null,
+        },
+      },
+      spectators: new Set(),
+      rematchVotes: new Set(),
+      recorded: false,
+    };
+    rooms.set(code, room);
+    homeClient.roomCode = code;
+    homeClient.side = 'home';
+    awayClient.roomCode = code;
+    awayClient.side = 'away';
+
+    startMatchInRoom(room);
+    scheduleStatsBroadcast();
+  }
+
+  function armOfferTimer(offer: PendingOffer, ms: number) {
+    if (offer.timer) clearTimeout(offer.timer);
+    offer.timer = setTimeout(() => {
+      if (pendingOffers.get(offer.offerId) !== offer) return;
+      offer.timer = null;
+      pendingOffers.delete(offer.offerId);
+      const sc = clients.get(offer.standbyClientId);
+      if (sc) {
+        removeFromStandby(sc.id);
+        sendJson(sc.ws, { type: 'offer_cancelled', offerId: offer.offerId, reason: 'timeout' });
+      }
+      tryOfferToStandby(offer.mode);
+    }, ms);
+  }
+
+  function tryOfferToStandby(mode: OnlineMode) {
+    if (draining) return;
+    const q = queues[mode];
+    const sq = standbyQueues[mode];
+    if (q.length === 0 || sq.length === 0) return;
+
+    const busyWaiting = new Set<string>();
+    const busyStandby = new Set<string>();
+    for (const o of pendingOffers.values()) {
+      busyWaiting.add(o.waitingClientId);
+      busyStandby.add(o.standbyClientId);
+    }
+
+    for (const waitingId of q) {
+      if (busyWaiting.has(waitingId)) continue;
+      const wc = clients.get(waitingId);
+      if (!wc || wc.ws.readyState !== WebSocket.OPEN || wc.roomCode) continue;
+
+      while (sq.length > 0) {
+        const standbyId = sq.shift()!;
+        if (standbyId === waitingId || busyStandby.has(standbyId)) continue;
+        const sc = clients.get(standbyId);
+        if (!sc || sc.ws.readyState !== WebSocket.OPEN || sc.roomCode) {
+          if (sc) sc.standbyMode = null;
+          continue;
+        }
+        sc.standbyMode = null;
+        const offerId = crypto.randomUUID().slice(0, 8);
+        const offer: PendingOffer = {
+          offerId,
+          mode,
+          standbyClientId: sc.id,
+          waitingClientId: wc.id,
+          timer: null,
+          shown: false,
+        };
+        pendingOffers.set(offerId, offer);
+        busyWaiting.add(wc.id);
+        busyStandby.add(sc.id);
+        // Delivery cushion until client finishes current pitch and reports `offer_shown`
+        armOfferTimer(offer, offerTimeoutMs + 12_000);
+        sendJson(sc.ws, {
+          type: 'match_offer',
+          offerId,
+          opponentName: wc.name,
+          mode,
+          timeoutSec: Math.max(1, Math.round(offerTimeoutMs / 1000)),
+        });
+        break;
+      }
+    }
   }
 
   function tryPairQueue(mode: OnlineMode) {
@@ -1299,64 +1542,12 @@ export function startServer(
       }
       c1.queuedMode = null;
       c2.queuedMode = null;
-
-      const code = generateRoomCode(rooms);
-      const homeFirst = crypto.randomInt(0, 2) === 0;
-      const homeClient = homeFirst ? c1 : c2;
-      const awayClient = homeFirst ? c2 : c1;
-
-      const room: Room = {
-        code,
-        mode,
-        isMatchmaking: true,
-        mercyRule: true,
-        createdAt: Date.now(),
-        lastActivityAt: Date.now(),
-        match: buildMatchState(mode, homeClient.name, awayClient.name),
-        pitchSeq: 1,
-        solvingSeq: null,
-        turnState: 'awaiting_pitch',
-        batterSide: 'L',
-        activePitch: null,
-        swingTimer: null,
-        pitchClockTimer: null,
-        pitchClockDeadlineAt: null,
-        pitchClockRemainingMs: null,
-        pausedBy: new Set(),
-        pauseTimers: { home: null, away: null },
-        pauseExpiresAt: { home: 0, away: 0 },
-        absWindowUntil: 0,
-        lastSpectatorEmoteAt: 0,
-        players: {
-          home: {
-            token: crypto.randomUUID(),
-            name: homeClient.name,
-            clientId: homeClient.id,
-            ws: homeClient.ws,
-            connected: true,
-            disconnectTimer: null,
-          },
-          away: {
-            token: crypto.randomUUID(),
-            name: awayClient.name,
-            clientId: awayClient.id,
-            ws: awayClient.ws,
-            connected: true,
-            disconnectTimer: null,
-          },
-        },
-        spectators: new Set(),
-        rematchVotes: new Set(),
-        recorded: false,
-      };
-      rooms.set(code, room);
-      homeClient.roomCode = code;
-      homeClient.side = 'home';
-      awayClient.roomCode = code;
-      awayClient.side = 'away';
-
-      startMatchInRoom(room);
-      scheduleStatsBroadcast();
+      cancelOffersForClient(c1.id, 'expired', true);
+      cancelOffersForClient(c2.id, 'expired', true);
+      createMatchmakingRoom(mode, c1, c2);
+    }
+    if (q.length > 0) {
+      tryOfferToStandby(mode);
     }
   }
 
@@ -1413,6 +1604,7 @@ export function startServer(
         queued: queues.quick3.length + queues.official6.length,
         clients: clients.size,
         draining,
+        updateAtMs,
         load,
       });
       const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(payload, 'utf8');
@@ -1629,6 +1821,7 @@ export function startServer(
       side: null,
       watchingCode: null,
       queuedMode: null,
+      standbyMode: null,
       lastPingSentAt: nowOnConnect,
       lastPongAt: nowOnConnect,
       lastEmoteAt: 0,
@@ -1693,6 +1886,7 @@ export function startServer(
             clientId,
             name: client.name,
             version,
+            updateAtMs,
             stats: getStats(),
           });
           scheduleStatsBroadcast();
@@ -1736,6 +1930,59 @@ export function startServer(
           removeFromQueues(clientId);
           sendJson(ws, { type: 'unqueued' });
           scheduleStatsBroadcast();
+          break;
+        }
+
+        case 'standby_join': {
+          if (draining || client.roomCode) return;
+          const load = getServerLoad();
+          if (load.status === 'red' || clients.size > publicClientCap) return;
+          const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
+          removeFromQueues(clientId);
+          client.standbyMode = mode;
+          standbyQueues[mode].push(clientId);
+          tryOfferToStandby(mode);
+          break;
+        }
+
+        case 'standby_leave': {
+          removeFromStandby(clientId);
+          cancelOffersForClient(clientId, 'declined', false);
+          break;
+        }
+
+        case 'offer_shown': {
+          const offerId = typeof msg.offerId === 'string' ? msg.offerId : '';
+          const offer = pendingOffers.get(offerId);
+          if (!offer || offer.standbyClientId !== clientId || offer.shown) return;
+          offer.shown = true;
+          armOfferTimer(offer, offerTimeoutMs);
+          break;
+        }
+
+        case 'offer_reply': {
+          const offerId = typeof msg.offerId === 'string' ? msg.offerId : '';
+          const offer = pendingOffers.get(offerId);
+          if (!offer || offer.standbyClientId !== clientId) return;
+          if (offer.timer) clearTimeout(offer.timer);
+          pendingOffers.delete(offerId);
+
+          if (!msg.accept) {
+            removeFromStandby(clientId);
+            tryOfferToStandby(offer.mode);
+            break;
+          }
+
+          if (draining || client.roomCode) {
+            sendJson(ws, { type: 'offer_cancelled', offerId, reason: 'expired' });
+            break;
+          }
+          const wc = clients.get(offer.waitingClientId);
+          if (!wc || wc.ws.readyState !== WebSocket.OPEN || wc.roomCode || wc.queuedMode !== offer.mode) {
+            sendJson(ws, { type: 'offer_cancelled', offerId, reason: 'expired' });
+            break;
+          }
+          createMatchmakingRoom(offer.mode, wc, client);
           break;
         }
 
@@ -1817,6 +2064,10 @@ export function startServer(
         }
 
         case 'join': {
+          if (draining) {
+            sendJson(ws, { type: 'error', code: 'draining', message: 'Server updating — joining paused' });
+            return;
+          }
           const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
           if (client.roomCode && client.roomCode === code) {
             sendJson(ws, { type: 'error', code: 'already_in_room', message: 'You are already hosting this room' });
@@ -2209,11 +2460,13 @@ export function startServer(
               homeName: room.match.home.name,
               inning: room.match.inning,
               half: room.match.half,
+              outs: room.match.outs,
               awayScore: room.match.away.totalRuns,
               homeScore: room.match.home.totalRuns,
               spectators: room.spectators.size,
               isDerby: room.match.derby.active,
               mode: room.mode,
+              roomKind: room.isMatchmaking ? 'live' : 'friend',
             });
           }
           sendJson(ws, { type: 'room_list', rooms: liveRooms });
@@ -2238,6 +2491,7 @@ export function startServer(
             type: 'spectate_sync',
             code: room.code,
             mode: room.mode,
+            roomKind: room.isMatchmaking ? 'live' : 'friend',
             awayName: room.match.away.name,
             homeName: room.match.home.name,
             match: room.match,
@@ -2331,6 +2585,7 @@ export function startServer(
           const winner: Side = client.side === 'home' ? 'away' : 'home';
           room.match.isGameOver = true;
           room.match.winner = winner;
+          room.match.endReason = 'resign';
           room.match.lastEvent = `${room.players[client.side]?.name ?? client.side} forfeited`;
           room.turnState = 'game_over';
           room.activePitch = null;
@@ -2346,6 +2601,10 @@ export function startServer(
         }
 
         case 'rematch': {
+          if (draining) {
+            sendJson(ws, { type: 'error', code: 'draining', message: 'Server updating — rematch paused' });
+            return;
+          }
           if (!client.roomCode || !client.side) {
             sendJson(ws, { type: 'error', code: 'opponent_left', message: 'Opponent left' });
             return;
@@ -2528,6 +2787,18 @@ export function startServer(
       clearTimeout(statsBroadcastTimer);
       statsBroadcastTimer = null;
     }
+    if (preDrainTimer) {
+      clearTimeout(preDrainTimer);
+      preDrainTimer = null;
+    }
+    if (drainGraceTimer) {
+      clearTimeout(drainGraceTimer);
+      drainGraceTimer = null;
+    }
+    for (const offer of pendingOffers.values()) {
+      if (offer.timer) clearTimeout(offer.timer);
+    }
+    pendingOffers.clear();
     for (const room of rooms.values()) {
       clearPitchClock(room);
       clearRoomPauses(room);
@@ -2551,28 +2822,56 @@ export function startServer(
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
-  // Graceful SIGTERM drain when running as standalone process
+  // Graceful SIGTERM drain with pre-update countdown announcement when running as standalone process
   if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     const drainSec = Math.max(5, Number(process.env.DRAIN_SECONDS) || 300);
+    const preDrainSec = Math.max(0, Number(process.env.PRE_DRAIN_SECONDS ?? 60));
     const handleDrain = () => {
       if (draining) {
         process.exit(0);
       }
       draining = true;
+      preDrainComplete = preDrainSec === 0;
+      updateAtMs = Date.now() + preDrainSec * 1000;
+      for (const offer of pendingOffers.values()) {
+        if (offer.timer) clearTimeout(offer.timer);
+        const sc = clients.get(offer.standbyClientId);
+        if (sc) sendJson(sc.ws, { type: 'offer_cancelled', offerId: offer.offerId, reason: 'draining' });
+      }
+      pendingOffers.clear();
+      queues.quick3.length = 0;
+      queues.official6.length = 0;
+      standbyQueues.quick3.length = 0;
+      standbyQueues.official6.length = 0;
       for (const c of clients.values()) {
-        sendJson(c.ws, { type: 'notice', kind: 'draining' });
+        c.queuedMode = null;
+        c.standbyMode = null;
+        sendJson(c.ws, { type: 'notice', kind: 'draining', countdownSec: preDrainSec, updateAtMs });
       }
-      if (rooms.size === 0) {
-        void close().then(() => process.exit(0));
-        return;
+
+      const beginActualDrain = () => {
+        preDrainComplete = true;
+        if (countActiveMatches() === 0) {
+          void close().then(() => process.exit(0));
+          return;
+        }
+        const forceTimer = setTimeout(() => {
+          void close().then(() => process.exit(0));
+        }, drainSec * 1000);
+        drainWaiters.add(() => {
+          clearTimeout(forceTimer);
+          void close().then(() => process.exit(0));
+        });
+      };
+
+      if (preDrainSec > 0) {
+        preDrainTimer = setTimeout(() => {
+          preDrainTimer = null;
+          beginActualDrain();
+        }, preDrainSec * 1000);
+      } else {
+        beginActualDrain();
       }
-      const forceTimer = setTimeout(() => {
-        void close().then(() => process.exit(0));
-      }, drainSec * 1000);
-      drainWaiters.add(() => {
-        clearTimeout(forceTimer);
-        void close().then(() => process.exit(0));
-      });
     };
     process.on('SIGTERM', handleDrain);
     process.on('SIGINT', () => {

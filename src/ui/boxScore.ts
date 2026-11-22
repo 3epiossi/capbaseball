@@ -10,6 +10,10 @@ export interface BoxScoreLabels {
   hr?: string;
   diff10?: string;
   coldGameLabel?: string;
+  disconnectWinLabel?: string;
+  disconnectTag?: string;
+  resignWinLabel?: string;
+  resignTag?: string;
   mvpLabel?: string;
 }
 
@@ -94,16 +98,20 @@ export function renderBoxScore(
   const metaRow = document.createElement('div');
   metaRow.className = 'boxscore-meta';
 
-  const addPill = (label: string, val: string, highlight = false) => {
+  const addPill = (label: string, val = '', highlight = false) => {
     const pill = document.createElement('span');
     pill.className = highlight ? 'bs-pill hi' : 'bs-pill';
-    pill.textContent = `${label} ${val}`;
+    pill.textContent = val ? `${label} ${val}` : label;
     metaRow.appendChild(pill);
   };
 
   addPill(lPitches, String(match.stats.totalPitches));
   addPill(lHr, String(match.stats.homeRuns));
-  if (match.mercyTriggered) {
+  if (match.endReason === 'disconnect') {
+    addPill(opts?.disconnectWinLabel || 'OPPONENT DISCONNECTED', '', true);
+  } else if (match.endReason === 'resign') {
+    addPill(opts?.resignWinLabel || 'OPPONENT FORFEITED', '', true);
+  } else if (match.mercyTriggered || match.endReason === 'mercy') {
     addPill(opts?.coldGameLabel || 'COLD GAME', lDiff10, true);
   }
   container.appendChild(metaRow);

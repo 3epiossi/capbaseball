@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.2.0`（語意化三段式版本號），Pi 現行部署版本 `20261122-222755`
+- **目前里程碑**：`v2.3.0`（語意化三段式版本號），Pi 現行部署版本 `20261123-033558`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 47 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 49 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -201,3 +201,23 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **回饋卡與跨裝置排版修正**：
     - 修正 [src/render/overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) 低角度挖地瓜球被 `clampY` 夾回好球帶底緣的錯覺；俯視揮棒時機圖改依真實 `plateX` 進壘截面左右對齊球點並補上淡虛線進球道。
     - 線上對戰計分板移除冗餘隊名前綴並加上文字省略與 `flex-shrink: 0`，避免長名字遮住分數；手機版主畫面（計分板隱藏時）恢復顯示頂部玩家名稱按鈕 `#btn-nick-chip`（測試共 **47/47** 全數通過）。
+- **v2.3.0 線上揮空真值修正、優雅更新 60 秒預告、CPU 候補邀約與觀戰重設計（2026-11-23）**：
+  - **修復線上「棒子＋時機都對卻揮空」假象（根因除錯）**：
+    - **問題**：線上對戰與觀戰端實測時，打者揮空卻屢次出現球在 `( • )` 正中央且揮棒時機顯示正中間綠色 `0 ms` 的矛盾畫面。
+    - **根因**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 的 `resolveNoContactPitch(room, true)` 原本在揮空（`!resolution.contact`）時將 `swingData` 與 `resolution` 直接丟棄改送 `null`；前端收到 `null` 後退回 `dtTiming = 0` 與預設中央棒框 `(0, 0.72)`，並把下方標籤退回泛稱 `揮空`。
+    - **解法**：揮空時完整回傳真實 `swingData`（`batX`、`batY`、`swingMode`）與精簡揮空 `resolution`（`contact: false`、`dtTiming`、`detail`、`hitField`），同步更新 [src/net/protocol.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/protocol.ts) v2 編解碼與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 回饋卡顯示（改呈現真實的 `揮棒過早`／`揮棒過晚`／`偏離球心`）。
+  - **伺服器優雅更新 60 秒預告＋換版漏洞修補**：
+    - **問題排查**：檢視原始 `SIGTERM` 排空流程時發現兩處漏洞——（1）`checkDrainComplete()` 原本檢查 `rooms.size === 0`，但打完的 `game_over` 房間與空等待房會留在記憶體內，導致所有比賽明明已結束卻仍卡滿 5 分鐘；（2）`case 'rematch'` 與 `case 'join'` 缺少 `if (draining)` 防護，維護倒數期間仍能重開新局。
+    - **解法**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 與 [deploy/capbaseball.service](file:///Users/chang/Documents/raspberry%20pi/capbaseball/deploy/capbaseball.service) 新增 `PRE_DRAIN_SECONDS=60`（`TimeoutStopSec=390`），收到 `SIGTERM` 立即鎖定 `queue`/`create`/`join`/`rematch`/`standby_join` 並廣播 60 秒倒數至全體連線（桌機置頂中央、手機對局中自動下移至計分板下方淨空區）；倒數歸零後改依 `countActiveMatches()`（僅計算進行中雙人房）判斷，最後一場結束留 3 秒送達緩衝即優雅切換新版。
+  - **20 秒線上等待＋CPU 候補邀約（暫停 20 秒不搶投球時鐘）**：
+    - 線上配對自動轉 CPU 時間由 `10` 秒調為 `20` 秒，並於轉打 CPU 時自動送出 `standby_join` 保留線上候補。
+    - 有真人進入配對佇列時，伺服器向第一位候補發出 `match_offer`；前端等目前這球結束後於畫面角落彈出懸浮邀約卡（`#match-offer-toast`），同步透過 `isGamePaused()` 暫停 CPU 對局與投球時鐘 20 秒（比照折疊選單暫停）。點「接受對戰」立即進入真人 `LIVE` 對局；點「拒絕」或 20 秒逾時自動關閉並移除候補，伺服器隨即轉邀下一位候補。
+  - **觀戰列表重設計＋`LIVE`／`FRIEND` 標記**：
+    - [server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 與 v2 協定新增 `roomKind: 'live' | 'friend'` 與 `outs` 欄位。
+    - 觀戰對話框改為深藍圓角 4 欄卡片（左欄金字局數與出局數、中左兩列隊色方塊與玩家名、中右對齊比分、右側 `LIVE`／`FRIEND` 光暈標籤與圓角膠囊 `觀戰` 鈕），比賽中與觀戰中的計分板同步顯示 `LIVE`／`FRIEND`。
+  - **規則、守備與演出微調**：
+    - **換局球衣延後變色**：新增 `visualHalf`，換局時保持舊半局球衣直到 `inning_change` 轉場動畫播畢才切換。
+    - **高飛球基本功**：[src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts) 高飛球（`>= 28°`）漏接率由 `30%–55%` 下調至 `4%–12%`。
+    - **突破僵局制**：[src/rules/match.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/match.ts) 改為「滿壘無人出局」開局並取消全壘打大賽，延長賽持續至分出勝負。
+    - **斷線重連等待縮短與結算原因去重**：斷線重連寬限由 `45` 秒調為 `20` 秒；結算畫面 [src/ui/boxScore.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/boxScore.ts) 新增 `endReason`（`disconnect`／`resign`／`mercy`），並修正初版同時在表格上方與數據列重複顯示兩次的問題，統一於數據列乾淨顯示一次。
+    - **對話球精簡**：固定為 8 句三語快捷對話（移除設定中 32 選 8 的對話選擇分頁與相關樣式，測試擴充至 **49/49** 全部通過）。

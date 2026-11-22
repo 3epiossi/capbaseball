@@ -379,10 +379,15 @@ export function simulateDeterministicCatch(
         capPos[1] <= 1.95
       ) {
         const hitPos: FieldV3 = [capPos[0], capPos[1], capPos[2]];
-        // 4. Deterministic bobble / drop probability even when reachable (0.30..0.55)
+        // 4. Deterministic bobble / drop probability:
+        //    High fly balls (>= 28 deg) are routine fielding fundamentals (4% base, up to 12% on long diving chases).
+        //    Lower line drives (20..28 deg) are harder to squeeze (12%..28%), while scorching liners already shoot past.
         const speedFactor = Math.max(0, Math.min(1, (exitSpeedMs - 9) / 7.5));
-        const diveFactor = distFromStart > 1.4 ? Math.min(1, (distFromStart - 1.4) / 1.2) : 0;
-        const dropProb = Math.min(0.55, 0.30 + speedFactor * 0.14 + diveFactor * 0.11);
+        const diveFactor = distFromStart > 1.8 ? Math.min(1, (distFromStart - 1.8) / 2.2) : 0;
+        const dropProb =
+          launchAngleDeg >= 28
+            ? Math.min(0.12, 0.04 + diveFactor * 0.08)
+            : Math.min(0.28, 0.12 + speedFactor * 0.08 + diveFactor * 0.08);
         const bobbleRoll = seededFloat(((options?.seed ?? 1) ^ 0x517cc1b7) >>> 0)();
 
         if (bobbleRoll < dropProb) {

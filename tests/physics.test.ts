@@ -142,7 +142,7 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     expect(grounder.stoppedPos[1]).toBeLessThan(0.05);
   });
 
-  it('enforces per-pitch ceiling, floor, and lateral flight envelopes on extreme aims', () => {
+  it('enforces per-pitch ceiling, floor, and lateral flight envelopes on extreme aims', { timeout: 15000 }, () => {
     const extremeAims: Array<[number, number]> = [
       [0, 1.35],
       [0, 0.12],

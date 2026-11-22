@@ -89,6 +89,8 @@ export interface DerbyState {
   homeHR: number;
 }
 
+export type MatchEndReason = 'normal' | 'mercy' | 'disconnect' | 'resign';
+
 export interface MatchState {
   mode: GameMode;
   regulationInnings: number;
@@ -105,6 +107,7 @@ export interface MatchState {
   winner: 'away' | 'home' | 'tie' | null;
   mercyRule?: boolean;
   mercyTriggered?: boolean;
+  endReason?: MatchEndReason;
   lastEvent: string;
   stats: MatchStats;
   /** Batters faced in the current half-inning (for rule 5.01D checks) */
@@ -302,6 +305,7 @@ function checkWalkOff(state: MatchState): boolean {
   if (state.inning >= state.regulationInnings && state.home.totalRuns > state.away.totalRuns) {
     state.isGameOver = true;
     state.winner = 'home';
+    state.endReason = 'normal';
     return true;
   }
   if (
@@ -312,6 +316,7 @@ function checkWalkOff(state: MatchState): boolean {
     state.isGameOver = true;
     state.winner = 'home';
     state.mercyTriggered = true;
+    state.endReason = 'mercy';
     state.lastEvent = `Cold game! ${state.home.name} wins ${state.home.totalRuns}-${state.away.totalRuns}`;
     return true;
   }
@@ -337,6 +342,7 @@ function transitionHalfInning(state: MatchState): void {
     if (state.inning >= state.regulationInnings && state.home.totalRuns > state.away.totalRuns) {
       state.isGameOver = true;
       state.winner = 'home';
+      state.endReason = 'normal';
       state.lastEvent = `Game over! ${state.home.name} wins ${state.home.totalRuns}-${state.away.totalRuns}`;
       return;
     }
@@ -348,6 +354,7 @@ function transitionHalfInning(state: MatchState): void {
       state.isGameOver = true;
       state.winner = 'home';
       state.mercyTriggered = true;
+      state.endReason = 'mercy';
       state.lastEvent = `Cold game! ${state.home.name} wins ${state.home.totalRuns}-${state.away.totalRuns}`;
       return;
     }
@@ -356,6 +363,7 @@ function transitionHalfInning(state: MatchState): void {
     if (state.inning >= state.regulationInnings && state.away.totalRuns !== state.home.totalRuns) {
       state.isGameOver = true;
       state.winner = state.home.totalRuns > state.away.totalRuns ? 'home' : 'away';
+      state.endReason = 'normal';
       state.lastEvent = `Game over! Final ${state.away.totalRuns}-${state.home.totalRuns}`;
       return;
     }
@@ -367,45 +375,26 @@ function transitionHalfInning(state: MatchState): void {
       state.isGameOver = true;
       state.winner = state.home.totalRuns > state.away.totalRuns ? 'home' : 'away';
       state.mercyTriggered = true;
+      state.endReason = 'mercy';
       state.lastEvent = `Cold game! Final ${state.away.totalRuns}-${state.home.totalRuns}`;
-      return;
-    }
-    // In 3-inning mode, if still tied after completing the 4th-inning bases-loaded tie-breaker, enter MLB All-Star HR Derby
-    if (
-      state.regulationInnings === 3 &&
-      state.inning >= state.regulationInnings + 1 &&
-      state.away.totalRuns === state.home.totalRuns
-    ) {
-      state.derby = {
-        active: true,
-        round: 1,
-        half: 'away',
-        pitchesPerSide: 5,
-        awayPitchesLeft: 5,
-        homePitchesLeft: 5,
-        awayHR: 0,
-        homeHR: 0,
-      };
-      state.half = 'top';
-      state.lastEvent = 'Tie-breaker tied! Entering MLB All-Star 5-Pitch Home Run Derby!';
       return;
     }
     state.inning += 1;
     state.half = 'top';
   }
 
-  // Extra-inning tie-breaker per rule 7.01(A)(3) note: 1 out, bases loaded!
+  // Extra-inning tie-breaker: 0 outs, bases loaded — played continuously until a winner is decided!
   if (state.inning > state.regulationInnings) {
     const team = getBattingTeam(state);
     const len = team.lineup.length;
     const cur = team.batterIndex % len;
-    state.outs = 1;
+    state.outs = 0;
     state.bases = [
       team.lineup[(cur - 1 + len) % len].id,
       team.lineup[(cur - 2 + len) % len].id,
       team.lineup[(cur - 3 + len) % len].id,
     ];
-    state.lastEvent = `Extra inning ${state.inning} (${state.half}): Tie-breaker 1 out, bases loaded`;
+    state.lastEvent = `Extra inning ${state.inning} (${state.half}): Tie-breaker 0 outs, bases loaded`;
   }
 }
 

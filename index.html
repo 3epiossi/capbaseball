@@ -89,6 +89,7 @@
               <span class="sb-matchup-item"><em class="sb-tag" data-i18n="sbAb">AB</em><span id="sb-batter">NastYboY #99</span></span>
               <span class="sb-div" aria-hidden="true"></span>
               <span class="sb-matchup-item"><em class="sb-tag" data-i18n="sbP">P</em><span id="sb-pitcher">skywalker #18</span></span>
+              <span id="sb-room-kind" class="sb-room-kind" hidden>LIVE</span>
               <span id="sb-telemetry" class="sb-telemetry-text" hidden>READY</span>
             </div>
           </aside>
@@ -286,6 +287,26 @@
         </div>
       </div>
 
+      <!-- Server Pre-Update Countdown Announcement Banner (non-blocking) -->
+      <div id="pre-update-banner" class="pre-update-banner" hidden role="status" aria-live="polite">
+        <span class="pub-dot" aria-hidden="true"></span>
+        <span id="pre-update-text" class="pub-text">SERVER UPDATING SOON</span>
+      </div>
+
+      <!-- Non-Blocking Standby Online Match Offer Card (appears after current pitch ends during CPU play) -->
+      <aside id="match-offer-toast" class="match-offer-toast" hidden role="region" aria-live="polite" aria-label="Online match invite">
+        <div class="mot-head">
+          <span class="mot-badge" id="mot-title" data-i18n="offerTitle">ONLINE MATCH INVITE</span>
+          <span class="mot-timer" id="mot-timer">20s</span>
+        </div>
+        <div class="mot-body" id="mot-body">Opponent ready</div>
+        <div class="mot-bar-track"><div class="mot-bar-fill" id="mot-bar-fill"></div></div>
+        <div class="mot-actions">
+          <button type="button" class="act-btn primary mot-btn" id="btn-offer-accept" data-i18n="offerAccept">ACCEPT</button>
+          <button type="button" class="act-btn mot-btn" id="btn-offer-decline" data-i18n="offerDecline">DECLINE</button>
+        </div>
+      </aside>
+
       <!-- Server Update Available Refresh Banner -->
       <div id="update-banner" class="update-banner" hidden role="status" aria-live="polite">
         <span class="ub-text" data-i18n="updateBannerText">SERVER UPDATED · REFRESH FOR LATEST VERSION</span>
@@ -359,7 +380,7 @@
       </div>
     </dialog>
 
-    <dialog id="watch-dialog" closedby="any" aria-labelledby="watch-title">
+    <dialog id="watch-dialog" class="watch-dialog" closedby="any" aria-labelledby="watch-title">
       <div class="dlg-head">
         <h2 id="watch-title" data-i18n="dlgWatchTitle">LIVE SPECTATE</h2>
         <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
@@ -385,7 +406,7 @@
           <li><strong data-i18n="rule3Head">SPRING PITCHING:</strong><span data-i18n="rule3Body"> Hold Pitch or Space to compress the spring, then release to launch it across the NORMAL → BEST → OVER spectrum. Its apex sets velocity &amp; control!</span></li>
           <li><strong data-i18n="rule4Head">MOBILE BATTING:</strong><span data-i18n="rule4Body"> Hold &amp; drag from below the zone to move the cursor above your finger (release to swing), or tap directly on the ball to swing!</span></li>
           <li><strong data-i18n="rule5Head">ABS HAWK-EYE:</strong><span data-i18n="rule5Body"> 2 challenges per team (retained if overturned). Tap ABS or press C while the call is visible.</span></li>
-          <li><strong data-i18n="rule6Head">EXTRA INNINGS:</strong><span data-i18n="rule6Body"> Tied after 3 → 4th-inning bases-loaded tie-breaker → still tied → 5-pitch HR Derby!</span></li>
+          <li><strong data-i18n="rule6Head">EXTRA INNINGS:</strong><span data-i18n="rule6Body"> Tied after regulation → Extra innings start with bases loaded &amp; 0 outs until a winner is decided!</span></li>
           <li><strong data-i18n="rule7Head">PITCH CLOCK:</strong><span data-i18n="rule7Body"> 15s bases empty / 20s with runners on base (paused during calls &amp; ABS). Violation = automatic ball.</span></li>
         </ul>
       </div>

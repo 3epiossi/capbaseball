@@ -34,6 +34,7 @@ import {
   type OnlineSide,
   type PitchLaunchMsg,
   type PitchResultMsg,
+  type RoomKind,
   type ServerMessage,
   type TurnState,
 } from './net/client';
@@ -130,6 +131,15 @@ const sbPitchClockEl = document.getElementById('sb-pitch-clock') as HTMLElement;
 const updateBanner = document.getElementById('update-banner') as HTMLElement;
 const btnUpdateRefresh = document.getElementById('btn-update-refresh') as HTMLButtonElement;
 const btnUpdateDismiss = document.getElementById('btn-update-dismiss') as HTMLButtonElement;
+const preUpdateBanner = document.getElementById('pre-update-banner') as HTMLElement;
+const preUpdateText = document.getElementById('pre-update-text') as HTMLElement;
+
+const matchOfferToast = document.getElementById('match-offer-toast') as HTMLElement;
+const motTimerEl = document.getElementById('mot-timer') as HTMLElement;
+const motBodyEl = document.getElementById('mot-body') as HTMLElement;
+const motBarFillEl = document.getElementById('mot-bar-fill') as HTMLElement;
+const btnOfferAccept = document.getElementById('btn-offer-accept') as HTMLButtonElement;
+const btnOfferDecline = document.getElementById('btn-offer-decline') as HTMLButtonElement;
 
 const pitcherDock = document.getElementById('pitcher-dock') as HTMLElement;
 const chatHubEl = document.getElementById('chat-hub') as HTMLElement;
@@ -149,6 +159,7 @@ const nickChipLabel = document.getElementById('nick-chip-label') as HTMLElement;
 const topOnlinePill = document.getElementById('top-online-pill') as HTMLElement;
 const topOnlineText = document.getElementById('top-online-text') as HTMLElement;
 let lastOnlineCount = 0;
+const sbRoomKindEl = document.getElementById('sb-room-kind') as HTMLElement;
 const sbTelemetryEl = document.getElementById('sb-telemetry') as HTMLElement;
 
 const awayNameEl = document.getElementById('away-name') as HTMLElement;
@@ -404,6 +415,7 @@ function stepPresentationQueue(rawDt: number): void {
       }
       if (!transitionDirector.isActive()) {
         presentationQueue.shift();
+        visualHalf = head.half;
         changed = true;
         continue;
       }
@@ -421,6 +433,10 @@ function stepPresentationQueue(rawDt: number): void {
       changed = true;
       continue;
     }
+  }
+  if (presentationQueue.length === 0 && !transitionDirector.isActive() && visualHalf !== match.half) {
+    visualHalf = match.half;
+    changed = true;
   }
   if (changed) {
     updateHudAndDocks();
@@ -575,13 +591,13 @@ function applyLocaleToDom(): void {
   emoteCtrl.setLabels(
     {
       nice: t('emoteNice'),
-      wow: t('emoteWow'),
-      fire: t('emoteFire'),
-      sweat: t('emoteSweat'),
-      clap: t('emoteClap'),
       gg: t('emoteGg'),
-      k: t('emoteK'),
       hr: t('emoteHr'),
+      fire: t('emoteFire'),
+      clap: t('emoteClap'),
+      sweat: t('emoteSweat'),
+      k: t('emoteK'),
+      wow: t('emoteWow'),
     },
     {
       title: t('chatHubTitle'),
@@ -630,10 +646,62 @@ let spectating = false;
 const onlineModeChoice: OnlineMode = 'quick3';
 let onlineSide: OnlineSide | null = null;
 let onlineRoomCode: string | null = null;
+let onlineRoomKind: RoomKind | null = null;
 let onlinePitchSeq = 1;
 let onlineTurnState: TurnState = 'awaiting_pitch';
 let onlineWaitingQueue = false;
 let queueElapsedSec = 0;
+let visualHalf: 'top' | 'bottom' = 'top';
+let serverUpdateAtMs: number | null = null;
+let lastPreUpdateRenderedSec = -999;
+
+interface ClientMatchOffer {
+  offerId: string;
+  opponentName: string;
+  mode: OnlineMode;
+  timeoutSec: number;
+  visible: boolean;
+  shownAtMs: number;
+  expiresAtMs: number;
+}
+let pendingMatchOffer: ClientMatchOffer | null = null;
+let lastOfferRenderedSec = -1;
+
+function hideMatchOfferToast(): void {
+  pendingMatchOffer = null;
+  lastOfferRenderedSec = -1;
+  matchOfferToast.hidden = true;
+}
+
+function setServerUpdateCountdown(updateAtMs: number | null | undefined, countdownSec?: number): void {
+  if (typeof updateAtMs === 'number' && updateAtMs > 0) {
+    serverUpdateAtMs = updateAtMs;
+  } else if (typeof countdownSec === 'number' && countdownSec >= 0) {
+    serverUpdateAtMs = Date.now() + countdownSec * 1000;
+  } else {
+    return;
+  }
+  lastPreUpdateRenderedSec = -999;
+  updatePreUpdateBannerUi();
+}
+
+function updatePreUpdateBannerUi(): void {
+  if (serverUpdateAtMs === null) {
+    preUpdateBanner.hidden = true;
+    return;
+  }
+  const remSec = Math.max(0, Math.ceil((serverUpdateAtMs - Date.now()) / 1000));
+  if (remSec === lastPreUpdateRenderedSec && !preUpdateBanner.hidden) return;
+  lastPreUpdateRenderedSec = remSec;
+  preUpdateBanner.hidden = false;
+  if (remSec > 0) {
+    const mm = String(Math.floor(remSec / 60)).padStart(2, '0');
+    const ss = String(remSec % 60).padStart(2, '0');
+    preUpdateText.textContent = `${t('preUpdatePrefix')} ${mm}:${ss} ${t('preUpdateSuffix')}`;
+  } else {
+    preUpdateText.textContent = t('preUpdateNow');
+  }
+}
 let pendingOnlineResult: PitchResultMsg | null = null;
 let queuedOnlinePitchResult: PitchResultMsg | null = null;
 let onlineNoSwingSentForSeq = 0;
@@ -780,6 +848,8 @@ function handleServerVersion(serverVer: string | null | undefined): void {
       updateBannerDismissed = false;
     }
     detectedServerVersion = serverVer;
+    serverUpdateAtMs = null;
+    preUpdateBanner.hidden = true;
     if (!updateBannerDismissed) {
       updateBanner.hidden = false;
     }
@@ -794,8 +864,11 @@ async function pollHealthVersion(): Promise<void> {
     url.searchParams.set('_t', String(Date.now()));
     const res = await fetch(url.toString(), { cache: 'no-store' });
     if (!res.ok) return;
-    const data = (await res.json()) as { version?: string | null };
+    const data = (await res.json()) as { version?: string | null; draining?: boolean; updateAtMs?: number | null };
     handleServerVersion(data.version);
+    if (data.draining && typeof data.updateAtMs === 'number' && data.updateAtMs > 0) {
+      setServerUpdateCountdown(data.updateAtMs);
+    }
   } catch {
     // ignore transient offline errors
   }
@@ -909,11 +982,11 @@ function getCurrentRole(): Role {
 }
 
 function getPitchingTeamColor(): TeamColor {
-  return match.half === 'top' ? 'yellow' : 'black';
+  return visualHalf === 'top' ? 'yellow' : 'black';
 }
 
 function getBattingTeamColor(): TeamColor {
-  return match.half === 'top' ? 'black' : 'yellow';
+  return visualHalf === 'top' ? 'black' : 'yellow';
 }
 
 function evaluateSpring(
@@ -1081,7 +1154,11 @@ function selectPitch(id: PitchId): void {
 }
 
 function isGamePaused(): boolean {
-  return !isOnline && !onTitleScreen && (menuDialog.open || rulesDialog.open || settingsDialog.open);
+  return (
+    !isOnline &&
+    !onTitleScreen &&
+    (menuDialog.open || rulesDialog.open || settingsDialog.open || Boolean(pendingMatchOffer?.visible))
+  );
 }
 
 function isPlayCallActive(): boolean {
@@ -1202,6 +1279,14 @@ function updateHudAndDocks(): void {
   sbBatterEl.textContent = batter.name;
   sbPitcherEl.textContent = pitcherSlot?.name ?? '--';
 
+  // Show LIVE (matchmaking) vs FRIEND (friend room) badge in scoreboard ticker for all online/spectate games
+  const showKind = isOnline && !onTitleScreen && onlineRoomKind !== null;
+  sbRoomKindEl.hidden = !showKind;
+  if (showKind && onlineRoomKind) {
+    sbRoomKindEl.dataset.kind = onlineRoomKind;
+    sbRoomKindEl.textContent = onlineRoomKind === 'friend' ? t('roomTagFriend') : t('roomTagLive');
+  }
+
   // Pitch type / speed / break now lives inside the side Pitch Location panel so Scorebug stays sleek & narrow
   sbTelemetryEl.hidden = onTitleScreen || !spectating;
   if (spectating) {
@@ -1314,6 +1399,7 @@ function startMode(mode: GameMode): void {
   spectating = false;
   onlineSide = null;
   onlineRoomCode = null;
+  onlineRoomKind = null;
   onlineTurnState = 'awaiting_pitch';
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
@@ -1328,6 +1414,7 @@ function startMode(mode: GameMode): void {
   if (mode === 'practice_bat') {
     match.half = 'bottom';
   }
+  visualHalf = match.half;
   onTitleScreen = false;
   titleScreen.hidden = true;
   scoreboardEl.hidden = false;
@@ -1373,6 +1460,10 @@ function startMode(mode: GameMode): void {
 }
 
 function returnToTitle(): void {
+  hideMatchOfferToast();
+  if (onlineClient.connected) {
+    onlineClient.leaveStandby();
+  }
   if (spectating) {
     onlineClient.unwatchRoom();
   }
@@ -1383,7 +1474,9 @@ function returnToTitle(): void {
   spectating = false;
   onlineSide = null;
   onlineRoomCode = null;
+  onlineRoomKind = null;
   onlineWaitingQueue = false;
+  visualHalf = 'top';
   lobbyHub.hidden = false;
   queuePanel.hidden = true;
   pendingOnlineResult = null;
@@ -1909,7 +2002,7 @@ function finishBattedPlay(): void {
     match = msg.match;
     onlinePitchSeq = msg.nextPitchSeq;
     onlineTurnState = match.isGameOver ? 'game_over' : 'awaiting_pitch';
-    const outcome = msg.resolution?.outcome ?? 'OUT';
+    const outcome = msg.resolution && msg.resolution.contact ? msg.resolution.outcome : 'OUT';
     const locCall = localizeServerCallout(locale, msg.callout.title, msg.callout.subtitle);
     if (pendingBattedFeedback) {
       pendingBattedFeedback.callLabel = msg.callout.title;
@@ -2087,9 +2180,17 @@ function showGameOverModal(): void {
         ? `${match.away.name} ${t('winsSuffix')}`
         : t('tieGame');
 
+  const endReasonText =
+    match.endReason === 'disconnect'
+      ? t('labelDisconnectWin')
+      : match.endReason === 'resign'
+        ? t('labelResignWin')
+        : '';
+  const scoreSub = `${match.away.name} ${match.away.totalRuns} — ${match.home.totalRuns} ${match.home.name}`;
+
   transitionDirector.playGameSet(
     winLabel,
-    `${match.away.name} ${match.away.totalRuns} — ${match.home.totalRuns} ${match.home.name}`,
+    endReasonText ? `${endReasonText} · ${scoreSub}` : scoreSub,
     Boolean(match.mercyTriggered),
   );
 
@@ -2115,6 +2216,10 @@ function showGameOverModal(): void {
     hr: t('bsHr'),
     diff10: t('bsDiff10'),
     coldGameLabel: t('labelColdGame'),
+    disconnectWinLabel: t('labelDisconnectWin'),
+    disconnectTag: t('labelDisconnectTag'),
+    resignWinLabel: t('labelResignWin'),
+    resignTag: t('labelResignTag'),
     mvpLabel: t('labelMatchMvp'),
   });
   wrap.appendChild(boxHost);
@@ -2579,21 +2684,50 @@ function getOnlinePlayerName(): string {
   return guestNick!;
 }
 
-function cancelQueueToCpu(): void {
-  autoFallbackToCpu(t('callNoOpponent'), t('callAutoCpuSub'));
+function cancelQueueToCpu(registerStandby = true): void {
+  autoFallbackToCpu(
+    t('callNoOpponent'),
+    registerStandby && onlineClient.connected && !onlineClient.isServerBusy && !onlineClient.isUnstable
+      ? t('standbyNoticeSub')
+      : t('callAutoCpuSub'),
+    registerStandby,
+  );
 }
 
-function autoFallbackToCpu(title: string, detail: string): void {
+function autoFallbackToCpu(title: string, detail: string, registerStandby = false): void {
   onlineWaitingQueue = false;
   queueElapsedSec = 0;
   lobbyHub.hidden = false;
   queuePanel.hidden = true;
-  if (onlineClient.connected) onlineClient.unqueue();
+  if (onlineClient.connected) {
+    onlineClient.unqueue();
+    if (registerStandby && !onlineClient.isServerBusy && !onlineClient.isUnstable) {
+      onlineClient.joinStandby(onlineModeChoice);
+    }
+  }
   if (friendDialog.open) friendDialog.close();
   startMode('quick3');
   const loc = localizeServerCallout(locale, title, detail);
-  emoteCtrl.showSystem(loc.title, loc.subtitle, '#f97316', 3200);
+  emoteCtrl.showSystem(loc.title, loc.subtitle, '#f97316', 3600);
 }
+
+btnOfferAccept.addEventListener('click', () => {
+  if (!pendingMatchOffer) return;
+  const id = pendingMatchOffer.offerId;
+  hideMatchOfferToast();
+  if (onlineClient.connected) {
+    onlineClient.replyMatchOffer(id, true);
+  }
+});
+
+btnOfferDecline.addEventListener('click', () => {
+  if (!pendingMatchOffer) return;
+  const id = pendingMatchOffer.offerId;
+  hideMatchOfferToast();
+  if (onlineClient.connected) {
+    onlineClient.replyMatchOffer(id, false);
+  }
+});
 
 onlineClient.onNetUpdate((m) => {
   if (!m.connected) {
@@ -2767,17 +2901,64 @@ function renderWatchRooms(rooms: LiveRoomInfo[]): void {
   for (const r of rooms) {
     const row = document.createElement('div');
     row.className = 'watch-item';
-    const inningTxt = r.isDerby ? t('derbyTitle') : formatInningHalf(locale, r.half, r.inning);
-    const infoSpan = document.createElement('span');
-    infoSpan.textContent = `${r.awayName} ${r.awayScore}-${r.homeScore} ${r.homeName} · ${inningTxt} · ${r.spectators} ${t('spectatorsLive')}`;
+
+    // Col 1: Inning & Outs (gold big number + outs subtitle)
+    const leftCol = document.createElement('div');
+    leftCol.className = 'wi-left';
+    const innEl = document.createElement('span');
+    innEl.className = 'wi-inning';
+    innEl.textContent = `${r.half === 'top' ? '▲' : '▼'}${r.inning}`;
+    const outsEl = document.createElement('span');
+    outsEl.className = 'wi-outs';
+    outsEl.textContent = `${r.outs ?? 0} ${t('watchOuts')}`;
+    leftCol.append(innEl, outsEl);
+
+    // Col 2: Two stacked player rows with team jersey icon + clean player name
+    const playersCol = document.createElement('div');
+    playersCol.className = 'wi-players';
+
+    const makePlayerRow = (side: 'away' | 'home', rawName: string) => {
+      const pRow = document.createElement('div');
+      pRow.className = 'wi-player-row';
+      const av = document.createElement('span');
+      av.className = `wi-avatar ${side}`;
+      av.textContent = side === 'away' ? '黑' : '黃';
+      const nm = document.createElement('span');
+      nm.className = `wi-name ${side}`;
+      nm.textContent = formatScorebugTeamName(rawName);
+      pRow.append(av, nm);
+      return pRow;
+    };
+    playersCol.append(makePlayerRow('away', r.awayName), makePlayerRow('home', r.homeName));
+
+    // Col 3: Two stacked scores aligned 1:1 with the players
+    const scoresCol = document.createElement('div');
+    scoresCol.className = 'wi-scores';
+    const awaySc = document.createElement('span');
+    awaySc.className = 'wi-score';
+    awaySc.textContent = String(r.awayScore);
+    const homeSc = document.createElement('span');
+    homeSc.className = 'wi-score';
+    homeSc.textContent = String(r.homeScore);
+    scoresCol.append(awaySc, homeSc);
+
+    // Col 4: LIVE / FRIEND tag on top + rounded pill Watch button below
+    const actCol = document.createElement('div');
+    actCol.className = 'wi-action';
+    const kind = r.roomKind === 'friend' ? 'friend' : 'live';
+    const kindTag = document.createElement('span');
+    kindTag.className = `wi-kind ${kind}`;
+    kindTag.textContent = kind === 'friend' ? t('roomTagFriend') : t('roomTagLive');
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'act-btn primary';
+    btn.className = 'wi-watch-btn';
     btn.textContent = t('watchBtn');
     btn.addEventListener('click', () => {
       onlineClient.watchRoom(r.code);
     });
-    row.append(infoSpan, btn);
+    actCol.append(kindTag, btn);
+
+    row.append(leftCol, playersCol, scoresCol, actCol);
     watchListEl.appendChild(row);
   }
 }
@@ -2789,15 +2970,18 @@ function enterOnlineMatch(
   spectating = false;
   onlineWaitingQueue = false;
   queueElapsedSec = 0;
+  hideMatchOfferToast();
   lobbyHub.hidden = false;
   queuePanel.hidden = true;
   onlineSide = msg.side;
   onlineRoomCode = msg.code;
+  onlineRoomKind = msg.roomKind ?? 'live';
   onlinePitchSeq = msg.pitchSeq;
   onlineTurnState = msg.turnState;
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
   match = msg.match;
+  visualHalf = match.half;
   batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
@@ -2848,13 +3032,16 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   isOnline = true;
   spectating = true;
   onlineWaitingQueue = false;
+  hideMatchOfferToast();
   onlineSide = null;
   onlineRoomCode = msg.code;
+  onlineRoomKind = msg.roomKind ?? 'live';
   onlinePitchSeq = msg.pitchSeq;
   onlineTurnState = msg.turnState;
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
   match = msg.match;
+  visualHalf = match.half;
   batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
@@ -3060,7 +3247,7 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       callColor: msg.callout.color,
       resultDetail: msg.callout.subtitle || undefined,
       dtTiming: msg.resolution?.dtTiming ?? 0,
-      timingLabel: msg.resolution?.label || 'MISS',
+      timingLabel: msg.resolution?.detail || msg.resolution?.label || 'MISS',
       timingColor: msg.resolution?.color || '#f43f5e',
       batX: msg.swingData ? msg.swingData.batX : swingLockedBatPos.x,
       batY: msg.swingData ? msg.swingData.batY : swingLockedBatPos.y,
@@ -3131,6 +3318,9 @@ onlineClient.onMessage((msg) => {
       lastOnlineCount = msg.stats.online;
       topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
       handleServerVersion(msg.version);
+      if (typeof msg.updateAtMs === 'number' && msg.updateAtMs > 0) {
+        setServerUpdateCountdown(msg.updateAtMs);
+      }
       break;
     }
     case 'stats': {
@@ -3318,6 +3508,11 @@ onlineClient.onMessage((msg) => {
       pendingOnlineResult = null;
       resetOnlineFreezeState();
       match = msg.match;
+      if (!match.endReason) {
+        if (msg.reason === 'disconnect_timeout') match.endReason = 'disconnect';
+        else if (msg.reason === 'resign') match.endReason = 'resign';
+      }
+      visualHalf = match.half;
       onlineTurnState = 'game_over';
       phase = 'result';
       cam.setFollowTarget(null);
@@ -3342,9 +3537,36 @@ onlineClient.onMessage((msg) => {
       }
       break;
     }
+    case 'match_offer': {
+      if (isOnline || onTitleScreen) {
+        onlineClient.replyMatchOffer(msg.offerId, false);
+        break;
+      }
+      pendingMatchOffer = {
+        offerId: msg.offerId,
+        opponentName: msg.opponentName,
+        mode: msg.mode,
+        timeoutSec: msg.timeoutSec || 20,
+        visible: false,
+        shownAtMs: 0,
+        expiresAtMs: 0,
+      };
+      break;
+    }
+    case 'offer_cancelled': {
+      if (pendingMatchOffer && pendingMatchOffer.offerId === msg.offerId) {
+        const wasVisible = pendingMatchOffer.visible;
+        hideMatchOfferToast();
+        if (wasVisible && msg.reason === 'expired') {
+          emoteCtrl.showSystem(t('offerExpired'), t('offerExpiredSub'), '#94a3b8', 2600);
+        }
+      }
+      break;
+    }
     case 'notice': {
       if (msg.kind === 'draining') {
-        emoteCtrl.showSystem(t('callMaintenance'), t('callMaintenanceSub'), '#38bdf8', 3200);
+        setServerUpdateCountdown(msg.updateAtMs, msg.countdownSec ?? 60);
+        emoteCtrl.showSystem(t('callMaintenance'), t('callMaintenanceSub'), '#f97316', 3600);
       }
       break;
     }
@@ -3352,6 +3574,13 @@ onlineClient.onMessage((msg) => {
       friendStatusMsg.textContent = msg.message;
       if (msg.code === 'server_busy') {
         autoFallbackToCpu('SERVER BUSY', 'AUTO-MATCHED VS CPU');
+      } else if (msg.code === 'draining') {
+        onlineWaitingQueue = false;
+        queueElapsedSec = 0;
+        lobbyHub.hidden = false;
+        queuePanel.hidden = true;
+        emoteCtrl.showSystem(t('callMaintenance'), t('callMaintenanceSub'), '#f97316', 3400);
+        updateHudAndDocks();
       } else if (msg.code === 'reconnect_failed') {
         saveSession(null);
       } else if (msg.code === 'opponent_left') {
@@ -3491,13 +3720,51 @@ function step(now: number): void {
 
   resizeCanvases();
 
-  // Matchmaking 10s fallback timer
+  // Matchmaking 20s fallback timer (enters CPU + joins standby matchmaking queue)
   if (onTitleScreen && onlineWaitingQueue) {
     queueElapsedSec += rawDt;
     const secs = Math.floor(queueElapsedSec);
     queueStatusText.textContent = `${t('queueFinding')} 0:${String(secs).padStart(2, '0')}...`;
-    if (queueElapsedSec >= 10) {
-      cancelQueueToCpu();
+    if (queueElapsedSec >= 20) {
+      cancelQueueToCpu(true);
+    }
+  }
+
+  // Server pre-update countdown banner tick
+  if (serverUpdateAtMs !== null) {
+    updatePreUpdateBannerUi();
+  }
+
+  // Non-blocking standby online match offer card (waits until current ball finishes before appearing, then auto-dismisses after 20s)
+  if (pendingMatchOffer) {
+    if (isOnline || onTitleScreen) {
+      hideMatchOfferToast();
+    } else if (!pendingMatchOffer.visible) {
+      if (phase === 'idle' && presentationQueue.length === 0 && !transitionDirector.isActive()) {
+        const nowMs = Date.now();
+        cancelSpringCharge();
+        pendingMatchOffer.visible = true;
+        pendingMatchOffer.shownAtMs = nowMs;
+        pendingMatchOffer.expiresAtMs = nowMs + pendingMatchOffer.timeoutSec * 1000;
+        lastOfferRenderedSec = -1;
+        motBodyEl.textContent = `${t('offerBodyPrefix')} ${pendingMatchOffer.opponentName}`;
+        motBarFillEl.style.width = '100%';
+        matchOfferToast.hidden = false;
+        onlineClient.sendOfferShown(pendingMatchOffer.offerId);
+      }
+    } else {
+      const remMs = pendingMatchOffer.expiresAtMs - Date.now();
+      if (remMs <= 0) {
+        hideMatchOfferToast();
+      } else {
+        const totalMs = Math.max(1000, pendingMatchOffer.timeoutSec * 1000);
+        motBarFillEl.style.width = `${Math.max(0, Math.min(100, (remMs / totalMs) * 100))}%`;
+        const remSec = Math.ceil(remMs / 1000);
+        if (remSec !== lastOfferRenderedSec) {
+          lastOfferRenderedSec = remSec;
+          motTimerEl.textContent = `${remSec}s`;
+        }
+      }
     }
   }
 

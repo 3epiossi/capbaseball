@@ -1308,4 +1308,117 @@ describe('Online Multiplayer Server Integration', () => {
     await new Promise((r) => setTimeout(r, 120));
     expect(home.queue.filter((m) => m.type === 'emote').length).toBe(0);
   });
+
+  it('27. Online swing-and-miss preserves true swingData & miss resolution (dtTiming, label, hitField) over v2 protocol', async () => {
+    const home = await connectClient(srv.port, 'MissPitch');
+    const away = await connectClient(srv.port, 'MissBat');
+    const spec = await connectClient(srv.port, 'MissSpec');
+    openClients.push(home, away, spec);
+
+    home.send({ type: 'create', mode: 'quick3', name: 'MissPitch' });
+    const created = await home.nextMsg((m) => m.type === 'room_created');
+    away.send({ type: 'join', code: created.code, name: 'MissBat' });
+    const msH = await home.nextMsg((m) => m.type === 'match_start');
+    await away.nextMsg((m) => m.type === 'match_start');
+    expect(msH.roomKind).toBe('friend');
+
+    spec.send({ type: 'watch', code: created.code });
+    const sp = await spec.nextMsg((m) => m.type === 'spectate_sync');
+    expect(sp.roomKind).toBe('friend');
+
+    // Pitcher throws right down the middle
+    home.send({
+      type: 'pitch_submit',
+      pitchSeq: 1,
+      pitchId: 'straight',
+      speedKmh: 70,
+      targetX: 0,
+      targetY: 0.72,
+      errorX: 0,
+      errorY: 0,
+    });
+    await home.nextMsg((m) => m.type === 'pitch_launch');
+    await away.nextMsg((m) => m.type === 'pitch_launch');
+    await spec.nextMsg((m) => m.type === 'pitch_launch');
+
+    // Batter swings WAY TOO EARLY (flightTimeSec = 0.25s) at (0.14, 0.88)
+    away.send({
+      type: 'swing_input',
+      pitchSeq: 1,
+      flightTimeSec: 0.25,
+      batX: 0.14,
+      batY: 0.88,
+      swingMode: 'normal',
+      batterSide: 'L',
+    });
+
+    const prSpec = await spec.nextMsg((m) => m.type === 'pitch_result');
+    expect(prSpec.swung).toBe(true);
+    const sd = prSpec.swingData as { batX: number; batY: number } | null;
+    const res = prSpec.resolution as { contact: boolean; dtTiming: number; label: string; detail: string; hitField: number[] } | null;
+    expect(sd).not.toBeNull();
+    expect(sd!.batX).toBeCloseTo(0.14, 2);
+    expect(sd!.batY).toBeCloseTo(0.88, 2);
+    expect(res).not.toBeNull();
+    expect(res!.contact).toBe(false);
+    expect(res!.dtTiming).toBeLessThan(-0.15);
+    expect(res!.detail).toBe('TOO EARLY');
+    expect(Array.isArray(res!.hitField)).toBe(true);
+  });
+
+  it('28. Standby match offer cascades on decline/timeout, starts LIVE match on accept, and room_list separates LIVE vs FRIEND', async () => {
+    const sbSrv = await startServer(0, { pitchClockScale: 0, offerTimeoutMs: 400 });
+    const sb1 = await connectClient(sbSrv.port, 'Standby1');
+    const sb2 = await connectClient(sbSrv.port, 'Standby2');
+    const waiter = await connectClient(sbSrv.port, 'LiveWaiter');
+    const fHost = await connectClient(sbSrv.port, 'FriendH');
+    const fGuest = await connectClient(sbSrv.port, 'FriendA');
+    const lister = await connectClient(sbSrv.port, 'Lister');
+    try {
+      // Standby1 & Standby2 enter CPU standby queue
+      sb1.send({ type: 'standby_join', mode: 'quick3' });
+      sb2.send({ type: 'standby_join', mode: 'quick3' });
+      await new Promise((r) => setTimeout(r, 40));
+
+      // LiveWaiter enters online matchmaking queue -> server offers Standby1 first!
+      waiter.send({ type: 'queue', mode: 'quick3', name: 'LiveWaiter' });
+      await waiter.nextMsg((m) => m.type === 'queued');
+      const offer1 = await sb1.nextMsg((m) => m.type === 'match_offer');
+      expect(offer1.opponentName).toBe('LiveWaiter');
+
+      // Standby1 reports shown then declines -> server immediately offers Standby2!
+      sb1.send({ type: 'offer_shown', offerId: offer1.offerId });
+      sb1.send({ type: 'offer_reply', offerId: offer1.offerId, accept: false });
+      const offer2 = await sb2.nextMsg((m) => m.type === 'match_offer');
+      expect(offer2.opponentName).toBe('LiveWaiter');
+
+      // Standby2 accepts -> LiveWaiter & Standby2 enter a LIVE room!
+      sb2.send({ type: 'offer_shown', offerId: offer2.offerId });
+      sb2.send({ type: 'offer_reply', offerId: offer2.offerId, accept: true });
+      const msLive1 = await sb2.nextMsg((m) => m.type === 'match_start');
+      const msLive2 = await waiter.nextMsg((m) => m.type === 'match_start');
+      expect(msLive1.roomKind).toBe('live');
+      expect(msLive2.roomKind).toBe('live');
+
+      // Create a parallel FRIEND room
+      fHost.send({ type: 'create', mode: 'quick3', name: 'FriendH' });
+      const fc = await fHost.nextMsg((m) => m.type === 'room_created');
+      fGuest.send({ type: 'join', code: fc.code, name: 'FriendA' });
+      await fHost.nextMsg((m) => m.type === 'match_start');
+      await fGuest.nextMsg((m) => m.type === 'match_start');
+
+      // room_list distinguishes LIVE vs FRIEND and reports outs
+      lister.send({ type: 'list' });
+      const listMsg = await lister.nextMsg((m) => m.type === 'room_list');
+      const roomArr = listMsg.rooms as Array<{ code: string; roomKind: string; outs: number }>;
+      const liveEntry = roomArr.find((r) => r.code === msLive1.code);
+      const friendEntry = roomArr.find((r) => r.code === fc.code);
+      expect(liveEntry?.roomKind).toBe('live');
+      expect(friendEntry?.roomKind).toBe('friend');
+      expect(typeof liveEntry?.outs).toBe('number');
+    } finally {
+      await Promise.all([sb1.close(), sb2.close(), waiter.close(), fHost.close(), fGuest.close(), lister.close()]);
+      await sbSrv.close();
+    }
+  });
 });

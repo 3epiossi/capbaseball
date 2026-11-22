@@ -10,6 +10,7 @@ import {
 
 export type OnlineMode = 'quick3' | 'official6';
 export type OnlineSide = 'home' | 'away';
+export type RoomKind = 'live' | 'friend';
 export type TurnState = 'awaiting_pitch' | 'awaiting_swing' | 'game_over';
 export type NetQuality = 'good' | 'fair' | 'poor' | 'offline';
 
@@ -37,11 +38,13 @@ export interface LiveRoomInfo {
   homeName: string;
   inning: number;
   half: 'top' | 'bottom';
+  outs: number;
   awayScore: number;
   homeScore: number;
   spectators: number;
   isDerby: boolean;
   mode: OnlineMode;
+  roomKind: RoomKind;
 }
 
 export interface PitchLaunchMsg {
@@ -72,35 +75,47 @@ export interface PitchResultMsg {
     swingMode: 'normal' | 'power';
     batterSide: 'R' | 'L';
   } | null;
-  resolution: {
-    contact: true;
-    feedback: string;
-    label: string;
-    detail: string;
-    color: string;
-    quality: 'perfect' | 'good' | 'early' | 'late';
-    dtTiming: number;
-    hitField: readonly [number, number, number];
-    battedParams: {
-      position: readonly [number, number, number];
-      velocity: readonly [number, number, number];
-      seed?: number;
-    };
-    catchInfo: {
-      caught: boolean;
-      bobbled?: boolean;
-      blocked?: boolean;
-      fielderId: 'LF' | 'RF' | 'P' | 'C' | null;
-      catchTimeSec: number | null;
-      catchPos: readonly [number, number, number] | null;
-      blockTimeSec?: number | null;
-      blockPos?: readonly [number, number, number] | null;
-    };
-    outcome: 'FOUL' | 'OUT' | '1B' | '2B' | '3B' | 'HR';
-    exitSpeedKmh: number;
-    launchAngleDeg?: number;
-    distanceM: number;
-  } | null;
+  resolution:
+    | {
+        contact: true;
+        feedback: string;
+        label: string;
+        detail: string;
+        color: string;
+        quality: 'perfect' | 'good' | 'early' | 'late';
+        dtTiming: number;
+        hitField: readonly [number, number, number];
+        battedParams: {
+          position: readonly [number, number, number];
+          velocity: readonly [number, number, number];
+          seed?: number;
+        };
+        catchInfo: {
+          caught: boolean;
+          bobbled?: boolean;
+          blocked?: boolean;
+          fielderId: 'LF' | 'RF' | 'P' | 'C' | null;
+          catchTimeSec: number | null;
+          catchPos: readonly [number, number, number] | null;
+          blockTimeSec?: number | null;
+          blockPos?: readonly [number, number, number] | null;
+        };
+        outcome: 'FOUL' | 'OUT' | '1B' | '2B' | '3B' | 'HR';
+        exitSpeedKmh: number;
+        launchAngleDeg?: number;
+        distanceM: number;
+      }
+    | {
+        contact: false;
+        feedback: string;
+        label: string;
+        detail: string;
+        color: string;
+        quality: 'weak';
+        dtTiming: number;
+        hitField: readonly [number, number, number];
+      }
+    | null;
   outcome: string;
   callout: { title: string; subtitle: string; color: string; ttl: number };
   inningChanged: boolean;
@@ -112,7 +127,7 @@ export interface PitchResultMsg {
 export type ServerMessage =
   | { type: 'ping'; t: number }
   | { type: 'pong'; t: number }
-  | { type: 'welcome'; clientId: string; name: string; version: string | null; stats: OnlineStats }
+  | { type: 'welcome'; clientId: string; name: string; version: string | null; updateAtMs?: number | null; stats: OnlineStats }
   | { type: 'stats'; stats: OnlineStats }
   | { type: 'queued'; mode: OnlineMode }
   | { type: 'unqueued' }
@@ -122,6 +137,7 @@ export type ServerMessage =
       type: 'match_start';
       code: string;
       mode: OnlineMode;
+      roomKind?: RoomKind;
       side: OnlineSide;
       token: string;
       pitchSeq: number;
@@ -134,6 +150,7 @@ export type ServerMessage =
       type: 'state_sync';
       code: string;
       mode: OnlineMode;
+      roomKind?: RoomKind;
       side: OnlineSide;
       pitchSeq: number;
       turnState: TurnState;
@@ -155,6 +172,7 @@ export type ServerMessage =
       type: 'spectate_sync';
       code: string;
       mode: OnlineMode;
+      roomKind?: RoomKind;
       awayName: string;
       homeName: string;
       match: MatchState;
@@ -179,7 +197,9 @@ export type ServerMessage =
     }
   | { type: 'emote'; side: OnlineSide | 'spectator'; id: string; senderName?: string }
   | { type: 'pause_state'; pausedSides: OnlineSide[]; remainingSec: number }
-  | { type: 'notice'; kind: string }
+  | { type: 'match_offer'; offerId: string; opponentName: string; mode: OnlineMode; timeoutSec: number }
+  | { type: 'offer_cancelled'; offerId: string; reason: string }
+  | { type: 'notice'; kind: string; countdownSec?: number; updateAtMs?: number }
   | { type: 'error'; code: string; message: string; load?: ServerLoadStatus };
 
 const SESSION_KEY = 'capbaseball_online_session';
@@ -592,5 +612,21 @@ export class OnlineClient {
 
   sendMenuPause(paused: boolean): void {
     this.sendRaw({ t: 'mp', p: paused ? 1 : 0 });
+  }
+
+  joinStandby(mode: OnlineMode): void {
+    this.sendRaw({ t: 'sj', m: mode === 'official6' ? 1 : 0 });
+  }
+
+  leaveStandby(): void {
+    this.sendRaw({ t: 'sl' });
+  }
+
+  sendOfferShown(offerId: string): void {
+    this.sendRaw({ t: 'os', id: offerId });
+  }
+
+  replyMatchOffer(offerId: string, accept: boolean): void {
+    this.sendRaw({ t: 'or', id: offerId, a: accept ? 1 : 0 });
   }
 }

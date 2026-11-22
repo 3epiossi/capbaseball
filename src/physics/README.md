@@ -75,7 +75,7 @@
   - 垂直偏移 $u_y = \Delta y / (H_{\text{bat}} + R_{\text{ball}})$ 對應圓柱截面表面法向量夾角 $\phi = \arcsin(\text{clamp}(0.95\,u_y,\,-0.95,\,0.95))$；法向分力與斜撞損耗係數 $f_{\text{cyl}} = (\cos\phi)^{1.45}$、橫向甜區衰減 $f_{\text{axis}} = 1 - 0.52\,\tilde{u}_x^2$、時機衰減 $f_{\text{time}} = 1 - 0.28\,\tau^2$，組合得初速 $v_{\text{exit}} = 2.5 + (v_{\text{peak}} - 2.5)\,f_{\text{cyl}}\,f_{\text{axis}}\,f_{\text{time}}$。
   - 擊球仰角依圓柱法向量偏移：$\theta_{\text{launch}} = \text{clamp}(\theta_0 + 0.95\,\phi_{\text{deg}},\,-35^\circ,\,+74^\circ)$（一般 $\theta_0 = 10^\circ$、強振 $13^\circ$）；越偏向上緣打出軟弱高沖天炮、越偏向下緣打出軟弱滾地球。水平噴射角結合揮棒時機拉推與棒端圓弧微偏角 $\psi = \arcsin(0.22\,\tilde{u}_x)$（限縮於 `±44°`）。
   - 擊球品質採乘積式 `rawQuality = fCyl * fAxis * (0.65 + 0.35 * timingQuality)`，確保咬在圓柱極端邊緣時維持鈍悶的 `'weak'` 擊球音效。
-- **全場 4 人確定性接殺評估（`buildFullDefense`、`simulateDeterministicCatch`）**：投手（`P`）、捕手（`C`）與左／右外野手（`LF`／`RF`）皆納入守備並可跨進界外區接殺界外飛球（`OUT`）。先檢查不可接殺門檻（出速 `>= 17.5` m/s 或仰角 `< 20°`），再依各守位反應延遲（投手含投球後收尾延遲 `0.62` s）與追球半徑評估接殺與漏接（`bobble`），同時回傳精準攔截點 `catchPos` 與 `catchTimeSec`。
+- **全場 4 人確定性接殺評估（`buildFullDefense`、`simulateDeterministicCatch`）**：投手（`P`）、捕手（`C`）與左／右外野手（`LF`／`RF`）皆納入守備並可跨進界外區接殺界外飛球（`OUT`）。先檢查不可接殺門檻（出速 `>= 17.5` m/s 或仰角 `< 20°`），再依各守位反應延遲（投手含投球後收尾延遲 `0.62` s）與追球半徑評估接殺並回傳精準攔截點 `catchPos` 與 `catchTimeSec`。漏接率分流：高飛球（`launchAngleDeg >= 28°`）壓低至 **`4%–12%`**（基本功穩接、極限飛撲微升），較低平飛球（`20°–28°`）為 `12%–28%`，強勁平飛球則直接穿過或靠滾地擋球處理。
 - **全場 4 人滾地攔截守備（`simulateOutfieldGroundBlock`）**：針對未在空中接殺且未直接過牆的界內／界外擊球，4 名守備員都能前衝攔截反彈或滾地球（界內內野攔截判為 `OUT`，外野攔截壓制為 `1B`，界外攔截維持 `FOUL`）並回傳權威 `fielderId`、`blockPos` 與 `blockTimeSec`。投手套用投球後反應延遲（`PITCHER_BLOCK_REACTION_DELAY = 0.58` s）與過丘最大可攔截球速（`PITCHER_MAX_INTERCEPT_SPEED_MS = 13.5` m/s），讓正面強襲回傳球穿過投手丘，中慢速滾地球則由投手起身前衝撈球出局。
 
 ---
