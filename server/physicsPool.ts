@@ -27,6 +27,7 @@ export interface SolvePitchInput {
 export interface EvalSwingInput {
   hitPlanePos: V3;
   hitPlaneTimeSec: number;
+  hitPlaneSpeedMs?: number;
   flightTimeSec: number;
   batX: number;
   batY: number;
@@ -159,6 +160,7 @@ export class PhysicsPool {
         result: {
           hitPlanePos: traj.hitPlanePos,
           hitPlaneTimeSec: traj.hitPlaneTimeSec,
+          hitPlaneSpeedMs: traj.hitPlaneSpeedMs,
           plateCrossPos: traj.plateCrossPos,
           breakDelta: traj.breakDelta,
           reachesPassLine: traj.reachesPassLine,
@@ -188,6 +190,7 @@ export class PhysicsPool {
         trajectory: {
           hitPlanePos: input.hitPlanePos,
           hitPlaneTimeSec: input.hitPlaneTimeSec,
+          hitPlaneSpeedMs: input.hitPlaneSpeedMs,
         } as PitchTrajectoryResult,
         flightTimeSec: input.flightTimeSec,
         batX: input.batX,
@@ -204,6 +207,7 @@ export class PhysicsPool {
       kind: 'eval_swing',
       hitPlanePos: input.hitPlanePos,
       hitPlaneTimeSec: input.hitPlaneTimeSec,
+      hitPlaneSpeedMs: input.hitPlaneSpeedMs,
       flightTimeSec: input.flightTimeSec,
       batX: input.batX,
       batY: input.batY,

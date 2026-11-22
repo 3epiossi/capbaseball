@@ -4,7 +4,7 @@
 
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
-- **目前里程碑**：`v2.0.4`（語意化三段式版本號），Pi 現行部署版本 `20261122-054020`
+- **目前里程碑**：`v2.1.0`（語意化三段式版本號），Pi 現行部署版本 `20261122-124316`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -18,7 +18,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 45 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 46 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -179,3 +179,10 @@ PORT=8788 HOST=127.0.0.1 npm run server
 - **v2.0.4 觀戰快捷對話與連續時機光譜（2026-11-22）**：
   - **觀戰觀眾快捷對話**：放行觀戰房間的觀眾透過右下角對話球發送 8 組三語快捷對話（紫色 `觀戰 · 玩家名` 氣泡），保留單人 3 秒冷卻並加上單房觀眾 `1.2s` 總節流防洗版；選手開啟「靜音對話」可同步屏蔽觀眾發言。
   - **連續揮棒時機光譜**：[src/render/overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) 的揮棒時機扇形由 5 段離散色塊改為 `createConicGradient` 連續漸層光譜（紅→橘→黃→綠→黃→橘→紅），並附 48 段細切平滑備援。
+- **v2.1.0 3D 圓柱體球棒物理、球體半徑碰撞與揮棒時機對齊（2026-11-22）**：
+  - **2D 捕手截面 `( • )` 圓柱棒框＋球體半徑 Minkowski 碰撞**：[src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts) 與 [src/render/overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) 共用 `getBatPciExtents`（一般 `0.128 × 0.050` m、強振 `0.092 × 0.036` m）與 `CONTACT_BALL_RADIUS_M = 0.038` m，左右二次貝茲圓弧括號與上下兩條隱形水平界線構成 1:1 水平圓柱截面；只要球體外緣接觸棒框即判定擊中，徹底消除「球緣明明撞到棒子卻揮空」的不合理感。
+  - **選手揮棒速度（BBS 公式）＋3D 圓柱法向量投影**：改以選手揮棒速度 $v_{\text{bat}}$（預設 `18.0` m/s，強振 `1.22×`）與擊球面實際球速 `hitPlaneSpeedMs`（同步至線上 `physicsWorker`）驅動棒心初速 $v_{\text{peak}} = 0.22\,v_{\text{pitch,hit}} + 1.22\,v_{\text{bat}}$，並依圓柱截面法向量夾角 $\phi = \arcsin(0.95\,u_y)$ 計算分力投影 $(\cos\phi)^{1.45}$、橫向甜區衰減與仰角偏移（棒頂打成軟弱高沖天炮、棒底打成軟弱滾地球）。
+  - **修正「明明對到球卻揮空」三大根因（方案 A）**：
+    1. 揮棒回饋卡由原本誤畫 `plateCrossPos`（`z = 0`，直球／指叉／變速球在最後 `22cm` 會多下墜 `5~17cm`）改為與物理一致的 `hitPlanePos`（`z = -0.22`），並將 `◎` 外圈圓周與球心依 `0.038` m 1:1 繪製。
+    2. 揮棒前搖縮短至精確 `SWING_LEAD_SEC = 0.065 s`，按下揮棒瞬間鎖定瞄準座標與目標擊球時間，時機導引環與 CPU 觸發點同步預扣 `65ms`。
+    3. 修復球於前搖期間觸底（如變速球）時會跳過 `resolveContact()` 強制揮空並偽造 `dtTiming = 0` 的截斷 Bug；同時修復線上 `physicsWorker` 缺少 `sampleAt` 導致 `hitPlaneSpeedMs` 未傳遞的問題（測試擴充至 **46/46** 全部通過）。

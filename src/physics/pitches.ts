@@ -306,6 +306,8 @@ export interface PitchTrajectoryResult {
   hitPlanePos: V3;
   /** Time when the cap crosses the hit plane (X = 9.00m) */
   hitPlaneTimeSec: number;
+  /** Cap linear speed (m/s) when crossing the hit plane (X = 9.00m) */
+  hitPlaneSpeedMs: number;
   /** Position where the cap crosses the front of home plate (X = 9.22m) */
   plateCrossPos: V3;
   /** Time when the cap crosses X = 9.22m */
@@ -594,6 +596,10 @@ export function solvePitchTrajectory(
     if (spd > peakSpeedMS) peakSpeedMS = spd;
   }
 
+  const sampleAt = createSampleAt(frames);
+  const hitSample = sampleAt(hitCross.timeSec);
+  const hitPlaneSpeedMs = Math.hypot(hitSample.y[3], hitSample.y[4], hitSample.y[5]);
+
   return {
     pitchId,
     spec,
@@ -603,6 +609,7 @@ export function solvePitchTrajectory(
     releasePos,
     hitPlanePos: hitCross.pos,
     hitPlaneTimeSec: hitCross.timeSec,
+    hitPlaneSpeedMs,
     plateCrossPos: plateCross.pos,
     plateCrossTimeSec: plateCross.timeSec,
     breakDelta,
@@ -612,6 +619,6 @@ export function solvePitchTrajectory(
     peakSpeedKmh: peakSpeedMS * 3.6,
     frames,
     simResult,
-    sampleAt: createSampleAt(frames),
+    sampleAt,
   };
 }

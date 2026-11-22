@@ -6,6 +6,7 @@ import type { V3 } from '../src/physics/vector';
 export interface ServerPitchSummary {
   hitPlanePos: V3;
   hitPlaneTimeSec: number;
+  hitPlaneSpeedMs: number;
   plateCrossPos: V3;
   breakDelta: V3;
   reachesPassLine: boolean;
@@ -30,6 +31,7 @@ export type PhysicsWorkerRequest =
       kind: 'eval_swing';
       hitPlanePos: V3;
       hitPlaneTimeSec: number;
+      hitPlaneSpeedMs?: number;
       flightTimeSec: number;
       batX: number;
       batY: number;
@@ -57,6 +59,7 @@ if (parentPort) {
         const result: ServerPitchSummary = {
           hitPlanePos: traj.hitPlanePos,
           hitPlaneTimeSec: traj.hitPlaneTimeSec,
+          hitPlaneSpeedMs: traj.hitPlaneSpeedMs,
           plateCrossPos: traj.plateCrossPos,
           breakDelta: traj.breakDelta,
           reachesPassLine: traj.reachesPassLine,
@@ -78,6 +81,7 @@ if (parentPort) {
           trajectory: {
             hitPlanePos: req.hitPlanePos,
             hitPlaneTimeSec: req.hitPlaneTimeSec,
+            hitPlaneSpeedMs: req.hitPlaneSpeedMs,
           } as PitchTrajectoryResult,
           flightTimeSec: req.flightTimeSec,
           batX: req.batX,

@@ -31,6 +31,88 @@ export type SwingMode = 'normal' | 'power';
 export type BatterSide = 'R' | 'L' | 'right' | 'left';
 export type ContactQuality = 'perfect' | 'good' | 'early' | 'late' | 'miss';
 
+/**
+ * 2D catcher-view cross-section of the horizontal cylindrical bat barrel.
+ * The left/right parentheses "(" and ")" follow exact quadratic Beziers whose
+ * outer midpoints sit at x = +-halfW and whose top/bottom tips sit at
+ * x = +-(1 - bracketCurveFrac) * halfW, y = +-halfH, connected by two
+ * invisible horizontal boundary lines y = +-halfH.
+ */
+export interface BatPciExtents {
+  halfW: number;
+  halfH: number;
+  bracketCurveFrac: number;
+}
+
+/**
+ * Effective collision radius of the pitched cap/ball (m) used in both
+ * 3D cylinder-sphere Minkowski contact (R_eff = halfH + CONTACT_BALL_RADIUS_M)
+ * and 1:1 WYSIWYG rendering on the Side Feedback Card.
+ */
+export const CONTACT_BALL_RADIUS_M = 0.038;
+
+export const BAT_PCI_NORMAL: BatPciExtents = {
+  halfW: 0.128,
+  halfH: 0.050,
+  bracketCurveFrac: 0.14,
+};
+
+export const BAT_PCI_POWER: BatPciExtents = {
+  halfW: 0.092,
+  halfH: 0.036,
+  bracketCurveFrac: 0.14,
+};
+
+export function getBatPciExtents(swingMode: SwingMode): BatPciExtents {
+  return swingMode === 'power' ? BAT_PCI_POWER : BAT_PCI_NORMAL;
+}
+
+/**
+ * 3D horizontal cylindrical bat barrel collision physics constants.
+ * Vertical offset u_y = (hitY - batY) / halfH maps onto cylinder surface normal angle
+ * phi = asin(sinPhiMax * u_y), projecting normal impulse by cos(phi) = sqrt(1 - (sinPhiMax * u_y)^2)
+ * and deflecting launch elevation angle along the cylinder normal.
+ */
+export const BAT_CYLINDER_PHYSICS = {
+  /** Maps |u_y| = 1 to cylinder normal angle phi_max = asin(0.95) ~= 71.8 deg */
+  sinPhiMax: 0.95,
+  /** Oblique cylinder impulse exponent: f_cyl = cos(phi)^normalProjectionExp (normal cos(phi) + oblique spin/slip loss) */
+  normalProjectionExp: 1.45,
+  /** Launch elevation coupling from cylinder surface normal angle phi */
+  launchPhiScale: 0.95,
+  /** Natural swing uppercut angle (deg) at cylinder centerline u_y = 0 */
+  baseAttackAngleDeg: { normal: 10.0, power: 13.0 },
+  /** Fair-ball launch elevation bounds (deg) */
+  minLaunchDeg: -35.0,
+  maxLaunchDeg: 74.0,
+  /** Horizontal barrel taper / vibration energy loss: f_axis = 1 - axisLossK * effUX^2 */
+  axisLossK: 0.52,
+  /** Rounded barrel-end horizontal normal sine max: psi = asin(sinPsiMax * effUX) (~12.7 deg) */
+  sinPsiMax: 0.22,
+  /** Swing timing bat-speed loss: f_time = 1 - timingLossK * (|dt| / fairTimingWindowSec)^2 */
+  timingLossK: 0.28,
+  /** Fair contact timing half-window (s) */
+  fairTimingWindowSec: 0.085,
+  /** Timing-foul outer timing window (s) */
+  foulTimingWindowSec: 0.145,
+  /** Edge-graze foul timing window (s) */
+  grazeTimingWindowSec: 0.105,
+  /** Extra outer margin (m) beyond ball-edge tangency (d_edge <= R_ball + margin) for FOUL TIP */
+  grazeOuterMarginM: 0.016,
+  /** Extra outer margin (m) beyond ball-edge tangency for early/late timing foul */
+  timingFoulMarginM: 0.024,
+  /** Base batter swing speed at sweet spot (m/s) for normal swing (~65 km/h) */
+  defaultBatSpeedMs: 18.0,
+  /** Power swing bat-speed multiplier (smaller barrel, faster swing: ~79 km/h) */
+  powerBatSpeedMult: 1.22,
+  /** Bat-cap collision efficiency q in BBS equation: v_peak = q * v_pitch + (1 + q) * v_bat */
+  collisionEfficiencyQ: 0.22,
+  /** Fallback incoming pitch speed at hit plane (m/s) when trajectory summary omits it */
+  defaultPitchHitSpeedMs: 11.5,
+  /** Residual tangential-contact floor exit speed (m/s) */
+  floorExitSpeedMs: 2.5,
+} as const;
+
 export interface OutfielderInit {
   id: 'LF' | 'RF';
   homePos: FieldV3;
@@ -45,6 +127,8 @@ export interface SwingEvaluationInput {
   swingMode: SwingMode;
   batterSide: BatterSide;
   seed: number;
+  /** Optional batter base swing speed (m/s); defaults to BAT_CYLINDER_PHYSICS.defaultBatSpeedMs */
+  batSpeedMs?: number;
   outfielders?: readonly OutfielderInit[];
 }
 
@@ -408,23 +492,53 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
   const hitField = simToField(input.trajectory.hitPlanePos);
   const dtTiming = input.flightTimeSec - input.trajectory.hitPlaneTimeSec;
   const absTiming = Math.abs(dtTiming);
-  const dx = input.batX - hitField[0];
-  const dy = input.batY - hitField[1];
-  const dist = Math.hypot(dx, dy);
-  const isPower = input.swingMode === 'power';
-  const meetRadius = isPower ? 0.076 : 0.108;
-  const radialNorm = dist / meetRadius;
 
-  const isFairContact = radialNorm <= 1.0 && absTiming <= 0.085;
-  const isTimingFoul = absTiming > 0.085 && absTiming <= 0.145 && radialNorm <= 1.42;
-  const isEdgeGrazeFoul = radialNorm > 1.0 && radialNorm <= 1.38 && absTiming <= 0.105;
+  // Cap position relative to bat barrel center (Field3D: +X right/1B, +Y up)
+  const relX = hitField[0] - input.batX;
+  const relY = hitField[1] - input.batY;
+  const dist = Math.hypot(relX, relY);
+
+  const isPower = input.swingMode === 'power';
+  const pci = getBatPciExtents(input.swingMode);
+  const phys = BAT_CYLINDER_PHYSICS;
+  const ballR = CONTACT_BALL_RADIUS_M;
+
+  // Exact 2D Euclidean distance from ball center (relX, relY) to the visual "(" ")" barrel shape
+  // bounded by y in [-halfH, +halfH] and |x| <= halfW * (1 - beta * (y / halfH)^2).
+  // Ball collides with bat barrel iff d_edge <= CONTACT_BALL_RADIUS_M (Minkowski sum)!
+  const clampedBarrelY = Math.max(-pci.halfH, Math.min(pci.halfH, relY));
+  const yFracBarrel = clampedBarrelY / pci.halfH;
+  const barrelHalfWAtY = pci.halfW * (1 - pci.bracketCurveFrac * yFracBarrel * yFracBarrel);
+  const clampedBarrelX = Math.max(-barrelHalfWAtY, Math.min(barrelHalfWAtY, relX));
+  const edgeDistM = Math.hypot(relX - clampedBarrelX, relY - clampedBarrelY);
+
+  // Normalized 3D cylinder-sphere contact coordinates:
+  // R_eff_y = halfH + R_ball (true cylinder + sphere center-to-center contact radius)
+  // R_eff_x = barrelHalfWAtY + R_ball
+  const effHalfH = pci.halfH + ballR;
+  const effHalfW = barrelHalfWAtY + ballR;
+  const uY = relY / effHalfH;
+  const absUY = Math.abs(uY);
+  const effUX = relX / effHalfW;
+  const absEffUX = Math.abs(effUX);
+
+  const inFairBarrelBox = edgeDistM <= ballR + 1e-9;
+  const isFairContact = inFairBarrelBox && absTiming <= phys.fairTimingWindowSec + 1e-9;
+  const isTimingFoul =
+    absTiming > phys.fairTimingWindowSec &&
+    absTiming <= phys.foulTimingWindowSec &&
+    edgeDistM <= ballR + phys.timingFoulMarginM + 1e-9;
+  const isEdgeGrazeFoul =
+    !inFairBarrelBox &&
+    edgeDistM <= ballR + phys.grazeOuterMarginM + 1e-9 &&
+    absTiming <= phys.grazeTimingWindowSec + 1e-9;
 
   if (!isFairContact && !isTimingFoul && !isEdgeGrazeFoul) {
     return {
       contact: false,
       feedback: 'SWING & MISS',
       label: 'MISS',
-      detail: absTiming > 0.085 ? (dtTiming < 0 ? 'TOO EARLY' : 'TOO LATE') : 'OFF TARGET',
+      detail: absTiming > phys.fairTimingWindowSec ? (dtTiming < 0 ? 'TOO EARLY' : 'TOO LATE') : 'OFF TARGET',
       color: '#94a3b8',
       quality: 'miss',
       dtTiming,
@@ -439,18 +553,29 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
 
   if (!isFairContact) {
     // Realistic Foul Ball: launch physically into foul territory (+-56..78 deg)
+    // with 3D cylinder-edge elevation bias (top edge -> high foul pop, bottom edge -> low foul chop).
     const foulSide =
-      absTiming > 0.085
+      absTiming > phys.fairTimingWindowSec
         ? dtTiming < 0
           ? pullSign
           : -pullSign
-        : dx >= 0
+        : relX >= 0
           ? 1
           : -1;
     const sprayDeg = foulSide * (56 + rng() * 22);
     const sprayRad = (sprayDeg * Math.PI) / 180;
-    const foulExit = 11.0 + rng() * 7.0; // 11..18 m/s
-    const elevDeg = 10 + rng() * 28; // 10..38 deg
+    const clampedGrazeUy = Math.max(-1, Math.min(1, uY));
+    const foulSinPhi = Math.max(-0.95, Math.min(0.95, clampedGrazeUy * phys.sinPhiMax));
+    const foulCosPhi = Math.sqrt(Math.max(0.05, 1 - foulSinPhi * foulSinPhi));
+    const foulExit =
+      absTiming > phys.fairTimingWindowSec
+        ? 10.5 + foulCosPhi * 6.5 + rng() * 2.5
+        : 8.0 + foulCosPhi * 4.5 + rng() * 2.5;
+    const foulPhiDeg = (Math.asin(foulSinPhi) * 180) / Math.PI;
+    const elevDeg = Math.max(
+      -18,
+      Math.min(68, (isPower ? 14 : 12) + foulPhiDeg * 0.72 + (rng() - 0.5) * 10),
+    );
     const elevRad = (elevDeg * Math.PI) / 180;
 
     const horiz = foulExit * Math.cos(elevRad);
@@ -469,10 +594,11 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
       catchPos: null,
       pos: null,
     };
-    const label = absTiming > 0.085 ? (dtTiming < 0 ? 'EARLY FOUL' : 'LATE FOUL') : 'FOUL TIP';
-    const feedback = absTiming > 0.085 ? (dtTiming < 0 ? 'EARLY FOUL' : 'LATE FOUL') : 'FOUL TIP';
-    const color = absTiming > 0.085 ? (dtTiming < 0 ? '#38bdf8' : '#fb923c') : '#cbd5e1';
+    const label = absTiming > phys.fairTimingWindowSec ? (dtTiming < 0 ? 'EARLY FOUL' : 'LATE FOUL') : 'FOUL TIP';
+    const feedback = label;
+    const color = absTiming > phys.fairTimingWindowSec ? (dtTiming < 0 ? '#38bdf8' : '#fb923c') : '#cbd5e1';
     const exitSpeedKmh = Math.round(foulExit * 3.6);
+    const launchAngleDeg = Math.round(elevDeg);
     const distanceM = battedResult.maxDistanceM;
 
     return {
@@ -491,19 +617,60 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
       catchInfo,
       outcome: 'FOUL',
       exitSpeedKmh,
+      launchAngleDeg,
       distanceM,
     };
   }
 
-  const centerQuality = Math.max(0, 1 - dist / meetRadius);
-  const timingQuality = Math.max(0, 1 - absTiming / 0.085);
-  const rawQuality = 0.55 * centerQuality + 0.45 * timingQuality;
+  // --- 3D Horizontal Cylindrical Bat Barrel Collision Model ---
+  // 1. Vertical cross-section surface normal angle phi = asin(sinPhiMax * u_y)
+  //    u_y > 0 (cap hits upper half of cylinder / bat under cap) => phi > 0 (lifts ball up)
+  //    u_y < 0 (cap hits lower half of cylinder / bat over cap)  => phi < 0 (drives ball down)
+  const clampedUY = Math.max(-1, Math.min(1, uY));
+  const clampedEffUX = Math.max(-1, Math.min(1, effUX));
+  const sinPhi = Math.max(-phys.sinPhiMax, Math.min(phys.sinPhiMax, clampedUY * phys.sinPhiMax));
+  const phiRad = Math.asin(sinPhi);
+  const phiDeg = (phiRad * 180) / Math.PI;
+
+  // 2. Normal-force impulse projection onto cylinder surface normal:
+  //    cos(phi) = sqrt(1 - sin^2(phi)), raised to normalProjectionExp for oblique spin/slip transfer loss
+  const cosPhi = Math.sqrt(Math.max(0, 1 - sinPhi * sinPhi));
+  const fCyl = Math.pow(cosPhi, phys.normalProjectionExp);
+
+  // 3. Horizontal barrel sweet-spot efficiency (handle/endcap MOI + vibration loss)
+  const fAxis = 1 - phys.axisLossK * clampedEffUX * clampedEffUX;
+
+  // 4. Swing timing velocity transfer (bat speed peaks at dtTiming = 0)
+  const tau = Math.min(1, absTiming / phys.fairTimingWindowSec);
+  const fTime = 1 - phys.timingLossK * tau * tau;
+
+  // 5. Bat-speed-driven peak exit velocity (Nathan BBS collision equation):
+  //    v_peak = q * v_pitch_hit + (1 + q) * v_bat
+  //    Power swing uses a smaller cylindrical barrel with faster bat speed (powerBatSpeedMult).
+  let vPitchHitMs: number = phys.defaultPitchHitSpeedMs;
+  if (typeof input.trajectory.hitPlaneSpeedMs === 'number' && Number.isFinite(input.trajectory.hitPlaneSpeedMs)) {
+    vPitchHitMs = input.trajectory.hitPlaneSpeedMs;
+  } else if (typeof input.trajectory.sampleAt === 'function') {
+    const hitFrame = input.trajectory.sampleAt(input.trajectory.hitPlaneTimeSec);
+    vPitchHitMs = Math.hypot(hitFrame.y[3], hitFrame.y[4], hitFrame.y[5]);
+  }
+  const baseBatSpeedMs = input.batSpeedMs ?? phys.defaultBatSpeedMs;
+  const effectiveBatSpeedMs = baseBatSpeedMs * (isPower ? phys.powerBatSpeedMult : 1.0);
+  const q = phys.collisionEfficiencyQ;
+  const peakExit = q * vPitchHitMs + (1 + q) * effectiveBatSpeedMs;
+  const baseExit =
+    phys.floorExitSpeedMs + Math.max(0, peakExit - phys.floorExitSpeedMs) * fCyl * fAxis * fTime;
+
+  // Contact quality rating (multiplicative so grazing the cylinder edge stays weak even on-time)
+  const barrelEfficiency = fCyl * fAxis;
+  const timingQuality = Math.max(0, 1 - tau);
+  const rawQuality = barrelEfficiency * (0.65 + 0.35 * timingQuality);
 
   let quality: Exclude<ContactQuality, 'miss'> = 'good';
   let label = 'GOOD';
   let color = '#4ade80';
 
-  if (rawQuality > 0.78) {
+  if (rawQuality > 0.80 && absUY <= 0.45 && absEffUX <= 0.55) {
     quality = 'perfect';
     label = 'PERFECT!';
     color = '#ffd23f';
@@ -517,19 +684,16 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
     color = '#fb923c';
   }
 
-  let baseExit: number;
-  if (quality === 'perfect') {
-    const t = Math.min(1, (rawQuality - 0.78) / 0.22);
-    baseExit = isPower ? 24.0 + t * 7.0 : 21.0 + t * 5.5;
-  } else {
-    const t = Math.min(1, rawQuality / 0.78);
-    baseExit = isPower ? 18.5 + t * 6.0 : 16.0 + t * 5.5;
-  }
+  // 5. 3D Launch elevation angle: natural swing uppercut + cylinder surface normal deflection
+  const attackAngleDeg = isPower ? phys.baseAttackAngleDeg.power : phys.baseAttackAngleDeg.normal;
+  const rawElevDeg = attackAngleDeg + phys.launchPhiScale * phiDeg;
+  const elevDeg = Math.max(phys.minLaunchDeg, Math.min(phys.maxLaunchDeg, rawElevDeg));
+  const elevRad = (elevDeg * Math.PI) / 180;
 
-  const sprayDeg = pullSign * (-dtTiming * 480) + dx * 120 + (rng() - 0.5) * 14;
+  // 6. Horizontal spray angle: timing pull/push + rounded barrel-end normal deflection psi
+  const psiDeg = (Math.asin(phys.sinPsiMax * clampedEffUX) * 180) / Math.PI;
+  const sprayDeg = pullSign * (-dtTiming * 480) + psiDeg + (rng() - 0.5) * 10;
   const sprayRad = (Math.max(-44, Math.min(44, sprayDeg)) * Math.PI) / 180;
-  const elevDeg = 14 + -dy * 240 + rawQuality * 14 + (isPower ? 6 : 0);
-  const elevRad = (Math.max(-6, Math.min(52, elevDeg)) * Math.PI) / 180;
 
   const horiz = baseExit * Math.cos(elevRad);
   const vx = horiz * Math.sin(sprayRad);
@@ -543,7 +707,7 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
   };
 
   const rawBattedResult = simulateBattedCap(battedParams);
-  const launchAngleDeg = Math.round((elevRad * 180) / Math.PI);
+  const launchAngleDeg = Math.round(elevDeg);
   const outfielders = input.outfielders ?? defaultOutfielders();
   const catchInfo = simulateDeterministicCatch(
     rawBattedResult,

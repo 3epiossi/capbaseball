@@ -357,20 +357,36 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
       expect(lateFoul.label).toBe('LATE FOUL');
     }
 
-    // PCI-edge graze foul (1.0 < radialNorm <= 1.38)
-    const grazeFoul = evaluateSwingResolution({
+    // PCI-edge graze foul on horizontal barrel end (d_edge in (R_ball=0.038, 0.054])
+    const grazeFoulX = evaluateSwingResolution({
       trajectory: traj,
       flightTimeSec: traj.hitPlaneTimeSec,
-      batX: hitField[0] + 0.13, // meetRadius=0.108 -> radialNorm ~ 1.20
+      batX: hitField[0] + 0.174, // normal halfW=0.128 -> d_edge = 0.046m in (0.038, 0.054]
       batY: hitField[1],
       swingMode: 'normal',
       batterSide: 'L',
       seed: 103,
     });
-    expect(grazeFoul.contact).toBe(true);
-    if (grazeFoul.contact) {
-      expect(grazeFoul.outcome).toBe('FOUL');
-      expect(grazeFoul.label).toBe('FOUL TIP');
+    expect(grazeFoulX.contact).toBe(true);
+    if (grazeFoulX.contact) {
+      expect(grazeFoulX.outcome).toBe('FOUL');
+      expect(grazeFoulX.label).toBe('FOUL TIP');
+    }
+
+    // PCI-edge graze foul on top/bottom cylinder skin (d_edge in (R_ball=0.038, 0.054])
+    const grazeFoulY = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hitField[0],
+      batY: hitField[1] - 0.096, // normal halfH=0.050 -> d_edge = 0.046m in (0.038, 0.054]
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 104,
+    });
+    expect(grazeFoulY.contact).toBe(true);
+    if (grazeFoulY.contact) {
+      expect(grazeFoulY.outcome).toBe('FOUL');
+      expect(grazeFoulY.label).toBe('FOUL TIP');
     }
   });
 

@@ -40,7 +40,7 @@
 
 - **光譜整合彈簧發射器（`springMeter`）**：彈簧線圈直接繪製於 `NORMAL · BEST · OVER` 光譜軌條上——按住左側壓縮（`charging`）→ 放開後彈簧向右伸展彈射至最高點（`rebounding`）→ 鎖定峰值（`locked`）決定球速與控球並出手。
 - **手機觸控打擊（下方游標操作＋直接點擊，`activeBatTouchId`）**：預設於好球帶下方（`y < 0.42m`）觸控、或好球帶內拖曳 `≥ 6px`／按住 `≥ 130ms` 時，立即鎖定向上偏移 `76–124px` 讓準心位於指尖上方不遮擋瓶蓋，放開即揮棒；快速輕點（`< 6px` 且 `< 130ms`）則維持零偏移直接對點打擊，設定中保留「僅限點擊揮棒」選項。
-- **線上揮棒同步與結算防卡死**：收到擊球 `pitch_result` 時先以 `queuedOnlinePitchResult` 對齊投手端本地飛行時間，提前 `110ms` 播出打者揮棒動畫並延遲 `180ms` 追球；`match = msg.match` 延後至 `finishBattedPlay()` 套用，確保最後一球再見安打或出局不會提前被 `isGameOver` 卡死在空中。
+- **方案 A 揮棒時機鎖定與線上同步防卡死**：揮棒前搖縮短且精確化為 `SWING_LEAD_SEC = 0.065 s`（`load 35ms` + `swing_early 30ms`，保留幀餘數不丟幀）；按下揮棒當下即刻鎖定瞄準座標（`swingLockedBatPos`）與精確擊球時刻（`swingTargetContactTimeSec`），導引環同步預扣 `65ms` 使閃爍重合處對應 `dtTiming = 0`。若球於前搖結束前落地（如變速球），主迴圈會立即補跑 `dispatchPendingSwingCheck()` 避免跳過判定與偽造 `dtTiming = 0`。線上對戰收到擊球 `pitch_result` 時以 `queuedOnlinePitchResult` 提前 `65ms` 播出打者揮棒動畫並延遲 `180ms` 追球；`match = msg.match` 延後至 `finishBattedPlay()` 套用，確保最後一球再見安打或出局不會提前被 `isGameOver` 卡死在空中。
 
 ### 4. 主選單分流、10 秒自動切 CPU 與負載備援
 

@@ -1,4 +1,5 @@
 import type { FieldV3 } from '../physics/batted';
+import { CONTACT_BALL_RADIUS_M, getBatPciExtents } from '../physics/contact';
 import type { PitchId } from '../physics/pitches';
 import { PLATE_WIDTH, STRIKE_ZONE_HI, STRIKE_ZONE_LO } from '../rules/field';
 import { GameCamera } from './camera';
@@ -201,6 +202,63 @@ function drawOverlayCap(
   drawTrue3DCap(ctx, cam, cap.worldPos, cap.normalWorld, rPx, accentColor, dpr);
 }
 
+/**
+ * Draws the 2D catcher-view horizontal cylindrical bat barrel PCI:
+ * Left "(" and right ")" curved parentheses connected by two invisible horizontal
+ * lines y = cy +- halfH. The quadratic Bezier geometry matches contact.ts 1:1:
+ *   x(u_y) = cx +- halfW * (1 - curveFrac * u_y^2),  u_y in [-1, 1].
+ */
+function drawBatCylinderPci(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  halfW: number,
+  halfH: number,
+  curveFrac: number,
+  color: string,
+  lineWidth: number,
+  dotRadius: number,
+  dotFill: string,
+  dotOutlineWidth: number,
+): void {
+  const curveDepth = Math.max(1.5, halfW * curveFrac);
+  const leftOuter = cx - halfW;
+  const leftTipX = leftOuter + curveDepth;
+  const leftCtrlX = leftOuter - curveDepth;
+  const rightOuter = cx + halfW;
+  const rightTipX = rightOuter - curveDepth;
+  const rightCtrlX = rightOuter + curveDepth;
+  const topY = cy - halfH;
+  const botY = cy + halfH;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'round';
+
+  // Left parenthesis "("
+  ctx.beginPath();
+  ctx.moveTo(leftTipX, topY);
+  ctx.quadraticCurveTo(leftCtrlX, cy, leftTipX, botY);
+  ctx.stroke();
+
+  // Right parenthesis ")"
+  ctx.beginPath();
+  ctx.moveTo(rightTipX, topY);
+  ctx.quadraticCurveTo(rightCtrlX, cy, rightTipX, botY);
+  ctx.stroke();
+
+  // Subtle center sweet-spot barrel axis dot •
+  ctx.fillStyle = dotFill;
+  ctx.beginPath();
+  ctx.arc(cx, cy, dotRadius, 0, Math.PI * 2);
+  ctx.fill();
+  if (dotOutlineWidth > 0) {
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = dotOutlineWidth;
+    ctx.stroke();
+  }
+}
+
 export function drawStrikeZoneAndOverlay(
   ctx: CanvasRenderingContext2D,
   cam: GameCamera,
@@ -347,7 +405,7 @@ export function drawStrikeZoneAndOverlay(
     }
   }
 
-  // 3. Batter Turn: MLB The Show Bracket PCI ( • ) + Shrinking Timing Guide Ring
+  // 3. Batter Turn: 2D Cylindrical Bat Barrel Parenthesis PCI (  •  ) + Shrinking Timing Guide Ring
   if (
     state.role === 'batter' &&
     state.showBatCursor !== false &&
@@ -355,33 +413,25 @@ export function drawStrikeZoneAndOverlay(
   ) {
     const bp = cam.project([state.batCursor.x, state.batCursor.y, HIT_PLANE_Z]);
     if (bp.depth > 0.2) {
-      const rx = Math.max(12 * dpr, (state.powerSwing ? 0.068 : 0.098) * bp.scale);
-      const ry = Math.max(9 * dpr, (state.powerSwing ? 0.052 : 0.076) * bp.scale);
+      const pci = getBatPciExtents(state.powerSwing ? 'power' : 'normal');
+      const halfW = Math.max(14 * dpr, pci.halfW * bp.scale);
+      const halfH = Math.max(7 * dpr, pci.halfH * bp.scale);
       const pciColor = state.powerSwing ? '#f97316' : '#ffd23f';
 
       ctx.save();
-      ctx.strokeStyle = pciColor;
-      ctx.lineWidth = (state.powerSwing ? 2.8 : 2.2) * dpr;
-      ctx.lineCap = 'round';
-
-      // Left bracket "("
-      ctx.beginPath();
-      ctx.ellipse(bp.sx, bp.sy, rx, ry, 0, Math.PI * 0.68, Math.PI * 1.32);
-      ctx.stroke();
-
-      // Right bracket ")"
-      ctx.beginPath();
-      ctx.ellipse(bp.sx, bp.sy, rx, ry, 0, -Math.PI * 0.32, Math.PI * 0.32);
-      ctx.stroke();
-
-      // Subtle inner sweet-spot dot •
-      ctx.fillStyle = state.powerSwing ? '#fb923c' : '#fef08a';
-      ctx.beginPath();
-      ctx.arc(bp.sx, bp.sy, (state.powerSwing ? 3.2 : 2.6) * dpr, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#0f172a';
-      ctx.lineWidth = 1 * dpr;
-      ctx.stroke();
+      drawBatCylinderPci(
+        ctx,
+        bp.sx,
+        bp.sy,
+        halfW,
+        halfH,
+        pci.bracketCurveFrac,
+        pciColor,
+        (state.powerSwing ? 2.8 : 2.2) * dpr,
+        (state.powerSwing ? 3.2 : 2.6) * dpr,
+        state.powerSwing ? '#fb923c' : '#fef08a',
+        1 * dpr,
+      );
 
       // Shrinking timing guide ring during pitch flight
       if (state.showGuideRing && state.guideProgress !== null) {
@@ -424,17 +474,25 @@ export function drawStrikeZoneAndOverlay(
       const isStrike = abs.trueCall === 'strike';
       // Unified BSO color language: Strike = Yellow (#f4c41c), Ball = Green (#4ade80)
       const dotCol = isStrike ? '#f4c41c' : '#4ade80';
-      const rDot = Math.max(7 * dpr, capRadiusAtDepth(hitP.scale, hitP.depth, dpr) * 1.15);
+      const rOuter = Math.max(8 * dpr, 0.015 * hitP.scale);
+      const ringW = Math.max(1.8 * dpr, rOuter * 0.24);
+      const rDraw = Math.max(2 * dpr, rOuter - ringW * 0.5);
+      const rCenter = Math.max(1.8 * dpr, rOuter * 0.26);
 
       ctx.save();
-      // Pulsing ring around crossing point
+      // Crisp circumference ring + translucent white interior + exact center dot ◎
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.78)';
+      ctx.beginPath();
+      ctx.arc(hitP.sx, hitP.sy, rDraw, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = dotCol;
+      ctx.lineWidth = ringW;
+      ctx.stroke();
       ctx.fillStyle = dotCol;
       ctx.beginPath();
-      ctx.arc(hitP.sx, hitP.sy, rDot, 0, Math.PI * 2);
+      ctx.arc(hitP.sx, hitP.sy, rCenter, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2 * dpr;
-      ctx.stroke();
+      const rDot = rOuter;
 
       // Margin tag (±X.X cm)
       const absL = state.absLabels ?? {
@@ -605,32 +663,38 @@ function drawPitchLocationSubPanel(
     const halfW = PLATE_WIDTH * 0.5;
     const mapX = (fx: number) => zx + ((fx + halfW) / PLATE_WIDTH) * zw;
     const mapY = (fy: number) => zy + (1 - (fy - STRIKE_ZONE_LO) / (STRIKE_ZONE_HI - STRIKE_ZONE_LO)) * zh;
-    const dotR = 5.8 * u;
+    // Scale ball circle 1:1 to CONTACT_BALL_RADIUS_M so any visual overlap with the "(" ")" barrel
+    // matches Minkowski contact physics (d_edge <= CONTACT_BALL_RADIUS_M) to the pixel!
+    const pxPerMX = zw / PLATE_WIDTH;
+    const pxPerMY = zh / (STRIKE_ZONE_HI - STRIKE_ZONE_LO);
+    const dotR = Math.max(3.5 * u, CONTACT_BALL_RADIUS_M * ((pxPerMX + pxPerMY) * 0.5));
     const clampX = (sx: number) => clamp(sx, ox + dotR + 5 * u, ox + w - dotR - 5 * u);
     const clampY = (sy: number) => clamp(sy, plotY + dotR + 4 * u, plotY + plotH - dotR - 4 * u);
 
-    // Batter PCI bracket ( • ) when swung
+    // Batter cylindrical barrel PCI parentheses (  •  ) scaled 1:1 to strike zone
     if (showPci && typeof fb.batX === 'number' && typeof fb.batY === 'number') {
       const bx = clampX(mapX(fb.batX));
       const by = clampY(mapY(fb.batY));
-      const rx = (fb.powerSwing ? 14 : 20) * u;
-      const ry = (fb.powerSwing ? 11 : 15) * u;
+      const pci = getBatPciExtents(fb.powerSwing ? 'power' : 'normal');
+      const halfW = pci.halfW * pxPerMX;
+      const halfH = pci.halfH * pxPerMY;
       const col = fb.powerSwing ? '#f97316' : '#f4c41c';
-      ctx.strokeStyle = col;
-      ctx.lineWidth = Math.max(1.8, 2.2 * u);
-      ctx.beginPath();
-      ctx.ellipse(bx, by, rx, ry, 0, Math.PI * 0.68, Math.PI * 1.32);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(bx, by, rx, ry, 0, -Math.PI * 0.32, Math.PI * 0.32);
-      ctx.stroke();
-      ctx.fillStyle = col;
-      ctx.beginPath();
-      ctx.arc(bx, by, 2.5 * u, 0, Math.PI * 2);
-      ctx.fill();
+      drawBatCylinderPci(
+        ctx,
+        bx,
+        by,
+        halfW,
+        halfH,
+        pci.bracketCurveFrac,
+        col,
+        Math.max(1.8, 2.2 * u),
+        2.4 * u,
+        col,
+        0,
+      );
     }
 
-    // Actual bottle cap crossing dot
+    // Actual bottle cap crossing dot (stroke inset inside dotR so outer edge == exact CONTACT_BALL_RADIUS_M)
     const cx = clampX(mapX(fb.plateX));
     const cy = clampY(mapY(fb.plateY));
     const revealT =
@@ -650,16 +714,23 @@ function drawPitchLocationSubPanel(
       ctx.stroke();
     }
 
-    ctx.fillStyle = '#ffffff';
+    // Crisp ◎ ball marker: exact 1:1 outer circumference (CONTACT_BALL_RADIUS_M) + translucent white interior + clear center dot
+    const scaledOuterR = dotR * popScale;
+    const ballStrokeW = Math.max(1.2 * dpr, scaledOuterR * 0.27);
+    const drawR = Math.max(1.5, scaledOuterR - ballStrokeW * 0.5);
+    const centerDotR = Math.max(1.1 * dpr, scaledOuterR * 0.26);
+    const ballCol = fb.callColor || '#38bdf8';
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.76)';
     ctx.beginPath();
-    ctx.arc(cx, cy, dotR * popScale, 0, Math.PI * 2);
+    ctx.arc(cx, cy, drawR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = fb.callColor || '#38bdf8';
-    ctx.lineWidth = Math.max(2, 2.5 * u);
+    ctx.strokeStyle = ballCol;
+    ctx.lineWidth = ballStrokeW;
     ctx.stroke();
-    ctx.fillStyle = fb.callColor || '#38bdf8';
+    ctx.fillStyle = ballCol;
     ctx.beginPath();
-    ctx.arc(cx, cy, 2.2 * u * popScale, 0, Math.PI * 2);
+    ctx.arc(cx, cy, centerDotR, 0, Math.PI * 2);
     ctx.fill();
   }
 

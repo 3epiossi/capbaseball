@@ -1102,6 +1102,7 @@ export function startServer(
       const evaluated = await physicsPool.evaluateSwing({
         hitPlanePos: traj.hitPlanePos,
         hitPlaneTimeSec: traj.hitPlaneTimeSec,
+        hitPlaneSpeedMs: traj.hitPlaneSpeedMs,
         flightTimeSec: swingData.flightTimeSec,
         batX: swingData.batX,
         batY: swingData.batY,

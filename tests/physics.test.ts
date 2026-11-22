@@ -9,7 +9,14 @@ import {
   simToField,
   simulateBattedCap,
 } from '../src/physics/batted';
-import { simulateOutfieldGroundBlock, type OutfielderInit } from '../src/physics/contact';
+import {
+  BAT_PCI_NORMAL,
+  BAT_PCI_POWER,
+  CONTACT_BALL_RADIUS_M,
+  evaluateSwingResolution,
+  simulateOutfieldGroundBlock,
+  type OutfielderInit,
+} from '../src/physics/contact';
 import { judgeBattedCap } from '../src/rules/judge';
 
 describe('6-DOF Cap Flight Physics & Pitch Types', () => {
@@ -179,5 +186,183 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     expect(block.fielderId).toBe('LF');
     expect(block.battedResult.hitFence).toBe(false);
     expect(judgeBattedCap(block.battedResult, { caughtInAir: false })).toBe('1B');
+  });
+
+  it('models 2D catcher-view horizontal cylinder barrel boundary and 3D cylindrical exit speed & launch angle', () => {
+    const traj = solvePitchTrajectory('straight', PITCH_SPECS.straight.defaultSpeedKmh, 0, 0.72, {
+      seed: 77,
+    });
+    const hit = simToField(traj.hitPlanePos);
+
+    // 1. Rectangular barrel aspect ratio: wider horizontally than vertically, Power tighter than Normal
+    expect(BAT_PCI_NORMAL.halfW).toBeGreaterThan(BAT_PCI_NORMAL.halfH * 2);
+    expect(BAT_PCI_POWER.halfW).toBeLessThan(BAT_PCI_NORMAL.halfW);
+    expect(BAT_PCI_POWER.halfH).toBeLessThan(BAT_PCI_NORMAL.halfH);
+
+    // 2. Horizontal contact inside halfW hits fairly, while equivalent vertical offset misses cleanly
+    const horizHit = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0] - 0.11, // within halfW=0.128
+      batY: hit[1],
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 77,
+    });
+    expect(horizHit.contact).toBe(true);
+    if (horizHit.contact) {
+      expect(horizHit.outcome).not.toBe('FOUL');
+    }
+
+    const vertMiss = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0],
+      batY: hit[1] - 0.115, // outside halfH(0.050) + R_ball(0.038) + graze(0.016) = 0.104m
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 77,
+    });
+    expect(vertMiss.contact).toBe(false);
+
+    // 2b. Ball-radius Minkowski contact: ball center slightly above top barrel line
+    //     still visibly overlaps barrel (d_edge <= R_ball) => MUST make weak pop-up contact!
+    const ballEdgeOverlap = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0],
+      batY: hit[1] - (BAT_PCI_NORMAL.halfH + CONTACT_BALL_RADIUS_M * 0.72),
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 77,
+    });
+    expect(ballEdgeOverlap.contact).toBe(true);
+    if (ballEdgeOverlap.contact) {
+      expect(ballEdgeOverlap.outcome).not.toBe('FOUL');
+      expect(ballEdgeOverlap.launchAngleDeg!).toBeGreaterThan(55);
+    }
+
+    // 3. Curved "(" ")" parenthesis corner check: outside rounded tip by R_ball + 0.008m -> FOUL TIP
+    const tipX = BAT_PCI_NORMAL.halfW * (1 - BAT_PCI_NORMAL.bracketCurveFrac);
+    const cornerDelta = (CONTACT_BALL_RADIUS_M + 0.008) * Math.SQRT1_2;
+    const cornerGraze = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0] - (tipX + cornerDelta),
+      batY: hit[1] - (BAT_PCI_NORMAL.halfH + cornerDelta),
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 77,
+    });
+    expect(cornerGraze.contact).toBe(true);
+    if (cornerGraze.contact) {
+      expect(cornerGraze.outcome).toBe('FOUL');
+      expect(cornerGraze.label).toBe('FOUL TIP');
+    }
+
+    // 4. 3D Cylinder-Sphere normal projection: moving vertically across R_eff = halfH + R_ball
+    //    monotonically lowers exit speed and deflects launch angle sharply up (+u_y) or down (-u_y)
+    const sampleY = (uY: number, mode: 'normal' | 'power' = 'normal') => {
+      const pci = mode === 'power' ? BAT_PCI_POWER : BAT_PCI_NORMAL;
+      const effHalfH = pci.halfH + CONTACT_BALL_RADIUS_M;
+      const res = evaluateSwingResolution({
+        trajectory: traj,
+        flightTimeSec: traj.hitPlaneTimeSec,
+        batX: hit[0],
+        batY: hit[1] - uY * effHalfH,
+        swingMode: mode,
+        batterSide: 'R',
+        seed: 77,
+      });
+      if (!res.contact) throw new Error(`Expected contact at uY=${uY}`);
+      return res;
+    };
+
+    const topEdge = sampleY(0.9);
+    const upperMid = sampleY(0.45);
+    const center = sampleY(0);
+    const lowerMid = sampleY(-0.45);
+    const botEdge = sampleY(-0.9);
+
+    // Exit speed peaks at cylinder centerline and drops sharply toward edges via cos(phi)^p
+    expect(center.exitSpeedKmh).toBeGreaterThan(upperMid.exitSpeedKmh);
+    expect(upperMid.exitSpeedKmh).toBeGreaterThan(topEdge.exitSpeedKmh);
+    expect(center.exitSpeedKmh).toBeGreaterThan(lowerMid.exitSpeedKmh);
+    expect(lowerMid.exitSpeedKmh).toBeGreaterThan(botEdge.exitSpeedKmh);
+    expect(topEdge.exitSpeedKmh).toBe(botEdge.exitSpeedKmh); // symmetric vertical cos(phi) projection
+
+    // Launch angle monotonically increases from lower edge (grounder) to upper edge (pop-up)
+    expect(botEdge.launchAngleDeg!).toBeLessThan(lowerMid.launchAngleDeg!);
+    expect(lowerMid.launchAngleDeg!).toBeLessThan(center.launchAngleDeg!);
+    expect(center.launchAngleDeg!).toBeLessThan(upperMid.launchAngleDeg!);
+    expect(upperMid.launchAngleDeg!).toBeLessThan(topEdge.launchAngleDeg!);
+    expect(botEdge.launchAngleDeg!).toBeLessThan(-20);
+    expect(topEdge.launchAngleDeg!).toBeGreaterThan(55);
+    expect(topEdge.rawQuality).toBeLessThan(0.4); // dull edge-graze sound, never hard crack
+
+    // 5. Horizontal barrel taper: off-sweet-spot |u_x| monotonically reduces exit speed
+    const x0 = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0],
+      batY: hit[1],
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 77,
+    });
+    const xMid = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0] - 0.5 * BAT_PCI_NORMAL.halfW,
+      batY: hit[1],
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 77,
+    });
+    const xEnd = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0] - 0.95 * BAT_PCI_NORMAL.halfW,
+      batY: hit[1],
+      swingMode: 'normal',
+      batterSide: 'R',
+      seed: 77,
+    });
+    expect(x0.contact && xMid.contact && xEnd.contact).toBe(true);
+    if (x0.contact && xMid.contact && xEnd.contact) {
+      expect(x0.exitSpeedKmh).toBeGreaterThan(xMid.exitSpeedKmh);
+      expect(xMid.exitSpeedKmh).toBeGreaterThan(xEnd.exitSpeedKmh);
+    }
+
+    // 6. Power swing center barrel produces higher peak exit velocity than Normal swing
+    const powerCenter = sampleY(0, 'power');
+    expect(powerCenter.exitSpeedKmh).toBeGreaterThan(center.exitSpeedKmh);
+
+    // 7. Batter swing speed (batSpeedMs) directly drives peak exit velocity via BBS formula
+    const slowBatter = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0],
+      batY: hit[1],
+      swingMode: 'normal',
+      batterSide: 'R',
+      batSpeedMs: 15.0,
+      seed: 77,
+    });
+    const fastBatter = evaluateSwingResolution({
+      trajectory: traj,
+      flightTimeSec: traj.hitPlaneTimeSec,
+      batX: hit[0],
+      batY: hit[1],
+      swingMode: 'normal',
+      batterSide: 'R',
+      batSpeedMs: 21.0,
+      seed: 77,
+    });
+    expect(slowBatter.contact && fastBatter.contact).toBe(true);
+    if (slowBatter.contact && fastBatter.contact) {
+      expect(fastBatter.exitSpeedKmh).toBeGreaterThan(center.exitSpeedKmh);
+      expect(center.exitSpeedKmh).toBeGreaterThan(slowBatter.exitSpeedKmh);
+    }
   });
 });

@@ -680,10 +680,16 @@ let activePitch: PitchTrajectoryResult | null = null;
 let cpuSwingPlan: CpuSwingPlan | null = null;
 let cpuAutoPitchTimer = 0;
 
+const SWING_LOAD_SEC = 0.035;
+const SWING_EARLY_SEC = 0.030;
+const SWING_LEAD_SEC = SWING_LOAD_SEC + SWING_EARLY_SEC; // 65ms crisp swing buildup
+
 let batterAnim: BatterAnim = 'ready';
 let batterAnimTime = 0;
 let batterSwungThisPitch = false;
 let swingChecked = false;
+let swingLockedBatPos = { x: 0, y: 0.72 };
+let swingTargetContactTimeSec = 0;
 
 let activeBatted: BattedCapResult | null = null;
 let activeCatchInfo: CatchInfo | null = null;
@@ -1538,40 +1544,51 @@ function triggerSwing(): void {
   batterSwungThisPitch = true;
   batterAnim = 'load';
   batterAnimTime = 0;
+  // Lock aim and exact press-to-contact arrival timestamp immediately (Scheme A)
+  swingLockedBatPos = { x: batCursor.x, y: batCursor.y };
+  const windupRemainSec =
+    phase === 'windup' ? Math.max(0, (sprites.pitcherMeta.release_frame - pitcherFrame) / 28) : 0;
+  swingTargetContactTimeSec = (phase === 'pitch_flight' ? pitchFlightTime : -windupRemainSec) + SWING_LEAD_SEC;
 }
 
-function resolveContact(dtTiming: number): void {
-  if (!activePitch) return;
+function resolveContact(
+  dtTiming: number,
+  batX = swingLockedBatPos.x,
+  batY = swingLockedBatPos.y,
+): boolean {
+  if (!activePitch) return false;
   const resolution = evaluateSwingResolution({
     trajectory: activePitch,
     flightTimeSec: activePitch.hitPlaneTimeSec + dtTiming,
-    batX: batCursor.x,
-    batY: batCursor.y,
+    batX,
+    batY,
     swingMode: powerSwing ? 'power' : 'normal',
     batterSide: batterHandedness === 'right' ? 'R' : 'L',
     seed: Math.floor(Math.random() * 10000) + 1,
     outfielders,
   });
 
-  const plateFieldNow = simToField(activePitch.plateCrossPos);
+  // For swings, plot the ball dot at hitPlanePos (z = -0.22m) so side feedback matches
+  // the exact collision plane evaluated against the 2D bat barrel PCI!
+  const hitFieldNow = resolution.hitField;
   if (!resolution.contact) {
     pendingMissFeedback = {
       kind: 'swing',
       pitchCode: lastPitchCode,
       speedKmh: lastPitchSpeedKmh,
-      plateX: plateFieldNow[0],
-      plateY: plateFieldNow[1],
+      plateX: hitFieldNow[0],
+      plateY: hitFieldNow[1],
       callLabel: 'STRIKE',
       callColor: '#f4c41c',
       dtTiming,
       timingLabel: resolution.label || 'MISS',
       timingColor: resolution.color || '#f43f5e',
-      batX: batCursor.x,
-      batY: batCursor.y,
+      batX,
+      batY,
       powerSwing,
       contact: false,
     };
-    return;
+    return false;
   }
 
   if (pendingPitchTelemetry) {
@@ -1594,15 +1611,15 @@ function resolveContact(dtTiming: number): void {
     kind: 'swing',
     pitchCode: lastPitchCode,
     speedKmh: lastPitchSpeedKmh,
-    plateX: plateFieldNow[0],
-    plateY: plateFieldNow[1],
+    plateX: hitFieldNow[0],
+    plateY: hitFieldNow[1],
     callLabel: resolution.outcome,
     callColor: resolution.color,
     dtTiming,
     timingLabel: resolution.label,
     timingColor: resolution.color,
-    batX: batCursor.x,
-    batY: batCursor.y,
+    batX,
+    batY,
     powerSwing,
     contact: true,
     contactGrade: grade,
@@ -1646,6 +1663,7 @@ function resolveContact(dtTiming: number): void {
   fenceFlashAlpha = 0;
   capTrail = [];
   updateHudAndDocks();
+  return true;
 }
 
 function finishPitchWithoutContact(): void {
@@ -1805,18 +1823,19 @@ function finishPitchWithoutContact(): void {
       sfx.playUmpireTone(isK ? 'out' : 'strike');
     }
 
+    const hitFieldFallback = simToField(activePitch.hitPlanePos);
     const missPayload: SwingFeedbackPayload = {
       ...(pendingMissFeedback ?? {
         kind: 'swing',
         pitchCode: lastPitchCode,
         speedKmh: lastPitchSpeedKmh,
-        plateX: plateField[0],
-        plateY: plateField[1],
-        dtTiming: 0,
+        plateX: hitFieldFallback[0],
+        plateY: hitFieldFallback[1],
+        dtTiming: swingTargetContactTimeSec - activePitch.hitPlaneTimeSec,
         timingLabel: 'MISS',
         timingColor: '#f43f5e',
-        batX: batCursor.x,
-        batY: batCursor.y,
+        batX: swingLockedBatPos.x,
+        batY: swingLockedBatPos.y,
         powerSwing,
         contact: false,
       }),
@@ -2904,19 +2923,21 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
         ? res.launchAngleDeg
         : Math.round((Math.atan2(bvy, Math.hypot(bvx, bvz)) * 180) / Math.PI);
     // Defer showing dual feedback card until batted play finishes & camera pulls back to home plate!
+    const swingDotX = res.hitField ? res.hitField[0] : plateX;
+    const swingDotY = res.hitField ? res.hitField[1] : plateY;
     pendingBattedFeedback = {
       kind: 'swing',
       pitchCode: lastPitchCode,
       speedKmh: lastPitchSpeedKmh,
-      plateX,
-      plateY,
+      plateX: swingDotX,
+      plateY: swingDotY,
       callLabel: res.outcome,
       callColor: res.color,
       dtTiming: res.dtTiming,
       timingLabel: res.label,
       timingColor: res.color,
-      batX: msg.swingData ? msg.swingData.batX : batCursor.x,
-      batY: msg.swingData ? msg.swingData.batY : batCursor.y,
+      batX: msg.swingData ? msg.swingData.batX : swingLockedBatPos.x,
+      batY: msg.swingData ? msg.swingData.batY : swingLockedBatPos.y,
       powerSwing: msg.swingData ? msg.swingData.swingMode === 'power' : powerSwing,
       contact: true,
       contactGrade: res.quality.toUpperCase(),
@@ -2995,20 +3016,25 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
     match.lastEvent.includes('strikes out');
 
   if (msg.swung) {
+    const swingMissDot = msg.resolution?.hitField
+      ? msg.resolution.hitField
+      : activePitch
+        ? simToField(activePitch.hitPlanePos)
+        : ([plateX, plateY, HIT_PLANE_Z] as const);
     const missPayload: SwingFeedbackPayload = {
       kind: 'swing',
       pitchCode: lastPitchCode,
       speedKmh: lastPitchSpeedKmh,
-      plateX,
-      plateY,
+      plateX: swingMissDot[0],
+      plateY: swingMissDot[1],
       callLabel: msg.callout.title,
       callColor: msg.callout.color,
       resultDetail: msg.callout.subtitle || undefined,
       dtTiming: msg.resolution?.dtTiming ?? 0,
       timingLabel: msg.resolution?.label || 'MISS',
       timingColor: msg.resolution?.color || '#f43f5e',
-      batX: msg.swingData ? msg.swingData.batX : batCursor.x,
-      batY: msg.swingData ? msg.swingData.batY : batCursor.y,
+      batX: msg.swingData ? msg.swingData.batX : swingLockedBatPos.x,
+      batY: msg.swingData ? msg.swingData.batY : swingLockedBatPos.y,
       powerSwing: msg.swingData ? msg.swingData.swingMode === 'power' : powerSwing,
       contact: false,
     };
@@ -3683,12 +3709,18 @@ function step(now: number): void {
       capTrail.push(capPos);
       if (capTrail.length > 8) capTrail.shift();
 
-      if (cpuSwingPlan && cpuSwingPlan.shouldSwing && !batterSwungThisPitch && pitchFlightTime >= cpuSwingPlan.swingTimeSec) {
+      if (
+        cpuSwingPlan &&
+        cpuSwingPlan.shouldSwing &&
+        !batterSwungThisPitch &&
+        pitchFlightTime >= Math.max(0.05, cpuSwingPlan.swingTimeSec - SWING_LEAD_SEC)
+      ) {
         batCursor = { x: cpuSwingPlan.aimX, y: cpuSwingPlan.aimY };
         triggerSwing();
+        swingTargetContactTimeSec = cpuSwingPlan.swingTimeSec;
       }
 
-      // Online pitcher/spectator: start visible batter swing buildup 110ms before queued contact/plate time
+      // Online pitcher/spectator: start visible batter swing buildup SWING_LEAD_SEC before queued contact/plate time
       let queuedContactT = activePitch.flightTimeSec;
       if ((isOnline || spectating) && queuedOnlinePitchResult) {
         const q = queuedOnlinePitchResult;
@@ -3700,7 +3732,7 @@ function step(now: number): void {
           (getCurrentRole() === 'pitcher' || spectating) &&
           q.swung &&
           !batterSwungThisPitch &&
-          pitchFlightTime >= Math.max(0.02, queuedContactT - 0.11)
+          pitchFlightTime >= Math.max(0.02, queuedContactT - SWING_LEAD_SEC)
         ) {
           batterSwungThisPitch = true;
           batterAnim = 'load';
@@ -3708,34 +3740,45 @@ function step(now: number): void {
         }
       }
 
+      const dispatchPendingSwingCheck = (): boolean => {
+        if (swingChecked || !activePitch) return false;
+        swingChecked = true;
+        if (isOnline && !spectating) {
+          if (getCurrentRole() === 'batter') {
+            onlineNoSwingSentForSeq = onlinePitchSeq;
+            onlineClient.sendSwingInput({
+              pitchSeq: onlinePitchSeq,
+              flightTimeSec: swingTargetContactTimeSec,
+              batX: swingLockedBatPos.x,
+              batY: swingLockedBatPos.y,
+              swingMode: powerSwing ? 'power' : 'normal',
+              batterSide: batterHandedness === 'right' ? 'R' : 'L',
+            });
+            phase = 'awaiting_result';
+            updateHudAndDocks();
+          }
+          return false;
+        }
+        if (!isOnline) {
+          return resolveContact(
+            swingTargetContactTimeSec - activePitch.hitPlaneTimeSec,
+            swingLockedBatPos.x,
+            swingLockedBatPos.y,
+          );
+        }
+        return false;
+      };
+
       if (batterSwungThisPitch) {
         batterAnimTime += dt;
-        if (batterAnim === 'load' && batterAnimTime >= 0.06) {
+        if (batterAnim === 'load' && batterAnimTime >= SWING_LOAD_SEC) {
           batterAnim = 'swing_early';
-          batterAnimTime = 0;
-        } else if (batterAnim === 'swing_early' && batterAnimTime >= 0.05) {
+          batterAnimTime -= SWING_LOAD_SEC;
+        }
+        if (batterAnim === 'swing_early' && batterAnimTime >= SWING_EARLY_SEC) {
           batterAnim = 'swing_contact';
-          batterAnimTime = 0;
-          if (!swingChecked) {
-            swingChecked = true;
-            if (isOnline && !spectating) {
-              if (getCurrentRole() === 'batter') {
-                onlineNoSwingSentForSeq = onlinePitchSeq;
-                onlineClient.sendSwingInput({
-                  pitchSeq: onlinePitchSeq,
-                  flightTimeSec: pitchFlightTime,
-                  batX: batCursor.x,
-                  batY: batCursor.y,
-                  swingMode: powerSwing ? 'power' : 'normal',
-                  batterSide: batterHandedness === 'right' ? 'R' : 'L',
-                });
-                phase = 'awaiting_result';
-                updateHudAndDocks();
-              }
-            } else if (!isOnline) {
-              resolveContact(pitchFlightTime - activePitch.hitPlaneTimeSec);
-            }
-          }
+          batterAnimTime -= SWING_EARLY_SEC;
+          dispatchPendingSwingCheck();
         } else if (batterAnim === 'swing_contact' && batterAnimTime >= 0.07) {
           batterAnim = 'follow_through';
           batterAnimTime = 0;
@@ -3765,26 +3808,40 @@ function step(now: number): void {
           applyOnlinePitchResult(q);
         }
       } else if (phase === 'pitch_flight' && pitchFlightTime >= activePitch.flightTimeSec) {
-        if (isOnline || spectating) {
-          if (isOnline && !spectating && getCurrentRole() === 'batter' && onlineNoSwingSentForSeq !== onlinePitchSeq) {
-            onlineNoSwingSentForSeq = onlinePitchSeq;
-            onlineClient.sendNoSwing(onlinePitchSeq);
+        // Never drop a swing pressed near pitch end (e.g. Changeup with short after-hit flight)!
+        let handledBySwingFlush = false;
+        if (batterSwungThisPitch && !swingChecked) {
+          batterAnim = 'swing_contact';
+          batterAnimTime = 0;
+          const contacted = dispatchPendingSwingCheck();
+          if (contacted || phase !== 'pitch_flight') {
+            // Contact transitioned into batted_flight or online awaiting_result — do not force miss!
+            handledBySwingFlush = true;
           }
-          phase = 'awaiting_result';
-          updateHudAndDocks();
-        } else {
-          finishPitchWithoutContact();
+        }
+        if (!handledBySwingFlush) {
+          if (isOnline || spectating) {
+            if (isOnline && !spectating && getCurrentRole() === 'batter' && onlineNoSwingSentForSeq !== onlinePitchSeq) {
+              onlineNoSwingSentForSeq = onlinePitchSeq;
+              onlineClient.sendNoSwing(onlinePitchSeq);
+            }
+            phase = 'awaiting_result';
+            updateHudAndDocks();
+          } else {
+            finishPitchWithoutContact();
+          }
         }
       }
     } else if (phase === 'awaiting_result') {
       batterAnimTime += dt;
       if (batterSwungThisPitch) {
-        if (batterAnim === 'load' && batterAnimTime >= 0.06) {
+        if (batterAnim === 'load' && batterAnimTime >= SWING_LOAD_SEC) {
           batterAnim = 'swing_early';
-          batterAnimTime = 0;
-        } else if (batterAnim === 'swing_early' && batterAnimTime >= 0.05) {
+          batterAnimTime -= SWING_LOAD_SEC;
+        }
+        if (batterAnim === 'swing_early' && batterAnimTime >= SWING_EARLY_SEC) {
           batterAnim = 'swing_contact';
-          batterAnimTime = 0;
+          batterAnimTime -= SWING_EARLY_SEC;
           if (queuedOnlinePitchResult) {
             const q = queuedOnlinePitchResult;
             queuedOnlinePitchResult = null;
@@ -4014,9 +4071,13 @@ function step(now: number): void {
   cam.setViewport(ow, oh);
 
   const dpr = Math.min(2, window.devicePixelRatio || 1);
+  // Converge shrinking timing guide ring at exact optimal press moment (hitPlaneTimeSec - SWING_LEAD_SEC)
+  const idealPressTimeSec = activePitch
+    ? Math.max(0.08, activePitch.hitPlaneTimeSec - SWING_LEAD_SEC)
+    : 0.1;
   const guideProgress =
     phase === 'pitch_flight' && activePitch
-      ? pitchFlightTime / Math.max(0.1, activePitch.hitPlaneTimeSec)
+      ? pitchFlightTime / idealPressTimeSec
       : null;
 
   // Play Call + ABS Stack is pinned in screen-space HUD (decoupled from 3D camera motion); update ABS timer bar
