@@ -51,7 +51,7 @@
 首頁大廳（`#lobby-hub`）並列「線上對戰」、「好友對戰」、「CPU 對戰（內含三局對戰、打擊練習、投球練習）」與「即時觀戰（4 欄卡片式列表，區分 `LIVE` 線上配對與 `FRIEND` 好友房）」。點擊線上對戰（`#btn-hub-play`）排隊時：
 
 - 若排隊滿 `20` 秒仍找不到真人對手，自動切入單機 CPU 三局對戰，並同時送出 `standby_join` 保留線上候補資格。
-- 打 CPU 期間若有真人進入配對佇列，前端會等目前這球結束後彈出懸浮邀約卡（`#match-offer-toast`）並同步透過 `isGamePaused()` 暫停 CPU 對局與投球時鐘 `20` 秒；點「接受對戰」立即切進真人 `LIVE` 對局，點「拒絕」或 `20` 秒逾時則自動關閉卡片、移出候補並繼續打 CPU。
+- 打 CPU 期間若有真人進入配對佇列，前端會等目前這球結束後於畫面正中央彈出深色遮罩邀約視窗（`#match-offer-toast`／`.match-offer-backdrop`），並同步透過 `isGamePaused()` 暫停 CPU 對局與投球時鐘 `20` 秒；點「接受對戰」立即切進真人 `LIVE` 對局，點「拒絕」或超過 `20` 秒未選均視同拒絕、自動關閉並強制移出候補名單，繼續打 CPU。
 - 若偵測到 `onlineClient.isServerBusy`（僅負載達 `red`）或 `onlineClient.isUnstable`，則直接轉單機 CPU 對戰。
 
 ### 5. 零 `innerHTML` XSS 防護與跨裝置安全區框景

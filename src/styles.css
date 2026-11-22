@@ -1562,39 +1562,47 @@ select {
   line-height: 1.25;
 }
 
-.match-offer-toast {
+.match-offer-backdrop {
   position: fixed;
-  top: calc(4.6rem + env(safe-area-inset-top, 0px));
-  right: calc(0.7rem + env(safe-area-inset-right, 0px));
-  z-index: 135;
-  width: min(90vw, 304px);
-  padding: 0.62rem 0.72rem 0.66rem;
-  background: rgba(8, 15, 31, 0.96);
-  background-image: var(--scanlines);
-  border: 2px solid var(--gold);
-  box-shadow:
-    inset 0 0 0 2px #0a1020,
-    0 10px 28px rgba(0, 0, 0, 0.74);
-  display: flex;
-  flex-direction: column;
-  gap: 0.42rem;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(4, 7, 15, 0.72);
+  backdrop-filter: blur(2px);
   pointer-events: auto;
 }
 
-.match-offer-toast[hidden] {
+.match-offer-backdrop[hidden] {
   display: none;
+}
+
+.mot-card {
+  width: min(92vw, 360px);
+  padding: 1rem 1.05rem 1.05rem;
+  background: rgba(8, 15, 31, 0.98);
+  background-image: var(--scanlines);
+  border: 3px solid var(--gold);
+  box-shadow:
+    inset 0 0 0 2px #0a1020,
+    inset 0 0 0 4px #2e3e5e,
+    0 14px 36px rgba(0, 0, 0, 0.82);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
 }
 
 .mot-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
 .mot-badge {
   font-family: var(--font-pixel);
-  font-size: 0.64rem;
+  font-size: 0.78rem;
   font-weight: 800;
   color: var(--gold-hi);
   letter-spacing: 0.05em;
@@ -1602,7 +1610,7 @@ select {
 
 .mot-timer {
   font-family: var(--font-pixel);
-  font-size: 0.68rem;
+  font-size: 0.84rem;
   font-weight: 800;
   color: #38bdf8;
   font-variant-numeric: tabular-nums;
@@ -1610,14 +1618,16 @@ select {
 
 .mot-body {
   font-family: var(--font-broadcast);
-  font-size: 0.84rem;
+  font-size: 1rem;
   font-weight: 700;
   color: #f8fafc;
-  line-height: 1.25;
+  text-align: center;
+  padding: 0.25rem 0;
+  line-height: 1.3;
 }
 
 .mot-bar-track {
-  height: 4px;
+  height: 6px;
   width: 100%;
   background: rgba(148, 163, 184, 0.22);
   overflow: hidden;
@@ -1633,13 +1643,14 @@ select {
 .mot-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.42rem;
+  gap: 0.55rem;
+  margin-top: 0.15rem;
 }
 
 .mot-btn {
-  padding: 0.42rem 0.48rem;
-  font-size: 0.72rem;
-  min-block-size: 36px;
+  padding: 0.56rem 0.6rem;
+  font-size: 0.82rem;
+  min-block-size: 44px;
 }
 
 @media (max-width: 720px) {
@@ -1655,14 +1666,6 @@ select {
 
   .pub-text {
     font-size: 0.7rem;
-  }
-
-  .match-offer-toast {
-    top: calc(5.2rem + env(safe-area-inset-top, 0px));
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    width: min(92vw, 316px);
   }
 }
 

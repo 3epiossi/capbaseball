@@ -1386,10 +1386,11 @@ describe('Online Multiplayer Server Integration', () => {
       const offer1 = await sb1.nextMsg((m) => m.type === 'match_offer');
       expect(offer1.opponentName).toBe('LiveWaiter');
 
-      // Standby1 reports shown then declines -> server immediately offers Standby2!
+      // Standby1 reports shown and ignores until timeout -> server treats as decline, removes from standby, and cascades to Standby2!
       sb1.send({ type: 'offer_shown', offerId: offer1.offerId });
-      sb1.send({ type: 'offer_reply', offerId: offer1.offerId, accept: false });
-      const offer2 = await sb2.nextMsg((m) => m.type === 'match_offer');
+      const cancelled1 = await sb1.nextMsg((m) => m.type === 'offer_cancelled', 1500);
+      expect(cancelled1.reason).toBe('timeout');
+      const offer2 = await sb2.nextMsg((m) => m.type === 'match_offer', 1500);
       expect(offer2.opponentName).toBe('LiveWaiter');
 
       // Standby2 accepts -> LiveWaiter & Standby2 enter a LIVE room!

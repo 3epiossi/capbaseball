@@ -3755,7 +3755,13 @@ function step(now: number): void {
     } else {
       const remMs = pendingMatchOffer.expiresAtMs - Date.now();
       if (remMs <= 0) {
+        // Treat 20s timeout identically to declining: close modal, remove from standby queue & pass opponent to next player
+        const expiredId = pendingMatchOffer.offerId;
         hideMatchOfferToast();
+        if (onlineClient.connected) {
+          onlineClient.replyMatchOffer(expiredId, false);
+          onlineClient.leaveStandby();
+        }
       } else {
         const totalMs = Math.max(1000, pendingMatchOffer.timeoutSec * 1000);
         motBarFillEl.style.width = `${Math.max(0, Math.min(100, (remMs / totalMs) * 100))}%`;

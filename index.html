@@ -293,19 +293,21 @@
         <span id="pre-update-text" class="pub-text">SERVER UPDATING SOON</span>
       </div>
 
-      <!-- Non-Blocking Standby Online Match Offer Card (appears after current pitch ends during CPU play) -->
-      <aside id="match-offer-toast" class="match-offer-toast" hidden role="region" aria-live="polite" aria-label="Online match invite">
-        <div class="mot-head">
-          <span class="mot-badge" id="mot-title" data-i18n="offerTitle">ONLINE MATCH INVITE</span>
-          <span class="mot-timer" id="mot-timer">20s</span>
+      <!-- Centered Modal Standby Online Match Offer (dims backdrop & pauses CPU game for 20s after current pitch ends) -->
+      <div id="match-offer-toast" class="match-offer-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="mot-title">
+        <div class="mot-card">
+          <div class="mot-head">
+            <span class="mot-badge" id="mot-title" data-i18n="offerTitle">ONLINE MATCH INVITE</span>
+            <span class="mot-timer" id="mot-timer">20s</span>
+          </div>
+          <div class="mot-body" id="mot-body">Opponent ready</div>
+          <div class="mot-bar-track"><div class="mot-bar-fill" id="mot-bar-fill"></div></div>
+          <div class="mot-actions">
+            <button type="button" class="act-btn primary mot-btn" id="btn-offer-accept" data-i18n="offerAccept">ACCEPT</button>
+            <button type="button" class="act-btn mot-btn" id="btn-offer-decline" data-i18n="offerDecline">DECLINE</button>
+          </div>
         </div>
-        <div class="mot-body" id="mot-body">Opponent ready</div>
-        <div class="mot-bar-track"><div class="mot-bar-fill" id="mot-bar-fill"></div></div>
-        <div class="mot-actions">
-          <button type="button" class="act-btn primary mot-btn" id="btn-offer-accept" data-i18n="offerAccept">ACCEPT</button>
-          <button type="button" class="act-btn mot-btn" id="btn-offer-decline" data-i18n="offerDecline">DECLINE</button>
-        </div>
-      </aside>
+      </div>
 
       <!-- Server Update Available Refresh Banner -->
       <div id="update-banner" class="update-banner" hidden role="status" aria-live="polite">

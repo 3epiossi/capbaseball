@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.3.0`（語意化三段式版本號），Pi 現行部署版本 `20261123-033558`
+- **目前里程碑**：`v2.3.1`（語意化三段式版本號），Pi 現行部署版本 `20261123-035154`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -221,3 +221,5 @@ PORT=8788 HOST=127.0.0.1 npm run server
     - **突破僵局制**：[src/rules/match.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/match.ts) 改為「滿壘無人出局」開局並取消全壘打大賽，延長賽持續至分出勝負。
     - **斷線重連等待縮短與結算原因去重**：斷線重連寬限由 `45` 秒調為 `20` 秒；結算畫面 [src/ui/boxScore.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/boxScore.ts) 新增 `endReason`（`disconnect`／`resign`／`mercy`），並修正初版同時在表格上方與數據列重複顯示兩次的問題，統一於數據列乾淨顯示一次。
     - **對話球精簡**：固定為 8 句三語快捷對話（移除設定中 32 選 8 的對話選擇分頁與相關樣式，測試擴充至 **49/49** 全部通過）。
+- **v2.3.1 線上對戰邀約改置中暗幕視窗（2026-11-23）**：
+  - 將 CPU 候補收到線上邀約時的提示由角落浮卡改為畫面正中央的深色遮罩對話視窗（`.match-offer-backdrop`，與展開折疊選單同款背景變暗效果），配合暫停中的 CPU 對局與投球時鐘讓玩家專注選擇；超過 20 秒未操作前後端雙重執行視同拒絕、關閉視窗恢復 CPU 對戰，並強制移出候補名單轉邀下一位。
