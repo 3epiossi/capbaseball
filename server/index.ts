@@ -400,9 +400,7 @@ export function startServer(
 
   const startedAt = Date.now();
   let draining = false;
-  let preDrainComplete = true;
   let updateAtMs: number | null = null;
-  let preDrainTimer: NodeJS.Timeout | null = null;
   const drainWaiters = new Set<() => void>();
   const clients = new Map<string, ClientMeta>();
   const ipConnCounts = new Map<string, number>();
@@ -626,7 +624,7 @@ export function startServer(
   let drainGraceTimer: NodeJS.Timeout | null = null;
 
   function checkDrainComplete() {
-    if (draining && preDrainComplete && countActiveMatches() === 0) {
+    if (draining && countActiveMatches() === 0) {
       if (drainGraceTimer) {
         clearTimeout(drainGraceTimer);
         drainGraceTimer = null;
@@ -637,7 +635,7 @@ export function startServer(
   }
 
   function scheduleDrainCompleteCheck(delayMs = 3000) {
-    if (!draining || !preDrainComplete || countActiveMatches() > 0) return;
+    if (!draining || countActiveMatches() > 0) return;
     if (drainGraceTimer) return;
     drainGraceTimer = setTimeout(() => {
       drainGraceTimer = null;
@@ -2787,10 +2785,6 @@ export function startServer(
       clearTimeout(statsBroadcastTimer);
       statsBroadcastTimer = null;
     }
-    if (preDrainTimer) {
-      clearTimeout(preDrainTimer);
-      preDrainTimer = null;
-    }
     if (drainGraceTimer) {
       clearTimeout(drainGraceTimer);
       drainGraceTimer = null;
@@ -2822,17 +2816,16 @@ export function startServer(
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
-  // Graceful SIGTERM drain with pre-update countdown announcement when running as standalone process
+  // Graceful SIGTERM drain: 10-minute countdown, blocks all new online/friend matches,
+  // restarts immediately once all active matches finish (or force-restarts at 00:00).
   if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-    const drainSec = Math.max(5, Number(process.env.DRAIN_SECONDS) || 300);
-    const preDrainSec = Math.max(0, Number(process.env.PRE_DRAIN_SECONDS ?? 60));
+    const drainSec = Math.max(5, Number(process.env.DRAIN_SECONDS) || 600);
     const handleDrain = () => {
       if (draining) {
         process.exit(0);
       }
       draining = true;
-      preDrainComplete = preDrainSec === 0;
-      updateAtMs = Date.now() + preDrainSec * 1000;
+      updateAtMs = Date.now() + drainSec * 1000;
       for (const offer of pendingOffers.values()) {
         if (offer.timer) clearTimeout(offer.timer);
         const sc = clients.get(offer.standbyClientId);
@@ -2846,32 +2839,20 @@ export function startServer(
       for (const c of clients.values()) {
         c.queuedMode = null;
         c.standbyMode = null;
-        sendJson(c.ws, { type: 'notice', kind: 'draining', countdownSec: preDrainSec, updateAtMs });
+        sendJson(c.ws, { type: 'notice', kind: 'draining', countdownSec: drainSec, updateAtMs });
       }
 
-      const beginActualDrain = () => {
-        preDrainComplete = true;
-        if (countActiveMatches() === 0) {
-          void close().then(() => process.exit(0));
-          return;
-        }
-        const forceTimer = setTimeout(() => {
-          void close().then(() => process.exit(0));
-        }, drainSec * 1000);
-        drainWaiters.add(() => {
-          clearTimeout(forceTimer);
-          void close().then(() => process.exit(0));
-        });
-      };
-
-      if (preDrainSec > 0) {
-        preDrainTimer = setTimeout(() => {
-          preDrainTimer = null;
-          beginActualDrain();
-        }, preDrainSec * 1000);
-      } else {
-        beginActualDrain();
+      if (countActiveMatches() === 0) {
+        void close().then(() => process.exit(0));
+        return;
       }
+      const forceTimer = setTimeout(() => {
+        void close().then(() => process.exit(0));
+      }, drainSec * 1000);
+      drainWaiters.add(() => {
+        clearTimeout(forceTimer);
+        void close().then(() => process.exit(0));
+      });
     };
     process.on('SIGTERM', handleDrain);
     process.on('SIGINT', () => {

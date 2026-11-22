@@ -3565,7 +3565,7 @@ onlineClient.onMessage((msg) => {
     }
     case 'notice': {
       if (msg.kind === 'draining') {
-        setServerUpdateCountdown(msg.updateAtMs, msg.countdownSec ?? 60);
+        setServerUpdateCountdown(msg.updateAtMs, msg.countdownSec ?? 600);
         emoteCtrl.showSystem(t('callMaintenance'), t('callMaintenanceSub'), '#f97316', 3600);
       }
       break;

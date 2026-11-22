@@ -37,7 +37,7 @@
 - **右上單列狀態列（`.top-bar`）**：移除毫秒延遲膠囊，將伺服器負載與連線品質顏色（`good`/`fair`/`poor`/`busy`）直接反映在「在線人數（`#top-online-pill`）」上，桌機與手機一律與 `☰` 漢堡鈕橫向排成單列；手機版於主頁面（`#scoreboard[hidden]`）保留顯示玩家名稱按鈕 `#btn-nick-chip`，進入對局後才於頂部讓位給計分板。計分板線上對戰隊名自動精簡前綴並搭配文字省略保護，避免長名稱遮擋比分。
 - **右下角 Messenger 對話球（`#chat-hub`）**：採圓形藍底白邊雙對話框圖示，統一承載對手純文字快捷對話（8 組梗語錄三語自動對譯、3 秒冷卻）、賽事廣播（下一棒、`IBB`、投球超時）與線上系統通知（斷線重連、再戰請求、選單逾時、維護通知）。訊息從左側以單行圓角橫條滑出（`width: max-content; white-space: nowrap`）；直立手機投球時由 `updateSafeCameraFraming()` 自動抬升至投手面板上方避免遮擋。
 - **暫停與返回導航（`isGamePaused` / `syncOnlineMenuPauseState` / `navigateBack`）**：開啟選單、規則或 4 分頁設定對話框時，單機對戰立即暫停物理與計時器；**線上對戰開啟任一對話框會立即透過 `menu_pause` 通知伺服器凍結雙方投球時鐘並鎖定投球／`IBB`**，顯示 20 秒倒數（`#menu-online-timer`），對手端按鈕會同步顯示 `對手暫停中 (Xs)` 並在對話球通知，時間歸零由伺服器權威恢復。對手斷線（`onlineOpponentDisconnected`）與對手 2.2 秒 ABS 視窗期間（`oppAbsWaitTimer`）亦同步凍結本地時鐘與投球鈕。點擊右上角玩家名稱按鈕（`#btn-nick-chip`）會直接切換至設定的「帳號（`account`）」分頁並自動全選名字輸入框；支援點擊與全域 `Escape`／`Backspace` 快捷鍵返回。
-- **行動版自動更新提示與 60 秒預告（`#pre-update-banner`、`#update-banner`）**：收到伺服器 `draining` 通知或 `/health` 的 `updateAtMs` 時，頂部顯示 60 秒倒數條（桌機置中、手機對局中自動下移至計分板下方淨空區，且不攔截觸控）；新版上線後改由 `#update-banner`（`position: fixed; z-index: 140;`）透過 `./health?_t=...` 破除快取提示刷新。
+- **行動版自動更新提示與 10 分鐘倒數（`#pre-update-banner`、`#update-banner`）**：收到伺服器 `draining` 通知或 `/health` 的 `updateAtMs` 時，頂部顯示 10 分鐘強制更新倒數條（桌機置中、手機對局中自動下移至計分板下方淨空區，且不攔截觸控）；新版上線後改由 `#update-banner`（`position: fixed; z-index: 140;`）透過 `./health?_t=...` 破除快取提示刷新。
 - **換局球衣延後變色（`visualHalf`）**：換局時 `getPitchingTeamColor()` 與 `getBattingTeamColor()` 改讀 `visualHalf`，等 `inning_change` 轉場動畫播畢才切換球衣，避免出局瞬間提前變色。
 
 ### 3. 光譜整合彈簧投球、投球時鐘與手機拖曳打擊

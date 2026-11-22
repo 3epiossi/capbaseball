@@ -69,12 +69,12 @@
 - **玩家名稱淨化（`sanitizeName`）**：移除控制字元與 `<>'"`&`，裁切至最多 12 字元；空字串或預設 `PLAYER` 則自動配發 6 碼不重複英數訪客代號（如 `K7M2Q9`，且避開目前在線名稱）。
 - **WebSocket 防護**：`WebSocketServer` 設定 `maxPayload: 16 * 1024`（16 KB）並關閉 `perMessageDeflate: false`；連線時檢查來源 IP（支援 `cf-connecting-ip`／`x-forwarded-for`）並限制單一 IP 最多 `maxConnPerIp`（預設 `48`，兼容校園／宿舍與行動 CGNAT 共享 IP）條連線；每條連線套用 1 秒滑動視窗頻率限制，超過 `maxMsgsPerSec`（預設 `30`）則回傳 `rate_limited` 並以代碼 `1008` 關閉連線。
 
-### 5. 兩階段優雅 `SIGTERM` 排空（60 秒提前預告＋活性對局判斷）
+### 5. 優雅 `SIGTERM` 排空（10 分鐘強制倒數＋清空即提前切換）
 
-獨立執行時若收到 `SIGTERM` 訊號，伺服器進入 `draining = true` 狀態並採兩階段換版：
+獨立執行時若收到 `SIGTERM` 訊號，伺服器進入 `draining = true` 狀態：
 
-1. **60 秒預告期（`PRE_DRAIN_SECONDS=60`）**：立刻停止接受 `queue`、`create`、`join`、`rematch` 與 `standby_join`，清除排隊與候補邀約，向全體連線廣播 `{ type: 'notice', kind: 'draining', countdownSec, updateAtMs }`（`welcome` 與 `/health` 同步附帶 `updateAtMs`）。
-2. **等待進行中對局打完**：60 秒倒數結束後，以 `countActiveMatches()` 只計算進行中的雙人房（排除已結束的 `game_over` 房間與無人加入的空等待房，避免白等滿 5 分鐘）。若當下為 0 場則立即退出切換新版；否則等待最後一場結束並保留 3 秒結果送達緩衝後優雅關閉，最長等待 `DRAIN_SECONDS`（預設 `300` 秒，`TimeoutStopSec=390`）。若再次收到 `SIGTERM` 或 `SIGINT` 則立即退出。
+1. **封鎖新局並廣播 10 分鐘倒數（`DRAIN_SECONDS=600`）**：立刻停止接受 `queue`、`create`、`join`、`rematch` 與 `standby_join`（含好友房），清除排隊與候補邀約，向全體連線廣播 `{ type: 'notice', kind: 'draining', countdownSec: 600, updateAtMs }`（`welcome` 與 `/health` 同步附帶 `updateAtMs`）。
+2. **清空即提前切換、滿 10 分鐘強制更新**：以 `countActiveMatches()` 只計算進行中的雙人對局（排除已結束的 `game_over` 房間與無人加入的空等待房）。若當下已為 0 場則直接立即退出切換新版；若仍有對局進行中，最後一場打完並過 3 秒送達緩衝即提前切換，最長倒數 `600` 秒（`TimeoutStopSec=630`）後強制重啟。若再次收到 `SIGTERM` 或 `SIGINT` 則立即退出。
 
 ---
 
