@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cap Baseball — 3D 瓶蓋球種實驗室 (6-DOF Pitch Lab)</title>
+    <link rel="stylesheet" href="./src/pitchLab.css" />
+  </head>
+  <body>
+    <div class="lab-shell">
+      <!-- Left Scrollable Control Dock -->
+      <aside class="control-dock" id="control-dock">
+        <div class="dock-header">
+          <div>
+            <span class="lab-badge">6-DOF 3D PITCH LAB</span>
+            <h1>瓶蓋球路 3D 實驗室</h1>
+          </div>
+          <a class="btn-link" href="./">← 遊戲</a>
+        </div>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>球種握法範本</h2>
+            <button type="button" id="btn-reset" class="btn-tiny">重設</button>
+          </div>
+          <div class="preset-row">
+            <button type="button" class="preset-btn active" data-preset="straight">直球</button>
+            <button type="button" class="preset-btn" data-preset="cutter">卡特</button>
+            <button type="button" class="preset-btn" data-preset="fork">指叉</button>
+            <button type="button" class="preset-btn" data-preset="changeup">變速</button>
+          </div>
+        </section>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>鎖定空氣常數（唯讀）</h2>
+            <select id="aero-profile" class="compact-select" aria-label="空氣常數基準">
+              <option value="unified">統一固定空氣</option>
+              <option value="game_preset">遊戲現行球種</option>
+            </select>
+          </div>
+          <div class="locked-grid" id="locked-aero-grid"></div>
+        </section>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>投手可操作參數</h2>
+            <button id="btn-copy-json" class="btn-primary btn-tiny" type="button">複製 JSON</button>
+          </div>
+
+          <div class="ctrl-group">
+            <label for="in-speed">
+              <span>球速 <code>speedKmh</code></span>
+              <strong id="val-speed">70 km/h</strong>
+            </label>
+            <input id="in-speed" type="range" min="35" max="85" step="1" value="70" />
+          </div>
+
+          <div class="ctrl-row-2">
+            <div class="ctrl-group">
+              <label for="in-attitude"><span>基準握法</span></label>
+              <select id="in-attitude">
+                <option value="flat">flat（平放）</option>
+                <option value="edge_on">edge_on（立放）</option>
+              </select>
+            </div>
+            <div class="ctrl-group">
+              <label for="in-spin-axis"><span>旋轉軸</span></label>
+              <select id="in-spin-axis">
+                <option value="cap">cap（瓶蓋軸）</option>
+                <option value="world_y">world_y（橫軸）</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="ctrl-row-2">
+            <div class="ctrl-group">
+              <label for="in-rot-sense"><span>轉向</span></label>
+              <select id="in-rot-sense">
+                <option value="counterclockwise">逆時針 CCW</option>
+                <option value="clockwise">順時針 CW</option>
+              </select>
+            </div>
+            <div class="ctrl-group">
+              <label for="in-rpm">
+                <span>轉速 <code>rpm</code></span>
+                <strong id="val-rpm">2000</strong>
+              </label>
+              <input id="in-rpm" type="range" min="0" max="3500" step="50" value="2000" />
+            </div>
+          </div>
+
+          <div class="ctrl-group">
+            <label for="in-bank">
+              <span>左右傾角 <code>bankRightDeg</code>（位移方向）</span>
+              <strong id="val-bank">0°</strong>
+            </label>
+            <input id="in-bank" type="range" min="-90" max="90" step="1" value="0" />
+          </div>
+
+          <div class="ctrl-group">
+            <label for="in-nose">
+              <span>俯仰攻角 <code>noseUpDeg</code>（浮力／阻力）</span>
+              <strong id="val-nose">5.5°</strong>
+            </label>
+            <input id="in-nose" type="range" min="-45" max="85" step="0.5" value="5.5" />
+          </div>
+
+          <div class="ctrl-group">
+            <label for="in-yaw">
+              <span>偏航角 <code>yawLeftDeg</code>（橫向微偏）</span>
+              <strong id="val-yaw">0°</strong>
+            </label>
+            <input id="in-yaw" type="range" min="-45" max="45" step="0.5" value="0" />
+          </div>
+
+          <hr class="sep" />
+
+          <div class="sec-head">
+            <h3>控球模式</h3>
+            <div class="seg-toggle">
+              <button type="button" id="mode-aim" class="seg-btn active">瞄準好球帶</button>
+              <button type="button" id="mode-manual" class="seg-btn">手動角度</button>
+            </div>
+          </div>
+
+          <div id="aim-controls">
+            <div class="ctrl-row-2">
+              <div class="ctrl-group">
+                <label for="in-tx"><span>目標 X</span><strong id="val-tx">0.00m</strong></label>
+                <input id="in-tx" type="range" min="-0.40" max="0.40" step="0.01" value="0" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-ty"><span>目標高 Y</span><strong id="val-ty">0.72m</strong></label>
+                <input id="in-ty" type="range" min="0.25" max="1.25" step="0.01" value="0.72" />
+              </div>
+            </div>
+          </div>
+
+          <div id="manual-controls" hidden>
+            <div class="ctrl-row-2">
+              <div class="ctrl-group">
+                <label for="in-az"><span>方位 <code>az</code></span><strong id="val-az">0.0°</strong></label>
+                <input id="in-az" type="range" min="-15" max="15" step="0.1" value="0" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-el"><span>仰角 <code>el</code></span><strong id="val-el">0.0°</strong></label>
+                <input id="in-el" type="range" min="-10" max="22" step="0.1" value="0" />
+              </div>
+            </div>
+          </div>
+
+          <details class="release-details">
+            <summary>放球點（右投／左投／高壓／側投）</summary>
+            <div class="ctrl-row-3">
+              <div class="ctrl-group">
+                <label for="in-rx"><span>前伸</span><strong id="val-rx">0.35m</strong></label>
+                <input id="in-rx" type="range" min="0.0" max="0.8" step="0.02" value="0.35" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-ry"><span>左右</span><strong id="val-ry">-0.22m</strong></label>
+                <input id="in-ry" type="range" min="-0.6" max="0.6" step="0.02" value="-0.22" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-rz"><span>高度</span><strong id="val-rz">1.18m</strong></label>
+                <input id="in-rz" type="range" min="0.75" max="1.65" step="0.02" value="1.18" />
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section class="dock-section guide-box">
+          <h2>調球方向速查</h2>
+          <ul>
+            <li><strong>位移時鐘方向</strong>：調 <code>bankRightDeg</code></li>
+            <li><strong>上飄／下墜幅度</strong>：平放調 <code>noseUpDeg</code>；立放配 <code>world_y</code> + <code>rpm</code></li>
+            <li><strong>變速減速感</strong>：降 <code>speedKmh</code> 並調大 <code>noseUpDeg</code> 增加迎風面積</li>
+            <li><strong>抗翻滾穩定</strong>：調高 <code>rpm</code>（`1200–2500`）</li>
+          </ul>
+        </section>
+      </aside>
+
+      <!-- Full-Viewport Interactive 3D Stage -->
+      <main class="stage-wrap">
+        <canvas id="cv-3d"></canvas>
+
+        <!-- Top Floating Telemetry & Camera Presets -->
+        <div class="stage-top-hud">
+          <div class="telemetry-pills" id="telemetry-strip"></div>
+          <div class="cam-bar">
+            <button type="button" class="cam-btn active" data-cam="iso">3D 斜視</button>
+            <button type="button" class="cam-btn" data-cam="catcher">捕手</button>
+            <button type="button" class="cam-btn" data-cam="side">側面</button>
+            <button type="button" class="cam-btn" data-cam="top">俯視</button>
+            <button type="button" class="cam-btn" data-cam="pitcher">投手</button>
+            <button type="button" id="btn-follow" class="cam-btn" aria-pressed="false">跟隨瓶蓋</button>
+            <button type="button" id="btn-vectors" class="cam-btn" aria-pressed="true">受力箭頭</button>
+          </div>
+        </div>
+
+        <!-- Bottom Floating Playback + Force Vector Legend -->
+        <div class="stage-bottom-hud">
+          <div class="playback-controls">
+            <button id="btn-play" type="button" class="btn-primary">暫停</button>
+            <button id="btn-slow" type="button" class="btn-ghost" aria-pressed="false">0.25×</button>
+            <button id="btn-loop" type="button" class="btn-ghost" aria-pressed="true">循環</button>
+            <input id="in-scrub" type="range" min="0" max="1" step="0.001" value="0.35" aria-label="飛行進度" />
+            <span id="val-time" class="mono">0 ms</span>
+          </div>
+          <div class="stage-legend">
+            <span><i class="swatch sw-vel"></i>速度 v</span>
+            <span><i class="swatch sw-drag"></i>阻力 Drag</span>
+            <span><i class="swatch sw-lift"></i>升力 Lift</span>
+            <span><i class="swatch sw-mag"></i>馬格努斯 Magnus</span>
+            <span><i class="swatch sw-ball"></i>無空氣拋物線</span>
+            <span class="orbit-hint">左鍵拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 拖曳平移</span>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="./src/pitchLab.ts"></script>
+  </body>
+</html>

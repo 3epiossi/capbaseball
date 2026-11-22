@@ -1,6 +1,10 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { defineConfig, type Plugin } from 'vite';
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url));
 
 const now = new Date();
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -36,6 +40,14 @@ export default defineConfig({
   plugins: [versionPlugin],
   define: {
     __BUILD__: JSON.stringify(BUILD),
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(rootDir, 'index.html'),
+        pitchLab: resolve(rootDir, 'pitch-lab.html'),
+      },
+    },
   },
   server: {
     proxy: {

@@ -43,6 +43,8 @@ export interface SpriteBank {
   ready: boolean;
   pitcherYellow: HTMLImageElement | null;
   pitcherBlack: HTMLImageElement | null;
+  pitcherFieldYellow: HTMLImageElement | null;
+  pitcherFieldBlack: HTMLImageElement | null;
   pitcherMeta: PitcherMeta;
   fielderYellow: HTMLImageElement | null;
   fielderBlack: HTMLImageElement | null;
@@ -77,6 +79,8 @@ export async function loadSprites(): Promise<SpriteBank> {
   const [
     pitcherYellow,
     pitcherBlack,
+    pitcherFieldYellow,
+    pitcherFieldBlack,
     pitcherMeta,
     fielderYellow,
     fielderBlack,
@@ -89,6 +93,8 @@ export async function loadSprites(): Promise<SpriteBank> {
   ] = await Promise.all([
     loadImage('./sprites/pitcher_strip.png'),
     loadImage('./sprites/pitcher_black_strip.png'),
+    loadImage('./sprites/pitcher_field_yellow.png'),
+    loadImage('./sprites/pitcher_field_black.png'),
     loadJson<PitcherMeta>('./sprites/pitcher.json'),
     loadImage('./sprites/fielder_yellow.png'),
     loadImage('./sprites/fielder_black.png'),
@@ -104,6 +110,8 @@ export async function loadSprites(): Promise<SpriteBank> {
     ready: true,
     pitcherYellow,
     pitcherBlack,
+    pitcherFieldYellow,
+    pitcherFieldBlack,
     pitcherMeta: pitcherMeta ?? {
       frames: 60,
       fps: 24,
@@ -149,6 +157,13 @@ export interface DrawEntityListParams {
   pitchingTeam: TeamColor;
   battingTeam: TeamColor;
   pitcherFrame: number; // 0 = idle, 8..59 = pitching
+  pitcherFielder?: {
+    active: boolean;
+    pos: FieldV3;
+    anim: FielderAnim;
+    animTime: number;
+    flipX: boolean;
+  };
   fielders: {
     pos: FieldV3;
     anim: FielderAnim;
@@ -480,22 +495,58 @@ export function drawWorldEntities(
     }
   }
 
-  // 1. Pitcher at mound (0, 0, -9.22)
+  // 1. Pitcher (uses dedicated 6-frame pitcher_field_* strip when running/diving off the mound!)
   {
-    const pPos: FieldV3 = [0, 0, -9.22];
+    const pf = params.pitcherFielder;
+    const isFielding = Boolean(pf && pf.active);
+    const pPos: FieldV3 = isFielding ? pf!.pos : [0, 0, -9.22];
     const pr = cam.project(pPos);
     if (pr.visible && pr.depth > 0.2) {
       items.push({
         depth: pr.depth,
         draw: () => {
-          drawGroundShadow(ctx, cam, pPos, 0.34, 0.34);
+          drawGroundShadow(ctx, cam, pPos, isFielding && pf!.anim === 'dive' ? 0.44 : 0.34, 0.34);
+          const fieldImg = params.pitchingTeam === 'yellow' ? bank.pitcherFieldYellow : bank.pitcherFieldBlack;
+          const heightM = 1.72;
+          const dh = Math.max(18, pr.scale * heightM);
+
+          if (isFielding && pf && fieldImg) {
+            // 6-frame horizontal strip (136x113 per frame, baseline_y = 112):
+            // 0 = fielding ready, 1..4 = 4-frame sprint cycle, 5 = low ground-scoop lunge
+            const fw = 136;
+            const fh = 113;
+            const baselineY = 112;
+            const frameIdx =
+              pf.anim === 'dive'
+                ? 5
+                : pf.anim === 'run'
+                  ? 1 + (Math.floor(pf.animTime * 11) % 4)
+                  : 0;
+            const dw = dh * (fw / fh);
+            const dx = pr.sx - dw * 0.5;
+            const dy = pr.sy - dh * (baselineY / fh);
+            drawSpriteFrame(
+              ctx,
+              fieldImg,
+              frameIdx * fw,
+              0,
+              fw,
+              fh,
+              dx,
+              dy,
+              dw,
+              dh,
+              pf.flipX,
+              1,
+            );
+            return;
+          }
+
           const img = params.pitchingTeam === 'yellow' ? bank.pitcherYellow : bank.pitcherBlack;
           const meta = bank.pitcherMeta;
           const frameIdx = Math.max(0, Math.min(meta.frames - 1, Math.floor(params.pitcherFrame)));
-          const heightM = 1.72;
-          const dh = Math.max(18, pr.scale * heightM);
           const dw = dh * (meta.w / meta.h);
-          const breathe = frameIdx === 0 ? Math.sin(timeSec * 3.2) * 0.7 : 0;
+          const breathe = !isFielding && frameIdx === 0 ? Math.sin(timeSec * 3.2) * 0.7 : 0;
           const dx = pr.sx - dw * 0.5;
           const dy = pr.sy - dh * (meta.baseline_y / meta.h) + breathe;
           if (img) {

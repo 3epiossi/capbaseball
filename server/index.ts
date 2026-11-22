@@ -1395,7 +1395,7 @@ export function startServer(
       ? parsedUrl.pathname.slice('/capbaseball'.length)
       : parsedUrl.pathname;
 
-    if (isGetOrHead && normalizedPath === '/monitor/') {
+    if (isGetOrHead && (normalizedPath === '/monitor/' || normalizedPath === '/pitch-lab/')) {
       const target = parsedUrl.pathname.slice(0, -1) + parsedUrl.search;
       monitor.recordHttp(301, 0);
       res.writeHead(301, { Location: target });
@@ -1497,7 +1497,12 @@ export function startServer(
         return;
       }
 
-      const relTarget = decodedPath === '/' ? '/index.html' : decodedPath;
+      const relTarget =
+        decodedPath === '/'
+          ? '/index.html'
+          : decodedPath === '/pitch-lab'
+            ? '/pitch-lab.html'
+            : decodedPath;
       let entry = staticCache.get(relTarget);
       if (!entry && !path.extname(decodedPath)) {
         entry = staticCache.get('/index.html');

@@ -401,10 +401,19 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         const ci = res.catchInfo as {
           caught: boolean;
           bobbled?: boolean;
-          fielderId: 'LF' | 'RF' | null;
+          blocked?: boolean;
+          fielderId: 'LF' | 'RF' | 'P' | 'C' | null;
           catchTimeSec: number | null;
           catchPos: number[] | null;
+          blockTimeSec?: number | null;
+          blockPos?: number[] | null;
         };
+        const fielderCode =
+          ci.fielderId === 'RF' ? 1 : ci.fielderId === 'P' ? 2 : ci.fielderId === 'C' ? 3 : 0;
+        const interceptT = ci.blocked
+          ? (ci.blockTimeSec ?? ci.catchTimeSec ?? -1)
+          : (ci.catchTimeSec ?? -1);
+        const interceptPos = ci.blocked ? (ci.blockPos ?? ci.catchPos) : ci.catchPos;
         const hf = res.hitField as number[];
         cr = {
           lb: res.label,
@@ -423,13 +432,16 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
             round3(bp.velocity[2]),
             bp.seed ?? 1,
           ],
-          ci: ci.caught || ci.bobbled || (ci as { blocked?: boolean }).blocked
+          ci: ci.caught || ci.bobbled || ci.blocked
             ? [
                 ci.caught ? 1 : 0,
                 ci.bobbled ? 1 : 0,
-                ci.fielderId === 'RF' ? 1 : 0,
-                ci.catchTimeSec !== null ? round3(ci.catchTimeSec) : -1,
-                (ci as { blocked?: boolean }).blocked ? 1 : 0,
+                fielderCode,
+                interceptT >= 0 ? round3(interceptT) : -1,
+                ci.blocked ? 1 : 0,
+                ...(interceptPos
+                  ? [round2(interceptPos[0]), round2(interceptPos[1]), round2(interceptPos[2])]
+                  : []),
               ]
             : 0,
           oc: res.outcome,
@@ -645,21 +657,34 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
       if (r) {
         const bp = r.bp as number[];
         const ci = r.ci as number | number[];
+        const decodeFielderId = (code: number): 'LF' | 'RF' | 'P' | 'C' =>
+          code === 1 ? 'RF' : code === 2 ? 'P' : code === 3 ? 'C' : 'LF';
+        const isBlocked = Array.isArray(ci) && ci[4] === 1;
+        const wirePos =
+          Array.isArray(ci) && ci.length >= 8
+            ? ([ci[5], ci[6], ci[7]] as [number, number, number])
+            : null;
         const catchInfo =
           Array.isArray(ci)
             ? {
                 caught: ci[0] === 1,
                 bobbled: ci[1] === 1,
-                fielderId: ci[2] === 1 ? 'RF' : 'LF',
-                catchTimeSec: ci[3] >= 0 ? ci[3] : null,
-                catchPos: null,
+                blocked: isBlocked,
+                fielderId: decodeFielderId(ci[2]),
+                catchTimeSec: !isBlocked && ci[3] >= 0 ? ci[3] : null,
+                catchPos: !isBlocked ? wirePos : null,
+                blockTimeSec: isBlocked && ci[3] >= 0 ? ci[3] : null,
+                blockPos: isBlocked ? wirePos : null,
               }
             : {
                 caught: false,
                 bobbled: false,
+                blocked: false,
                 fielderId: null,
                 catchTimeSec: null,
                 catchPos: null,
+                blockTimeSec: null,
+                blockPos: null,
               };
         resolution = {
           contact: true,
@@ -675,10 +700,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
             velocity: [bp[3], bp[4], bp[5]],
             seed: bp[6],
           },
-          catchInfo: {
-            ...catchInfo,
-            blocked: Array.isArray(r.ci) && r.ci[4] === 1,
-          },
+          catchInfo,
           outcome: r.oc,
           exitSpeedKmh: r.ev,
           ...(typeof r.la === 'number' ? { launchAngleDeg: r.la } : {}),

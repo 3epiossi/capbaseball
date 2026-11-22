@@ -4,7 +4,8 @@
 
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
-- **目前里程碑**：`v2.1.0`（語意化三段式版本號），Pi 現行部署版本 `20261122-124316`
+- **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
+- **目前里程碑**：`v2.2.0`（語意化三段式版本號），Pi 現行部署版本 `20261122-222755`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -18,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 46 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 47 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -186,3 +187,17 @@ PORT=8788 HOST=127.0.0.1 npm run server
     1. 揮棒回饋卡由原本誤畫 `plateCrossPos`（`z = 0`，直球／指叉／變速球在最後 `22cm` 會多下墜 `5~17cm`）改為與物理一致的 `hitPlanePos`（`z = -0.22`），並將 `◎` 外圈圓周與球心依 `0.038` m 1:1 繪製。
     2. 揮棒前搖縮短至精確 `SWING_LEAD_SEC = 0.065 s`，按下揮棒瞬間鎖定瞄準座標與目標擊球時間，時機導引環與 CPU 觸發點同步預扣 `65ms`。
     3. 修復球於前搖期間觸底（如變速球）時會跳過 `resolveContact()` 強制揮空並偽造 `dtTiming = 0` 的截斷 Bug；同時修復線上 `physicsWorker` 缺少 `sampleAt` 導致 `hitPlaneSpeedMs` 未傳遞的問題（測試擴充至 **46/46** 全部通過）。
+- **v2.2.0 3D 投球實驗室、全場 4 人守備與介面修正（2026-11-22）**：
+  - **互動式 3D 投球實驗室（`/capbaseball/pitch-lab`）**：新增獨立多頁入口 [pitch-lab.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/pitch-lab.html)、[src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 與 [src/pitchLab.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.css)，參考 `koshien2015/cap-flight-sim` 提供全視窗 3D 自由旋轉運鏡、即時旋轉 3D 瓶蓋與速度／阻力／升力／馬格努斯力向量箭頭。空氣與瓶蓋常數鎖定為唯讀（預設 `game_preset` 與遊戲完全一致），僅開放投手可操作參數（球速、握法、旋轉軸、轉向、轉速、左右傾角、俯仰攻角、偏航角、瞄準模式與釋球點）與一鍵複製 JSON；伺服器比照 `/monitor` 開設專屬路徑 `/capbaseball/pitch-lab`。
+  - **實測調校三球種物理參數**：
+    - `straight`（直球）：`rpm = 3000`、`noseUpDeg = 20°`、`bankRightDeg = 0°`、`yawLeftDeg = 0°`、`rotationSense = 'counterclockwise'`。
+    - `cutter`（卡特球）：`rpm = 1300`、`bankRightDeg = -30°`、`noseUpDeg = 5°`、`yawLeftDeg = 5°`、`rotationSense = 'clockwise'`。
+    - `changeup`（變速球）：`cdProjected = 0.16`、`clAlphaPerRad = 0.25`，縮減過度下墜幅度至約 `36 cm`。
+  - **全場 4 人守備（`P`／`C`／`LF`／`RF`）、界外守備與等速追球**：
+    - [src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts) 新增 `buildFullDefense`，讓投手、捕手與左右外野手都能前衝擋下滾地球或跨進界外區接殺界外飛球（`OUT`）／攔下界外滾地球（`FOUL`），並透過 v2 精簡協定回傳精準攔截點（`fielderId`、`blockPos`/`catchPos`、`blockTimeSec`/`catchTimeSec`）消除隔山打牛動畫。
+    - 加入投手投球後反應延遲（`PITCHER_BLOCK_REACTION_DELAY = 0.58 s`、`PITCHER_MAX_INTERCEPT_SPEED_MS = 13.5 m/s`）：強襲回傳球會穿過投手丘形成外野安打，中慢速滾地球則讓投手起身前衝撈球形成內野滾地球出局。
+    - 新增客製 6 影格投手守備精靈圖（`pitcher_field_yellow.png` 與 `pitcher_field_black.png`，`816 × 113 px`，含預備、奔跑循環與低身撈球動作），讓投手離開投手丘時維持同一角色外觀。
+    - 修正 [src/ai/cpu.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ai/cpu.ts) 的 `updateOutfielders`：攔截守備員改用等速 `d / remTime`，其他守備員鎖定單一固定目標並預先裁切追球範圍，消除界外球落地前後急停再慢走的頓挫感。
+  - **回饋卡與跨裝置排版修正**：
+    - 修正 [src/render/overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) 低角度挖地瓜球被 `clampY` 夾回好球帶底緣的錯覺；俯視揮棒時機圖改依真實 `plateX` 進壘截面左右對齊球點並補上淡虛線進球道。
+    - 線上對戰計分板移除冗餘隊名前綴並加上文字省略與 `flex-shrink: 0`，避免長名字遮住分數；手機版主畫面（計分板隱藏時）恢復顯示頂部玩家名稱按鈕 `#btn-nick-chip`（測試共 **47/47** 全數通過）。

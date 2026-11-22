@@ -1,8 +1,17 @@
 import { simToField, type FieldV3 } from '../physics/batted';
 import {
-  OUTFIELDER_MAX_CHASE_DIST,
-  OUTFIELDER_REACTION_DELAY,
+  CATCHER_BLOCK_MAX_CHASE,
+  CATCHER_BLOCK_REACTION_DELAY,
+  CATCHER_BLOCK_SPRINT_SPEED,
+  CATCHER_HOME_POS,
+  OUTFIELDER_BLOCK_MAX_CHASE,
+  OUTFIELDER_BLOCK_REACTION_DELAY,
   OUTFIELDER_SPRINT_SPEED,
+  PITCHER_BLOCK_MAX_CHASE,
+  PITCHER_BLOCK_REACTION_DELAY,
+  PITCHER_BLOCK_SPRINT_SPEED,
+  PITCHER_HOME_POS,
+  type FielderId,
 } from '../physics/contact';
 import {
   PITCH_IDS,
@@ -127,13 +136,20 @@ export function checkCatcherCatch(
 }
 
 export interface OutfielderActor {
-  id: 'LF' | 'RF';
+  id: FielderId;
   homePos: FieldV3;
   pos: [number, number, number];
   anim: FielderAnim;
   animTime: number;
   flipX: boolean;
   diveTimer: number;
+}
+
+export interface FielderInterceptionTarget {
+  fielderId: FielderId;
+  targetPos: FieldV3;
+  targetTimeSec: number;
+  isBlock: boolean;
 }
 
 export function createOutfielders(): [OutfielderActor, OutfielderActor] {
@@ -159,7 +175,31 @@ export function createOutfielders(): [OutfielderActor, OutfielderActor] {
   ];
 }
 
-export function resetOutfielders(fielders: [OutfielderActor, OutfielderActor]): void {
+export function createPitcherFielder(): OutfielderActor {
+  return {
+    id: 'P',
+    homePos: [...PITCHER_HOME_POS],
+    pos: [...PITCHER_HOME_POS],
+    anim: 'idle',
+    animTime: 0,
+    flipX: false,
+    diveTimer: 0,
+  };
+}
+
+export function createCatcherFielder(): OutfielderActor {
+  return {
+    id: 'C',
+    homePos: [...CATCHER_HOME_POS],
+    pos: [...CATCHER_HOME_POS],
+    anim: 'idle',
+    animTime: 0,
+    flipX: false,
+    diveTimer: 0,
+  };
+}
+
+export function resetOutfielders(fielders: OutfielderActor[]): void {
   for (const f of fielders) {
     f.pos[0] = f.homePos[0];
     f.pos[1] = f.homePos[1];
@@ -173,32 +213,32 @@ export function resetOutfielders(fielders: [OutfielderActor, OutfielderActor]): 
 
 const MAX_FIELDER_R = FENCE_DIST - 0.55; // 12.45m
 
-function clampFielderInsideFence(x: number, z: number): [number, number] {
-  let cx = x;
-  let cz = Math.min(-2.5, z);
-  if (Math.abs(cx) > -cz) {
-    cx = Math.sign(cx) * -cz;
-  }
-  const r = Math.hypot(cx, cz);
-  if (r > MAX_FIELDER_R) {
-    const scale = MAX_FIELDER_R / r;
-    cx *= scale;
-    cz *= scale;
+function clampFielderInsideFence(x: number, z: number, role: FielderId = 'LF'): [number, number] {
+  let cx = Math.max(-15.5, Math.min(15.5, x));
+  let cz = role === 'C' ? Math.max(-4.8, Math.min(2.6, z)) : Math.max(-14.2, Math.min(2.2, z));
+  // Only clamp to the 12.45m outfield fence when inside fair territory; foul territory stays freely accessible!
+  if (cz < 0 && Math.abs(cx) <= -cz) {
+    const r = Math.hypot(cx, cz);
+    if (r > MAX_FIELDER_R) {
+      const scale = MAX_FIELDER_R / r;
+      cx *= scale;
+      cz *= scale;
+    }
   }
   return [cx, cz];
 }
 
 export function updateOutfielders(
-  fielders: [OutfielderActor, OutfielderActor],
+  fielders: OutfielderActor[],
   dt: number,
   capPos: FieldV3 | null,
   landingTarget: FieldV3 | null,
   _airborne: boolean,
   alreadyCaught: boolean,
   flightTimeSec = 1.0,
+  interception: FielderInterceptionTarget | null = null,
+  finalTarget: FieldV3 | null = null,
 ): boolean {
-  const speedMps = OUTFIELDER_SPRINT_SPEED;
-
   for (const f of fielders) {
     f.animTime += dt;
     if (f.diveTimer > 0) {
@@ -212,58 +252,140 @@ export function updateOutfielders(
       const dz = f.homePos[2] - f.pos[2];
       const d = Math.hypot(dx, dz);
       if (d > 0.15) {
-        const step = Math.min(d, speedMps * 0.7 * dt);
-        const [cx, cz] = clampFielderInsideFence(f.pos[0] + (dx / d) * step, f.pos[2] + (dz / d) * step);
+        const step = Math.min(d, OUTFIELDER_SPRINT_SPEED * 0.75 * dt);
+        const [cx, cz] = clampFielderInsideFence(f.pos[0] + (dx / d) * step, f.pos[2] + (dz / d) * step, f.id);
         f.pos[0] = cx;
         f.pos[2] = cz;
         f.anim = 'run';
         f.flipX = dx < 0;
       } else {
+        f.pos[0] = f.homePos[0];
+        f.pos[2] = f.homePos[2];
         f.anim = 'idle';
       }
       continue;
     }
 
-    // Reaction delay before sprinting
-    if (flightTimeSec < OUTFIELDER_REACTION_DELAY) {
+    // 1. Authoritative Interception Tracking (Zero "隔山打牛", 100% uniform constant velocity):
+    //    If this defender is the exact fielder who catches/blocks/bobbles this ball,
+    //    run straight to interception.targetPos at steady constant speed (d / remTime) so there is
+    //    no early sprint + brake/stop, no deceleration wobble, and no snagging on fair/foul boundaries.
+    if (interception && interception.fielderId === f.id) {
+      // Pitcher finishes throwing follow-through briefly before transitioning into fielding sprint
+      const reactDelay =
+        f.id === 'P'
+          ? Math.min(PITCHER_BLOCK_REACTION_DELAY * 0.85, Math.max(0.15, interception.targetTimeSec * 0.45))
+          : interception.isBlock
+            ? 0.10
+            : 0.18;
+      if (flightTimeSec < reactDelay) {
+        f.anim = 'idle';
+        continue;
+      }
+      const tx = Math.max(-18.0, Math.min(18.0, interception.targetPos[0]));
+      const tz = Math.max(-16.0, Math.min(3.5, interception.targetPos[2]));
+      const dx = tx - f.pos[0];
+      const dz = tz - f.pos[2];
+      const d = Math.hypot(dx, dz);
+      const remTime = Math.max(dt, interception.targetTimeSec - flightTimeSec);
+      const neededSpeed = d / remTime;
+      // Exact uniform speed (d / remTime stays strictly constant across frames); only floor tiny
+      // pop-up step-ins at a natural 1.8 m/s jog so the fielder never creeps in slow-motion.
+      const runSpeed = Math.max(1.8, Math.min(8.5, neededSpeed));
+      if (d > 0.04) {
+        const step = Math.min(d, runSpeed * dt);
+        f.pos[0] += (dx / d) * step;
+        f.pos[2] += (dz / d) * step;
+        f.anim = 'run';
+        f.flipX = dx < -0.02;
+      } else {
+        f.pos[0] = tx;
+        f.pos[2] = tz;
+        f.anim = 'idle';
+      }
+      continue;
+    }
+
+    // 2. Uniform Constant-Speed Pursuit for non-intercepting defenders (fair & foul balls):
+    //    Track ONE stable target for the entire play (never switching mid-flight from landingTarget
+    //    to slowly-rolling capPos, and never jumping maxChase from 4.2m to 7.8m on bounce!) and
+    //    pre-clamp the destination once so the defender runs smoothly in a straight line at constant speed.
+    const reactDelay =
+      f.id === 'P'
+        ? PITCHER_BLOCK_REACTION_DELAY
+        : f.id === 'C'
+          ? CATCHER_BLOCK_REACTION_DELAY
+          : OUTFIELDER_BLOCK_REACTION_DELAY;
+    if (flightTimeSec < reactDelay) {
       f.anim = 'idle';
       continue;
     }
 
-    // Ramp-up acceleration over first 0.35s of running
-    const runElapsed = Math.max(0, flightTimeSec - OUTFIELDER_REACTION_DELAY);
-    const accelFactor = Math.min(1, runElapsed / 0.35);
+    const pursuitTarget = interception ? interception.targetPos : (finalTarget ?? landingTarget);
 
-    // Choose target: LF covers left side (x <= 1.2), RF covers right side (x >= -1.2)
-    const isMySide =
-      (f.id === 'LF' && landingTarget[0] <= 1.2) ||
-      (f.id === 'RF' && landingTarget[0] >= -1.2);
+    let isMySide = false;
+    let rawTx = f.homePos[0];
+    let rawTz = f.homePos[2];
+    let speedMps = OUTFIELDER_SPRINT_SPEED;
+    let maxChase = OUTFIELDER_BLOCK_MAX_CHASE;
 
-    const tx = isMySide ? landingTarget[0] : f.homePos[0] * 0.65;
-    const tz = isMySide ? Math.max(-MAX_FIELDER_R, Math.min(-6.5, landingTarget[2])) : f.homePos[2];
+    if (f.id === 'LF' || f.id === 'RF') {
+      isMySide =
+        (f.id === 'LF' && pursuitTarget[0] <= 1.6) ||
+        (f.id === 'RF' && pursuitTarget[0] >= -1.6);
+      rawTx = isMySide ? pursuitTarget[0] : f.homePos[0] * 0.65;
+      rawTz = isMySide ? Math.max(-14.2, Math.min(1.2, pursuitTarget[2])) : f.homePos[2];
+      speedMps = OUTFIELDER_SPRINT_SPEED;
+      maxChase = OUTFIELDER_BLOCK_MAX_CHASE;
+    } else if (f.id === 'P') {
+      isMySide = Math.abs(pursuitTarget[0]) <= 3.2 && pursuitTarget[2] <= -3.0 && pursuitTarget[2] >= -11.4;
+      if (!isMySide) {
+        f.anim = 'idle';
+        continue;
+      }
+      rawTx = pursuitTarget[0];
+      rawTz = Math.max(-10.8, Math.min(-5.2, pursuitTarget[2]));
+      speedMps = PITCHER_BLOCK_SPRINT_SPEED;
+      maxChase = PITCHER_BLOCK_MAX_CHASE;
+    } else if (f.id === 'C') {
+      isMySide = pursuitTarget[2] >= -3.8 && pursuitTarget[2] <= 2.4 && Math.abs(pursuitTarget[0]) <= 3.2;
+      if (!isMySide) {
+        f.anim = 'idle';
+        continue;
+      }
+      rawTx = pursuitTarget[0];
+      rawTz = Math.max(-3.8, Math.min(2.2, pursuitTarget[2]));
+      speedMps = CATCHER_BLOCK_SPRINT_SPEED;
+      maxChase = CATCHER_BLOCK_MAX_CHASE;
+    }
+
+    // Pre-clamp the fixed destination once to both maxChase radius and gym/fence bounds
+    // so the fielder never hits an invisible boundary mid-run and slides or stalls.
+    let goalX = rawTx;
+    let goalZ = rawTz;
+    const chaseX = goalX - f.homePos[0];
+    const chaseZ = goalZ - f.homePos[2];
+    const chaseDist = Math.hypot(chaseX, chaseZ);
+    if (chaseDist > maxChase) {
+      const scale = maxChase / chaseDist;
+      goalX = f.homePos[0] + chaseX * scale;
+      goalZ = f.homePos[2] + chaseZ * scale;
+    }
+    const [tx, tz] = clampFielderInsideFence(goalX, goalZ, f.id);
 
     const dx = tx - f.pos[0];
     const dz = tz - f.pos[2];
     const d = Math.hypot(dx, dz);
 
-    if (d > 0.12) {
-      const step = Math.min(d, speedMps * accelFactor * dt);
-      let nx = f.pos[0] + (dx / d) * step;
-      let nz = f.pos[2] + (dz / d) * step;
-      const chaseX = nx - f.homePos[0];
-      const chaseZ = nz - f.homePos[2];
-      const chaseDist = Math.hypot(chaseX, chaseZ);
-      if (chaseDist > OUTFIELDER_MAX_CHASE_DIST) {
-        const scale = OUTFIELDER_MAX_CHASE_DIST / chaseDist;
-        nx = f.homePos[0] + chaseX * scale;
-        nz = f.homePos[2] + chaseZ * scale;
-      }
-      const [cx, cz] = clampFielderInsideFence(nx, nz);
-      f.pos[0] = cx;
-      f.pos[2] = cz;
+    if (d > 0.08) {
+      const step = Math.min(d, speedMps * dt);
+      f.pos[0] += (dx / d) * step;
+      f.pos[2] += (dz / d) * step;
       f.anim = 'run';
       f.flipX = dx < -0.02;
     } else {
+      f.pos[0] = tx;
+      f.pos[2] = tz;
       f.anim = 'idle';
     }
   }

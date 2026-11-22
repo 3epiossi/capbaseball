@@ -6,7 +6,7 @@ import {
   type FieldV3,
 } from './batted';
 import type { PitchTrajectoryResult } from './pitches';
-import { FENCE_DIST } from '../rules/field';
+import { FENCE_DIST, isFair, isInfield, isPastFenceExtension, MOUND_DIST } from '../rules/field';
 import { judgeBattedCap, type BattedOutcome } from '../rules/judge';
 
 export const HIT_PLANE_Z = -0.22;
@@ -21,11 +21,29 @@ export const UNCATCHABLE_AIR_TIME_SEC = 0.72;
 export const MAX_CATCH_RADIUS_M = FENCE_DIST - 0.4; // 12.60m
 export const MAX_FIELDER_RADIUS_M = FENCE_DIST - 0.55; // 12.45m
 
-// Enhanced outfield ground/bounce blocking (cutoff): stricter air catch, much stronger stopping balls before wall
-export const OUTFIELDER_BLOCK_REACTION_DELAY = 0.24;
-export const OUTFIELDER_BLOCK_SPRINT_SPEED = 4.5;
-export const OUTFIELDER_BLOCK_RADIUS = 1.05;
-export const OUTFIELDER_BLOCK_MAX_CHASE = 4.2;
+// Ground/bouncer interception (tight physical glove reach — no phantom teleports!)
+export const OUTFIELDER_BLOCK_REACTION_DELAY = 0.22;
+export const OUTFIELDER_BLOCK_SPRINT_SPEED = 4.6;
+export const OUTFIELDER_BLOCK_RADIUS = 0.68;
+export const OUTFIELDER_BLOCK_MAX_CHASE = 4.5;
+
+export const PITCHER_HOME_POS: FieldV3 = [0, 0, -MOUND_DIST];
+// Pitcher just finished throwing follow-through -> slower reaction than LF/RF/C!
+// Hard comebackers (< 0.58s to mound or still screaming past > 13.5 m/s) shoot right past Pitcher;
+// slower/medium grounders give Pitcher time to recover, sprint over, and block for an infield OUT.
+export const PITCHER_BLOCK_REACTION_DELAY = 0.58;
+export const PITCHER_BLOCK_SPRINT_SPEED = 3.9;
+export const PITCHER_BLOCK_RADIUS = 0.54;
+export const PITCHER_BLOCK_MAX_CHASE = 2.8;
+export const PITCHER_MAX_INTERCEPT_SPEED_MS = 13.5;
+
+export const CATCHER_HOME_POS: FieldV3 = [0, 0, 0.85];
+export const CATCHER_BLOCK_REACTION_DELAY = 0.20;
+export const CATCHER_BLOCK_SPRINT_SPEED = 3.8;
+export const CATCHER_BLOCK_RADIUS = 0.60;
+export const CATCHER_BLOCK_MAX_CHASE = 3.4;
+
+export type FielderId = 'LF' | 'RF' | 'P' | 'C';
 
 export type SwingMode = 'normal' | 'power';
 export type BatterSide = 'R' | 'L' | 'right' | 'left';
@@ -114,7 +132,7 @@ export const BAT_CYLINDER_PHYSICS = {
 } as const;
 
 export interface OutfielderInit {
-  id: 'LF' | 'RF';
+  id: FielderId;
   homePos: FieldV3;
   pos: readonly [number, number, number];
 }
@@ -136,7 +154,7 @@ export interface CatchInfo {
   caught: boolean;
   bobbled: boolean;
   blocked?: boolean;
-  fielderId: 'LF' | 'RF' | null;
+  fielderId: FielderId | null;
   fielderIndex: number | null;
   catchTimeSec: number | null;
   catchPos: FieldV3 | null;
@@ -189,11 +207,41 @@ function seededFloat(seed: number): () => number {
   };
 }
 
-function defaultOutfielders(): OutfielderInit[] {
+export function defaultOutfielders(): OutfielderInit[] {
   return [
     { id: 'LF', homePos: [-4.2, 0, -9.8], pos: [-4.2, 0, -9.8] },
     { id: 'RF', homePos: [4.2, 0, -9.8], pos: [4.2, 0, -9.8] },
   ];
+}
+
+export function buildFullDefense(baseFielders?: readonly OutfielderInit[]): OutfielderInit[] {
+  const list = baseFielders ? [...baseFielders] : defaultOutfielders();
+  if (!list.some((f) => f.id === 'P')) {
+    list.push({ id: 'P', homePos: PITCHER_HOME_POS, pos: PITCHER_HOME_POS });
+  }
+  if (!list.some((f) => f.id === 'C')) {
+    list.push({ id: 'C', homePos: CATCHER_HOME_POS, pos: CATCHER_HOME_POS });
+  }
+  return list;
+}
+
+/**
+ * Clamps a fielder position to physical gym walls and the fair-sector outfield fence,
+ * while freely allowing ALL defenders (P, C, LF, RF) to run across foul lines into foul territory!
+ */
+function clampDefenderToGym(x: number, z: number, role: FielderId): [number, number] {
+  let nx = Math.max(-15.5, Math.min(15.5, x));
+  let nz = role === 'C' ? Math.max(-4.8, Math.min(2.6, z)) : Math.max(-14.2, Math.min(2.2, z));
+  // Only clamp against the 12.45m fence arc when inside the fair sector (foul territory stays open up to walls)
+  if (nz < 0 && Math.abs(nx) <= -nz) {
+    const r = Math.hypot(nx, nz);
+    if (r > MAX_FIELDER_RADIUS_M) {
+      const scale = MAX_FIELDER_RADIUS_M / r;
+      nx *= scale;
+      nz *= scale;
+    }
+  }
+  return [nx, nz];
 }
 
 export function simulateDeterministicCatch(
@@ -261,51 +309,57 @@ export function simulateDeterministicCatch(
     if (bounced) {
       break;
     }
-    // Reject any point at/past the 13m fence arc
+    // Reject any point past the 13m fence arc (fair) or fence extension (foul)
     const capR = Math.hypot(capPos[0], capPos[2]);
-    if (capR > MAX_CATCH_RADIUS_M) {
+    if ((isFair(capPos[0], capPos[2]) && capR > MAX_CATCH_RADIUS_M) || isPastFenceExtension(capPos[0], capPos[2])) {
       break;
     }
 
     for (const f of actors) {
+      const reactDelay =
+        f.id === 'P' ? 0.62 : f.id === 'C' ? 0.34 : OUTFIELDER_REACTION_DELAY;
+      const sprintSpd =
+        f.id === 'P' ? 3.5 : f.id === 'C' ? 3.4 : OUTFIELDER_SPRINT_SPEED;
+      const maxChase =
+        f.id === 'P' ? 2.8 : f.id === 'C' ? 3.2 : OUTFIELDER_MAX_CHASE_DIST;
+      const catchRad =
+        f.id === 'P' || f.id === 'C' ? 0.50 : OUTFIELDER_CATCH_RADIUS;
+
       // 3. Reaction delay + ramp-up acceleration over first 0.35s of running
-      if (frame.t >= OUTFIELDER_REACTION_DELAY && dt > 0) {
-        const runElapsed = Math.max(0, frame.t - OUTFIELDER_REACTION_DELAY);
+      if (frame.t >= reactDelay && dt > 0) {
+        const runElapsed = Math.max(0, frame.t - reactDelay);
         const accelFactor = Math.min(1, runElapsed / 0.35);
         const isMySide =
           (f.id === 'LF' && landingTarget[0] <= 1.2) ||
-          (f.id === 'RF' && landingTarget[0] >= -1.2);
+          (f.id === 'RF' && landingTarget[0] >= -1.2) ||
+          (f.id === 'P' && Math.abs(landingTarget[0]) <= 3.0 && landingTarget[2] >= -11.5 && landingTarget[2] <= -4.5) ||
+          (f.id === 'C' && landingTarget[2] >= -4.2 && landingTarget[2] <= 2.6);
 
-        const tx = isMySide ? landingTarget[0] : f.homePos[0] * 0.65;
+        const tx = isMySide ? landingTarget[0] : f.id === 'LF' || f.id === 'RF' ? f.homePos[0] * 0.65 : f.homePos[0];
         const tz = isMySide
-          ? Math.max(-MAX_FIELDER_RADIUS_M, Math.min(-6.5, landingTarget[2]))
+          ? f.id === 'C'
+            ? Math.max(-4.2, Math.min(2.4, landingTarget[2]))
+            : f.id === 'P'
+              ? Math.max(-11.5, Math.min(-4.5, landingTarget[2]))
+              : Math.max(-MAX_FIELDER_RADIUS_M, Math.min(1.5, landingTarget[2]))
           : f.homePos[2];
 
         const dx = tx - f.x;
         const dz = tz - f.z;
         const d = Math.hypot(dx, dz);
         if (d > 0.12) {
-          const step = Math.min(d, OUTFIELDER_SPRINT_SPEED * accelFactor * dt);
+          const step = Math.min(d, sprintSpd * accelFactor * dt);
           let nx = f.x + (dx / d) * step;
           let nz = f.z + (dz / d) * step;
-          // Enforce maxChaseDist (2.6m) from starting position
           const chaseX = nx - f.homePos[0];
           const chaseZ = nz - f.homePos[2];
           const chaseDist = Math.hypot(chaseX, chaseZ);
-          if (chaseDist > OUTFIELDER_MAX_CHASE_DIST) {
-            const scale = OUTFIELDER_MAX_CHASE_DIST / chaseDist;
+          if (chaseDist > maxChase) {
+            const scale = maxChase / chaseDist;
             nx = f.homePos[0] + chaseX * scale;
             nz = f.homePos[2] + chaseZ * scale;
           }
-          // Strictly clamp inside 12.45m fence buffer & fair territory
-          nz = Math.min(-2.5, nz);
-          if (Math.abs(nx) > -nz) nx = Math.sign(nx) * -nz;
-          const nr = Math.hypot(nx, nz);
-          if (nr > MAX_FIELDER_RADIUS_M) {
-            const scale = MAX_FIELDER_RADIUS_M / nr;
-            nx *= scale;
-            nz *= scale;
-          }
+          [nx, nz] = clampDefenderToGym(nx, nz, f.id);
           f.x = nx;
           f.z = nz;
         }
@@ -313,11 +367,15 @@ export function simulateDeterministicCatch(
 
       const distFromStart = Math.hypot(capPos[0] - f.homePos[0], capPos[2] - f.homePos[2]);
       const distToCap = Math.hypot(capPos[0] - f.x, capPos[2] - f.z);
+      const inCatchableSpace =
+        !isPastFenceExtension(capPos[0], capPos[2]) &&
+        (!isFair(capPos[0], capPos[2]) || capR <= MAX_CATCH_RADIUS_M) &&
+        capPos[2] <= 2.8;
       if (
         frame.t >= UNCATCHABLE_AIR_TIME_SEC &&
-        capR <= MAX_CATCH_RADIUS_M &&
-        distFromStart <= OUTFIELDER_MAX_CHASE_DIST &&
-        distToCap <= OUTFIELDER_CATCH_RADIUS &&
+        inCatchableSpace &&
+        distFromStart <= maxChase &&
+        distToCap <= catchRad &&
         capPos[1] <= 1.95
       ) {
         const hitPos: FieldV3 = [capPos[0], capPos[1], capPos[2]];
@@ -356,15 +414,18 @@ export function simulateDeterministicCatch(
 }
 
 /**
- * Outfield ground/bounce cutoff: LF & RF aggressively block bouncing/rolling caps
- * before they reach the 13m fence, holding potential wall-doubles to clean singles (1B).
+ * Ground & low-liner interception across all defenders (P, C, LF, RF):
+ * - Pitcher (P), Catcher (C), and forward-charging LF/RF can intercept grounders/bouncers
+ *   INSIDE the infield before they escape -> trimmed to infield stop -> OUT (Rule 5.06 C1).
+ * - LF/RF cutting off harder bouncing balls in the outfield hold potential wall-doubles
+ *   to clean singles -> 1B (Rule 5.07 A1).
  */
 export function simulateOutfieldGroundBlock(
   batted: BattedCapResult,
   initialOutfielders: readonly OutfielderInit[],
 ): {
   blocked: boolean;
-  fielderId: 'LF' | 'RF' | null;
+  fielderId: FielderId | null;
   fielderIndex: number | null;
   blockTimeSec: number | null;
   blockPos: FieldV3 | null;
@@ -379,11 +440,7 @@ export function simulateOutfieldGroundBlock(
     battedResult: batted,
   };
 
-  if (batted.frames.length < 3 || batted.overFence || !batted.firstLandingPos) {
-    return noBlock;
-  }
-  // Only block fair balls that enter the outfield (never steal infield outs)
-  if (!batted.hitOutfield && !batted.hitFence) {
+  if (batted.frames.length < 3 || batted.overFence) {
     return noBlock;
   }
 
@@ -397,6 +454,7 @@ export function simulateOutfieldGroundBlock(
 
   let prevT = 0;
   let bounced = false;
+  let touchedOutfieldBeforeBlock = false;
 
   for (let i = 1; i < batted.frames.length; i++) {
     const frame = batted.frames[i];
@@ -404,69 +462,113 @@ export function simulateOutfieldGroundBlock(
     prevT = frame.t;
 
     const capPos = frame.pos;
-    if (frame.t > 0.06 && capPos[1] <= 0.04) {
-      bounced = true;
-    }
-
     const capR = Math.hypot(capPos[0], capPos[2]);
     const inFair = capPos[2] < 0 && Math.abs(capPos[0]) <= -capPos[2];
+    if (frame.t > 0.06 && capPos[1] <= 0.045) {
+      bounced = true;
+      if (inFair && !isInfield(capPos[0], capPos[2])) {
+        touchedOutfieldBeforeBlock = true;
+      }
+    }
+    if (bounced && inFair && !isInfield(capPos[0], capPos[2]) && capPos[1] <= 0.35) {
+      touchedOutfieldBeforeBlock = true;
+    }
+
     if (capR >= FENCE_DIST - 0.08) {
       // Already reached fence
       break;
     }
 
     for (const f of actors) {
-      if (frame.t >= OUTFIELDER_BLOCK_REACTION_DELAY && dt > 0) {
-        const runElapsed = Math.max(0, frame.t - OUTFIELDER_BLOCK_REACTION_DELAY);
-        const accelFactor = Math.min(1, runElapsed / 0.22);
-        const isMySide =
-          (f.id === 'LF' && capPos[0] <= 1.8) ||
-          (f.id === 'RF' && capPos[0] >= -1.8);
+      const reactDelay =
+        f.id === 'P'
+          ? PITCHER_BLOCK_REACTION_DELAY
+          : f.id === 'C'
+            ? CATCHER_BLOCK_REACTION_DELAY
+            : OUTFIELDER_BLOCK_REACTION_DELAY;
+      const sprintSpd =
+        f.id === 'P'
+          ? PITCHER_BLOCK_SPRINT_SPEED
+          : f.id === 'C'
+            ? CATCHER_BLOCK_SPRINT_SPEED
+            : OUTFIELDER_BLOCK_SPRINT_SPEED;
+      const maxChase =
+        f.id === 'P'
+          ? PITCHER_BLOCK_MAX_CHASE
+          : f.id === 'C'
+            ? CATCHER_BLOCK_MAX_CHASE
+            : OUTFIELDER_BLOCK_MAX_CHASE;
+      const blockRad =
+        f.id === 'P'
+          ? PITCHER_BLOCK_RADIUS
+          : f.id === 'C'
+            ? CATCHER_BLOCK_RADIUS
+            : OUTFIELDER_BLOCK_RADIUS;
 
-        const tx = isMySide ? capPos[0] : f.homePos[0] * 0.55;
-        const tz = isMySide
-          ? Math.max(-MAX_FIELDER_RADIUS_M, Math.min(-7.6, capPos[2]))
+      if (frame.t >= reactDelay && dt > 0) {
+        const runElapsed = Math.max(0, frame.t - reactDelay);
+        const accelFactor = Math.min(1, runElapsed / 0.20);
+        const isMyZone =
+          (f.id === 'LF' && capPos[0] <= 1.8) ||
+          (f.id === 'RF' && capPos[0] >= -1.8) ||
+          (f.id === 'P' && Math.abs(capPos[0]) <= 3.4 && capPos[2] <= -3.0 && capPos[2] >= -11.4) ||
+          (f.id === 'C' && capPos[2] >= -3.8 && capPos[2] <= 2.4 && Math.abs(capPos[0]) <= 3.2);
+
+        const tx = isMyZone ? capPos[0] : f.id === 'LF' || f.id === 'RF' ? f.homePos[0] * 0.65 : f.homePos[0];
+        const tz = isMyZone
+          ? f.id === 'C'
+            ? Math.max(-3.8, Math.min(2.2, capPos[2]))
+            : f.id === 'P'
+              ? Math.max(-10.8, Math.min(-4.8, capPos[2]))
+              : Math.max(-MAX_FIELDER_RADIUS_M, Math.min(1.2, capPos[2]))
           : f.homePos[2];
 
         const dx = tx - f.x;
         const dz = tz - f.z;
         const d = Math.hypot(dx, dz);
-        if (d > 0.08) {
-          const step = Math.min(d, OUTFIELDER_BLOCK_SPRINT_SPEED * accelFactor * dt);
+        if (d > 0.06) {
+          const step = Math.min(d, sprintSpd * accelFactor * dt);
           let nx = f.x + (dx / d) * step;
           let nz = f.z + (dz / d) * step;
           const chaseX = nx - f.homePos[0];
           const chaseZ = nz - f.homePos[2];
           const chaseDist = Math.hypot(chaseX, chaseZ);
-          if (chaseDist > OUTFIELDER_BLOCK_MAX_CHASE) {
-            const scale = OUTFIELDER_BLOCK_MAX_CHASE / chaseDist;
+          if (chaseDist > maxChase) {
+            const scale = maxChase / chaseDist;
             nx = f.homePos[0] + chaseX * scale;
             nz = f.homePos[2] + chaseZ * scale;
           }
-          nz = Math.min(-3.0, nz);
-          if (Math.abs(nx) > -nz) nx = Math.sign(nx) * -nz;
-          const nr = Math.hypot(nx, nz);
-          if (nr > MAX_FIELDER_RADIUS_M) {
-            const scale = MAX_FIELDER_RADIUS_M / nr;
-            nx *= scale;
-            nz *= scale;
-          }
+          [nx, nz] = clampDefenderToGym(nx, nz, f.id);
           f.x = nx;
           f.z = nz;
         }
       }
 
-      if (bounced && inFair && capR >= 8.05 && capR < FENCE_DIST - 0.15 && capPos[1] <= 1.25) {
+      // Can block bounced grounders OR low comebackers/liners right at the defender (both fair & foul territory!),
+      // ONLY AFTER the defender's reaction delay has elapsed (so hard comebackers rocket past a recovering Pitcher!).
+      const canInterceptHeight =
+        (bounced && capPos[1] <= 1.25) ||
+        (!bounced && frame.t >= 0.14 && capPos[1] <= 1.05 && (f.id === 'P' || f.id === 'C' || capR >= 5.5));
+      const inPlayableGym =
+        !isPastFenceExtension(capPos[0], capPos[2]) &&
+        (!inFair || capR < FENCE_DIST - 0.15) &&
+        capPos[2] <= 2.6;
+      const capSpeedAtFrame = Math.hypot(frame.vel[0], frame.vel[1], frame.vel[2]);
+      const pitcherCanReactSpeed = f.id !== 'P' || capSpeedAtFrame <= PITCHER_MAX_INTERCEPT_SPEED_MS;
+      if (frame.t >= reactDelay && pitcherCanReactSpeed && canInterceptHeight && inPlayableGym && capR >= 0.45) {
         const distToCap = Math.hypot(capPos[0] - f.x, capPos[2] - f.z);
-        if (distToCap <= OUTFIELDER_BLOCK_RADIUS) {
-          const blockPos: FieldV3 = [capPos[0], 0.02, capPos[2]];
+        if (distToCap <= blockRad) {
+          const blockPos: FieldV3 = [capPos[0], Math.max(0.02, Math.min(0.65, capPos[1])), capPos[2]];
+          const stoppedInInfield = inFair && !touchedOutfieldBeforeBlock && isInfield(blockPos[0], blockPos[2]);
+          const stoppedInFairOutfield = inFair && !stoppedInInfield;
           const trimmedFrames = batted.frames.slice(0, i + 1);
           const trimmedResult: BattedCapResult = {
             ...batted,
             frames: trimmedFrames,
             flightTimeSec: frame.t,
             stoppedPos: blockPos,
-            hitOutfield: true,
+            hitInfield: batted.hitInfield || stoppedInInfield,
+            hitOutfield: touchedOutfieldBeforeBlock || stoppedInFairOutfield,
             hitFence: false,
             overFence: false,
             crossedFenceExtension: false,
@@ -584,28 +686,52 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
       velocity: [horiz * Math.sin(sprayRad), foulExit * Math.sin(elevRad), -horiz * Math.cos(sprayRad)],
       seed: input.seed,
     };
-    const battedResult = simulateBattedCap(battedParams);
-    const catchInfo: CatchInfo = {
-      caught: false,
-      bobbled: false,
-      fielderId: null,
-      fielderIndex: null,
-      catchTimeSec: null,
-      catchPos: null,
-      pos: null,
-    };
-    const label = absTiming > phys.fairTimingWindowSec ? (dtTiming < 0 ? 'EARLY FOUL' : 'LATE FOUL') : 'FOUL TIP';
-    const feedback = label;
-    const color = absTiming > phys.fairTimingWindowSec ? (dtTiming < 0 ? '#38bdf8' : '#fb923c') : '#cbd5e1';
-    const exitSpeedKmh = Math.round(foulExit * 3.6);
+    const rawFoulResult = simulateBattedCap(battedParams);
+    const defenders = buildFullDefense(input.outfielders);
     const launchAngleDeg = Math.round(elevDeg);
+    // All defenders (P, C, LF, RF) can chase foul pop-ups into foul territory for a foul fly out (OUT),
+    // or stop foul grounders cleanly in foul territory (still FOUL).
+    const catchInfo = simulateDeterministicCatch(rawFoulResult, defenders, {
+      exitSpeedMs: foulExit,
+      launchAngleDeg,
+      seed: input.seed,
+    });
+    let battedResult = rawFoulResult;
+    if (!catchInfo.caught) {
+      const blk = simulateOutfieldGroundBlock(rawFoulResult, defenders);
+      if (blk.blocked) {
+        battedResult = blk.battedResult;
+        catchInfo.blocked = true;
+        catchInfo.fielderId = blk.fielderId;
+        catchInfo.fielderIndex = blk.fielderIndex;
+        catchInfo.blockTimeSec = blk.blockTimeSec;
+        catchInfo.blockPos = blk.blockPos;
+      }
+    }
+    const isFoulFlyOut = catchInfo.caught;
+    const label = isFoulFlyOut
+      ? 'OUT'
+      : absTiming > phys.fairTimingWindowSec
+        ? dtTiming < 0
+          ? 'EARLY FOUL'
+          : 'LATE FOUL'
+        : 'FOUL TIP';
+    const feedback = label;
+    const color = isFoulFlyOut
+      ? '#f43f5e'
+      : absTiming > phys.fairTimingWindowSec
+        ? dtTiming < 0
+          ? '#38bdf8'
+          : '#fb923c'
+        : '#cbd5e1';
+    const exitSpeedKmh = Math.round(foulExit * 3.6);
     const distanceM = battedResult.maxDistanceM;
 
     return {
       contact: true,
       feedback,
       label,
-      detail: `${exitSpeedKmh} km/h · FOUL`,
+      detail: `${exitSpeedKmh} km/h · ${isFoulFlyOut ? 'FOUL OUT' : 'FOUL'}`,
       color,
       quality: dtTiming < 0 ? 'early' : 'late',
       rawQuality: 0.25,
@@ -615,7 +741,7 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
       battedParams,
       battedResult,
       catchInfo,
-      outcome: 'FOUL',
+      outcome: isFoulFlyOut ? 'OUT' : 'FOUL',
       exitSpeedKmh,
       launchAngleDeg,
       distanceM,
@@ -708,10 +834,10 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
 
   const rawBattedResult = simulateBattedCap(battedParams);
   const launchAngleDeg = Math.round(elevDeg);
-  const outfielders = input.outfielders ?? defaultOutfielders();
+  const defenders = buildFullDefense(input.outfielders);
   const catchInfo = simulateDeterministicCatch(
     rawBattedResult,
-    outfielders,
+    defenders,
     {
       exitSpeedMs: baseExit,
       launchAngleDeg,
@@ -720,7 +846,7 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
   );
   let battedResult = rawBattedResult;
   if (!catchInfo.caught && !rawBattedResult.overFence) {
-    const block = simulateOutfieldGroundBlock(rawBattedResult, outfielders);
+    const block = simulateOutfieldGroundBlock(rawBattedResult, defenders);
     if (block.blocked) {
       battedResult = block.battedResult;
       catchInfo.blocked = true;

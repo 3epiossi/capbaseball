@@ -37,14 +37,12 @@
 - **正常接捕區**：`|plateX| <= 0.58` m 且高度 `plateY` 介於 `0.10–1.48` m 之間必接住。
 - **撲接邊緣區**：`|plateX| <= 0.78` m 且高度介於 `0.05–1.68` m 之間，僅有 `35%` 機率成功撲接（傳入 `seed` 時使用確定性雜湊，供伺服器與客戶端一致判定），否則形成暴投／不死三振。
 
-### 4. 弱化外野守備（`updateOutfielders` 與確定性接殺協作）
+### 4. 全場 4 人守備與等速追球（`updateOutfielders`）
 
-為了避免 2 人外野守備覆蓋率過高導致安打過少，守備移動與 `src/physics/contact.ts` 中的 `simulateDeterministicCatch` 共用同一套弱化參數：
+守備動畫與 `src/physics/contact.ts` 共用 4 名守位（`P`、`C`、`LF`、`RF`），所有守備員皆可進入界外區接球或擋球：
 
-- **初始站位與分工**：左外野手（`LF`）位於 `[-4.2, 0, -9.8]`，右外野手（`RF`）位於 `[4.2, 0, -9.8]`。落點 `x <= 1.2` 由 `LF` 主追，`x >= -1.2` 由 `RF` 主追，另一人適度內縮補位。
-- **反應延遲與加速曲線**：擊球後經過 `OUTFIELDER_REACTION_DELAY = 0.45` s 才啟動跑動，並在接下來的 `0.35` s 內線性加速至 `OUTFIELDER_SPRINT_SPEED = 3.2` m/s。
-- **追球上限與圍牆夾緊**：距起始位置最多追出 `OUTFIELDER_MAX_CHASE_DIST = 2.6` m，且透過 `clampFielderInsideFence` 限制半徑不超過 `MAX_FIELDER_R = FENCE_DIST - 0.55`（`12.45` m）並保持在界內（`z <= -2.5`、`abs(x) <= -z`）。
-- **不可接殺門檻與漏接率**（實作於 `src/physics/contact.ts`）：出速 `>= 16.5` m/s（`UNCATCHABLE_EXIT_SPEED_MS`）、仰角 `< 22°`（`UNCATCHABLE_LAUNCH_ANGLE_DEG`）或滯空 `< 0.72` s（`UNCATCHABLE_AIR_TIME_SEC`）直接視為無法接殺；即使在接球半徑 `0.48` m 內，仍依球速與衝刺距離有 `30%–55%` 的漏接率（`bobble`）。
+- **權威攔截點等速奔跑（消除隔山打牛）**：當該名守備員負責接殺或擋球（`interception.fielderId === f.id`），在經過反應延遲（投手含投球後收尾延遲）後，改以精確等速 `d / remTime`（極短距離步移下限 `1.8` m/s）直線跑向 `interception.targetPos`，於 `targetTimeSec` 準時到位並接續撲接／撈球動作，不會提早急停或越跑越慢。
+- **其餘守備員固定目標等速追球**：整球過程鎖定單一固定落點（`interception.targetPos` 或 `finalTarget`）並預先一次裁切追球半徑與界內圍牆邊界（界外區自由進出），不在球落地彈跳時切換目標或放大追球半徑，消除界外球追到一半急停再慢走的問題。
 
 ---
 

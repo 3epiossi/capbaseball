@@ -606,10 +606,12 @@ function drawPitchLocationSubPanel(
   ctx.fillStyle = 'rgba(12, 19, 36, 0.96)';
   ctx.fillRect(ox, plotY, w, plotH);
 
-  const zw = Math.round(Math.min(w * 0.44, plotH * 0.64));
-  const zh = Math.round(Math.min(plotH * 0.72, zw * 1.12));
+  // Leave generous vertical margin below & above the 3x3 strike zone (down to ~0.04m dirt level
+  // and up to ~1.28m) so low Forkballs/Changeups and bat positions NEVER clamp on top of each other!
+  const zw = Math.round(Math.min(w * 0.36, plotH * 0.42));
+  const zh = Math.round(Math.min(plotH * 0.48, zw * 1.32));
   const zx = Math.round(ox + (w - zw) * 0.5);
-  const zy = Math.round(plotY + (plotH - zh) * 0.5);
+  const zy = Math.round(plotY + (plotH - zh) * 0.38);
 
   ctx.fillStyle = 'rgba(15, 23, 42, 0.84)';
   ctx.fillRect(zx, zy, zw, zh);
@@ -667,14 +669,12 @@ function drawPitchLocationSubPanel(
     // matches Minkowski contact physics (d_edge <= CONTACT_BALL_RADIUS_M) to the pixel!
     const pxPerMX = zw / PLATE_WIDTH;
     const pxPerMY = zh / (STRIKE_ZONE_HI - STRIKE_ZONE_LO);
-    const dotR = Math.max(3.5 * u, CONTACT_BALL_RADIUS_M * ((pxPerMX + pxPerMY) * 0.5));
-    const clampX = (sx: number) => clamp(sx, ox + dotR + 5 * u, ox + w - dotR - 5 * u);
-    const clampY = (sy: number) => clamp(sy, plotY + dotR + 4 * u, plotY + plotH - dotR - 4 * u);
+    const dotR = Math.max(3.2 * u, CONTACT_BALL_RADIUS_M * ((pxPerMX + pxPerMY) * 0.5));
 
-    // Batter cylindrical barrel PCI parentheses (  •  ) scaled 1:1 to strike zone
+    // Batter cylindrical barrel PCI parentheses (  •  ) scaled 1:1 to strike zone (NEVER clamped onto ball!)
     if (showPci && typeof fb.batX === 'number' && typeof fb.batY === 'number') {
-      const bx = clampX(mapX(fb.batX));
-      const by = clampY(mapY(fb.batY));
+      const bx = mapX(fb.batX);
+      const by = mapY(fb.batY);
       const pci = getBatPciExtents(fb.powerSwing ? 'power' : 'normal');
       const halfW = pci.halfW * pxPerMX;
       const halfH = pci.halfH * pxPerMY;
@@ -688,15 +688,24 @@ function drawPitchLocationSubPanel(
         pci.bracketCurveFrac,
         col,
         Math.max(1.8, 2.2 * u),
-        2.4 * u,
+        2.2 * u,
         col,
         0,
       );
     }
 
-    // Actual bottle cap crossing dot (stroke inset inside dotR so outer edge == exact CONTACT_BALL_RADIUS_M)
-    const cx = clampX(mapX(fb.plateX));
-    const cy = clampY(mapY(fb.plateY));
+    // Actual bottle cap crossing dot — true unclamped coordinates inside the clipped plot box!
+    // If an extreme pitch bounces completely outside the plot bounds, draw a crisp edge arrow instead of
+    // faking overlap with the strike zone or PCI.
+    const rawCx = mapX(fb.plateX);
+    const rawCy = mapY(fb.plateY);
+    const minPlotX = ox + 5 * u;
+    const maxPlotX = ox + w - 5 * u;
+    const minPlotY = plotY + 5 * u;
+    const maxPlotY = plotY + plotH - 5 * u;
+    const isOffChart = rawCx < minPlotX || rawCx > maxPlotX || rawCy < minPlotY || rawCy > maxPlotY;
+    const cx = rawCx;
+    const cy = rawCy;
     const revealT =
       typeof fb.absRevealElapsed === 'number' && fb.absRevealElapsed >= 0 && fb.absRevealElapsed < 0.32
         ? fb.absRevealElapsed / 0.32
@@ -710,7 +719,7 @@ function drawPitchLocationSubPanel(
       ctx.strokeStyle = `rgba(125, 211, 252, ${1 - revealT})`;
       ctx.lineWidth = Math.max(1.8, 2.4 * u);
       ctx.beginPath();
-      ctx.arc(cx, cy, dotR * (1.2 + revealT * 2.1), 0, Math.PI * 2);
+      ctx.arc(clamp(cx, minPlotX, maxPlotX), clamp(cy, minPlotY, maxPlotY), dotR * (1.2 + revealT * 2.1), 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -732,6 +741,25 @@ function drawPitchLocationSubPanel(
     ctx.beginPath();
     ctx.arc(cx, cy, centerDotR, 0, Math.PI * 2);
     ctx.fill();
+
+    if (isOffChart) {
+      // Draw directional chevron at the plot border when the ball is completely off-chart (e.g. dirt bounce)
+      const ex = clamp(rawCx, ox + 8 * u, ox + w - 8 * u);
+      const ey = clamp(rawCy, plotY + 8 * u, plotY + plotH - 8 * u);
+      const ang = Math.atan2(rawCy - ey, rawCx - ex);
+      const s = 4.5 * u;
+      ctx.save();
+      ctx.translate(ex, ey);
+      ctx.rotate(ang);
+      ctx.fillStyle = ballCol;
+      ctx.beginPath();
+      ctx.moveTo(s, 0);
+      ctx.lineTo(-s * 0.7, -s * 0.7);
+      ctx.lineTo(-s * 0.7, s * 0.7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   ctx.restore(); // end plot clip
@@ -889,10 +917,25 @@ function drawTimingSubPanel(
   ctx.lineTo(tipX, tipY);
   ctx.stroke();
 
-  // Bottle cap contact point positioned DEAD-CENTER ON THE BARREL OVER HOME PLATE!
-  const capDist = batLen * 0.5;
-  const capX = pivotX + cosA * capDist;
-  const capY = pivotY + sinA * capDist;
+  // Bottle cap contact point aligned horizontally with actual pitch crossing fb.plateX across home plate!
+  const rawBallX = plateCx + (fb.plateX / (PLATE_WIDTH * 0.5)) * pHalfW;
+  const minBallX = isLefty ? ox + 8 * u : pivotX + batLen * 0.22;
+  const maxBallX = isLefty ? pivotX - batLen * 0.22 : ox + w - 8 * u;
+  const capX = clamp(rawBallX, Math.min(minBallX, maxBallX), Math.max(minBallX, maxBallX));
+  const capRayY = pivotY + (capX - pivotX) * Math.tan(batAngle);
+  const capY = clamp(capRayY, bodyY + 6 * u, bodyY + bodyH - 6 * u);
+
+  // Subtle dashed pitch incoming lane along the actual plateX cross-section
+  ctx.save();
+  ctx.setLineDash([3 * u, 3 * u]);
+  ctx.strokeStyle = 'rgba(248, 250, 252, 0.32)';
+  ctx.lineWidth = Math.max(1, 1.2 * u);
+  ctx.beginPath();
+  ctx.moveTo(capX, bodyY + 2 * u);
+  ctx.lineTo(capX, capY);
+  ctx.stroke();
+  ctx.restore();
+
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
   ctx.arc(capX, capY, Math.max(4, 5 * u), 0, Math.PI * 2);

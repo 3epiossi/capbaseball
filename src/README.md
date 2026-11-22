@@ -11,6 +11,9 @@
 | 檔案 | 職責 |
 |---|---|
 | [index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html) | 定義雙層 Canvas（`#pixel-canvas`、`#overlay-canvas`）、頂部 HUD（`.hud-top-region`）、漢堡選單、右下角 Messenger 對話球（`#chat-hub`）、全螢幕轉場層（`#v2-transition-layer`）、`#update-banner` 與原生 `<dialog>` 視窗。 |
+| [pitch-lab.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/pitch-lab.html) | 獨立 3D 投球實驗室入口頁面（對應 `/capbaseball/pitch-lab`），提供全視窗 3D 軌道鏡頭檢視與投手參數調校介面。 |
+| [pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) | 驅動 3D 投球實驗室的自由旋轉／縮放／平移視角、旋轉 3D 瓶蓋、氣動力向量箭頭、鎖定唯讀空氣常數與一鍵複製 JSON 匯出。 |
+| [pitchLab.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.css) | 3D 投球實驗室深色儀表板樣式與左右摺疊控制欄排版。 |
 | [main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) | 管理遊戲狀態機、循序呈現佇列（`PresentationQueue`）、光譜整合彈簧投球、下方游標觸控打擊、線上揮棒時序佇列同步、投球時鐘、行動版自動更新輪詢與零 `innerHTML` 安全 DOM 更新。 |
 | [styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) | 實作 16-bit 像素播報風格樣式、精簡放大 BSO 燈號計分板、單列右上狀態列、右下角 Messenger 對話球與 `@container` 響應式規則。 |
 | [i18n/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/i18n/index.ts) | 依瀏覽器語系自動切換繁體中文（`zh-TW`）、日文（`ja`）與英文（`en`），並保留國際通用棒球紀錄字母（`R`、`H`、`K`、`ꓘ`、`1B`、`2B`、`3B`、`AB`、`HR`、`BB`、`IBB`、`P`、`O`、`ABS`）。 |
@@ -31,7 +34,7 @@
 
 ### 2. 右上角單列狀態與右下角 Messenger 對話球（`.top-bar`、`#chat-hub`）
 
-- **右上單列狀態列（`.top-bar`）**：移除毫秒延遲膠囊，將伺服器負載與連線品質顏色（`good`/`fair`/`poor`/`busy`）直接反映在「在線人數（`#top-online-pill`）」上，桌機與手機一律與 `☰` 漢堡鈕橫向排成單列。
+- **右上單列狀態列（`.top-bar`）**：移除毫秒延遲膠囊，將伺服器負載與連線品質顏色（`good`/`fair`/`poor`/`busy`）直接反映在「在線人數（`#top-online-pill`）」上，桌機與手機一律與 `☰` 漢堡鈕橫向排成單列；手機版於主頁面（`#scoreboard[hidden]`）保留顯示玩家名稱按鈕 `#btn-nick-chip`，進入對局後才於頂部讓位給計分板。計分板線上對戰隊名自動精簡前綴並搭配文字省略保護，避免長名稱遮擋比分。
 - **右下角 Messenger 對話球（`#chat-hub`）**：採圓形藍底白邊雙對話框圖示，統一承載對手純文字快捷對話（8 組梗語錄三語自動對譯、3 秒冷卻）、賽事廣播（下一棒、`IBB`、投球超時）與線上系統通知（斷線重連、再戰請求、選單逾時、維護通知）。訊息從左側以單行圓角橫條滑出（`width: max-content; white-space: nowrap`）；直立手機投球時由 `updateSafeCameraFraming()` 自動抬升至投手面板上方避免遮擋。
 - **暫停與返回導航（`isGamePaused` / `syncOnlineMenuPauseState` / `navigateBack`）**：開啟選單、規則或 4 分頁設定對話框時，單機對戰立即暫停物理與計時器；**線上對戰開啟任一對話框會立即透過 `menu_pause` 通知伺服器凍結雙方投球時鐘並鎖定投球／`IBB`**，顯示 20 秒倒數（`#menu-online-timer`），對手端按鈕會同步顯示 `對手暫停中 (Xs)` 並在對話球通知，時間歸零由伺服器權威恢復。對手斷線（`onlineOpponentDisconnected`）與對手 2.2 秒 ABS 視窗期間（`oppAbsWaitTimer`）亦同步凍結本地時鐘與投球鈕。點擊右上角玩家名稱按鈕（`#btn-nick-chip`）會直接切換至設定的「帳號（`account`）」分頁並自動全選名字輸入框；支援點擊與全域 `Escape`／`Backspace` 快捷鍵返回。
 - **行動版自動更新提示（`#update-banner`）**：採 `position: fixed; z-index: 140;` 避免被頂部容器裁切，於啟動、`visibilitychange`、`pageshow`、`focus`、`online` 與每 30 秒以 `./health?_t=...` 破除快取比對版本。

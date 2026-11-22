@@ -12,11 +12,14 @@ import {
 import {
   BAT_PCI_NORMAL,
   BAT_PCI_POWER,
+  buildFullDefense,
   CONTACT_BALL_RADIUS_M,
   evaluateSwingResolution,
+  simulateDeterministicCatch,
   simulateOutfieldGroundBlock,
   type OutfielderInit,
 } from '../src/physics/contact';
+import { createOutfielders, createPitcherFielder, updateOutfielders } from '../src/ai/cpu';
 import { judgeBattedCap } from '../src/rules/judge';
 
 describe('6-DOF Cap Flight Physics & Pitch Types', () => {
@@ -59,15 +62,13 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     const fork = solvePitchTrajectory('fork', PITCH_SPECS.fork.defaultSpeedKmh, TARGET_Y, TARGET_Z);
     const changeup = solvePitchTrajectory('changeup', PITCH_SPECS.changeup.defaultSpeedKmh, TARGET_Y, TARGET_Z);
 
-    // 1. Straight: ~12 o'clock slight rising hop (|dx| < 0.04m, dy > +0.06m)
-    expect(Math.abs(straight.breakDelta[1])).toBeLessThan(0.04);
-    expect(straight.breakDelta[2]).toBeGreaterThan(0.06);
+    // 1. Straight: ~12 o'clock high-spin rising hop (|dx| < 0.06m, dy > +0.50m)
+    expect(Math.abs(straight.breakDelta[1])).toBeLessThan(0.06);
+    expect(straight.breakDelta[2]).toBeGreaterThan(0.50);
 
-    // 2. Cutter: ~4 o'clock break (dx in [0.15, 0.32], dy in [-0.24, -0.08])
-    expect(cutter.breakDelta[1]).toBeGreaterThanOrEqual(0.15);
-    expect(cutter.breakDelta[1]).toBeLessThanOrEqual(0.32);
-    expect(cutter.breakDelta[2]).toBeGreaterThanOrEqual(-0.24);
-    expect(cutter.breakDelta[2]).toBeLessThanOrEqual(-0.08);
+    // 2. Cutter: sharp right-cutting break (dx >= 0.30m)
+    expect(cutter.breakDelta[1]).toBeGreaterThanOrEqual(0.30);
+    expect(cutter.breakDelta[1]).toBeLessThanOrEqual(0.65);
 
     // 3. Fork: ~6 o'clock sharp drop (|dx| < 0.05m, dy <= -0.35m)
     expect(Math.abs(fork.breakDelta[1])).toBeLessThan(0.05);
@@ -364,5 +365,132 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
       expect(fastBatter.exitSpeedKmh).toBeGreaterThan(center.exitSpeedKmh);
       expect(center.exitSpeedKmh).toBeGreaterThan(slowBatter.exitSpeedKmh);
     }
+  });
+
+  it('allows Pitcher & forward-charging fielders to stop infield grounders for OUT and physically arrive at interceptPos', () => {
+    const fullDef = buildFullDefense();
+
+    // 1. Screaming hard comebacker up the middle (25 m/s) reaches mound before Pitcher's 0.48s post-throw
+    //    recovery delay -> shoots right past Pitcher into outfield (NOT blocked by P)!
+    const rocketComebacker = simulateBattedCap({
+      position: [0, 0.65, -0.22],
+      velocity: [0.1, 0.2, -25.0],
+      seed: 19,
+    });
+    const rocketBlk = simulateOutfieldGroundBlock(rocketComebacker, fullDef);
+    expect(rocketBlk.fielderId).not.toBe('P');
+
+    // 2. Medium/slow grounder right up the middle reaches mound after 0.48s -> Pitcher recovers & blocks for OUT!
+    const comebacker = simulateBattedCap({
+      position: [0, 0.55, -0.22],
+      velocity: [0.35, -1.8, -14.5],
+      seed: 19,
+    });
+    expect(comebacker.hitOutfield).toBe(true); // without pitcher fielding, it escapes into outfield!
+
+    const block = simulateOutfieldGroundBlock(comebacker, fullDef);
+    expect(block.blocked).toBe(true);
+    expect(block.fielderId).toBe('P');
+    expect(block.blockPos).not.toBeNull();
+    expect(block.blockTimeSec).not.toBeNull();
+    expect(block.blockTimeSec!).toBeGreaterThanOrEqual(0.58);
+    expect(judgeBattedCap(block.battedResult, { caughtInAir: false })).toBe('OUT');
+
+    // Verify visual fielder animation physically runs right onto blockPos by blockTimeSec (zero 隔山打牛)
+    const pActor = createPitcherFielder();
+    const ofActors = createOutfielders();
+    const actors = [...ofActors, pActor];
+    const dt = 1 / 60;
+    for (let t = 0; t <= block.blockTimeSec! + dt; t += dt) {
+      updateOutfielders(
+        actors,
+        dt,
+        block.blockPos,
+        block.blockPos,
+        false,
+        false,
+        t,
+        {
+          fielderId: 'P',
+          targetPos: block.blockPos!,
+          targetTimeSec: block.blockTimeSec!,
+          isBlock: true,
+        },
+      );
+    }
+    const visualGap = Math.hypot(
+      pActor.pos[0] - block.blockPos![0],
+      pActor.pos[2] - block.blockPos![2],
+    );
+    expect(visualGap).toBeLessThan(0.15);
+
+    // Defenders can freely cross into foul territory to catch foul pop-ups (OUT) or stop foul rollers (FOUL)
+    const foulPop = simulateBattedCap({
+      position: [0, 0.85, -0.22],
+      velocity: [2.2, 6.8, -0.6], // pops up in 1B foul territory right near Catcher (x ~ +1.8, z ~ -0.7)
+      seed: 12,
+    });
+    let foulCaught = false;
+    for (let s = 1; s <= 15; s++) {
+      const cRes = simulateDeterministicCatch(foulPop, fullDef, {
+        exitSpeedMs: 7.2,
+        launchAngleDeg: 70,
+        seed: s,
+      });
+      if (cRes.caught) {
+        foulCaught = true;
+        expect(cRes.fielderId).toBe('C');
+        expect(judgeBattedCap(foulPop, { caughtInAir: true })).toBe('OUT');
+        break;
+      }
+    }
+    expect(foulCaught).toBe(true);
+
+    // Uniform speed verification on foul balls (both un-intercepted across bounce & intercepted into foul territory)
+    const lfActors = createOutfielders();
+    const lf = lfActors[0];
+    const foulLand: [number, number, number] = [-6.5, 0, -5.5];
+    const foulFinal: [number, number, number] = [-9.8, 0, -6.2];
+    const speeds: number[] = [];
+    for (let step = 0; step < 60; step++) {
+      const t = 0.2 + step * dt;
+      const airborne = t < 0.65;
+      const capPos: [number, number, number] = airborne ? [-5.0, 1.2, -5.0] : [-7.0 - (t - 0.65) * 1.2, 0.02, -5.8];
+      const prevX = lf.pos[0];
+      const prevZ = lf.pos[2];
+      updateOutfielders(lfActors, dt, capPos, foulLand, airborne, false, t, null, foulFinal);
+      const spd = Math.hypot(lf.pos[0] - prevX, lf.pos[2] - prevZ) / dt;
+      if (lf.anim === 'run') speeds.push(spd);
+    }
+    expect(speeds.length).toBeGreaterThan(20);
+    // Speed must stay strictly constant across the airborne -> bounce transition (zero slowdown/pause/restart!)
+    const minSpd = Math.min(...speeds);
+    const maxSpd = Math.max(...speeds);
+    expect(maxSpd - minSpd).toBeLessThan(0.05);
+
+    // Intercepted foul ball also glides at exact constant speed all the way to arrival (no fast-start/brake-early)
+    const rfActors = createOutfielders();
+    const rf = rfActors[1];
+    const foulTarget: [number, number, number] = [9.2, 0, -7.2];
+    const targetT = 1.6;
+    const intSpeeds: number[] = [];
+    for (let t = 0.18 + dt; t < targetT - dt; t += dt) {
+      const prevX = rf.pos[0];
+      const prevZ = rf.pos[2];
+      updateOutfielders(
+        rfActors,
+        dt,
+        foulTarget,
+        foulTarget,
+        true,
+        false,
+        t,
+        { fielderId: 'RF', targetPos: foulTarget, targetTimeSec: targetT, isBlock: false },
+        foulTarget,
+      );
+      intSpeeds.push(Math.hypot(rf.pos[0] - prevX, rf.pos[2] - prevZ) / dt);
+    }
+    expect(intSpeeds.length).toBeGreaterThan(40);
+    expect(Math.max(...intSpeeds) - Math.min(...intSpeeds)).toBeLessThan(0.05);
   });
 });

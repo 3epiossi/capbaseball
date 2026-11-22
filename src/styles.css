@@ -222,6 +222,8 @@ select {
 .sb-main-row {
   display: flex;
   align-items: stretch;
+  min-width: 0;
+  width: 100%;
   border-bottom: 2px solid #24324d;
 }
 
@@ -232,13 +234,17 @@ select {
 .sb-teams {
   display: flex;
   flex-direction: column;
-  min-width: 124px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   border-right: 2px solid #24324d;
 }
 
 .sb-team-row {
   display: flex;
   align-items: center;
+  min-width: 0;
+  overflow: hidden;
   gap: 0.38rem;
   padding: 0.22rem 0.42rem 0.22rem 0;
   line-height: 1.1;
@@ -277,13 +283,17 @@ select {
   letter-spacing: 0.03em;
   color: var(--text-main);
   white-space: nowrap;
-  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .sb-team-runs {
   font-family: var(--font-pixel);
   font-size: 0.94rem;
   min-width: 22px;
+  flex-shrink: 0;
   text-align: center;
   padding: 0.08rem 0.24rem;
   background: rgba(5, 8, 16, 0.82);
@@ -302,6 +312,7 @@ select {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   gap: 0.24rem;
   padding: 0.22rem 0.56rem;
   background: rgba(8, 12, 23, 0.8);
@@ -623,7 +634,13 @@ select {
 .nick-dot {
   width: 6px;
   height: 6px;
+  flex-shrink: 0;
   background: var(--gold);
+}
+
+#nick-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Live Network Speed / Ping Box */
@@ -1918,20 +1935,28 @@ dialog::backdrop {
   }
 
   .nick-chip {
+    display: inline-flex;
+    height: 34px;
+    padding: 0 0.46rem;
+    font-size: 0.58rem;
+    max-width: min(44vw, 168px);
+  }
+
+  .hud-top-region:has(#scoreboard:not([hidden])) .nick-chip {
     display: none;
   }
 
   .sb-teams {
-    min-width: 104px;
+    min-width: 84px;
   }
 
   .sb-team-row {
-    padding: 0.2rem 0.38rem 0.2rem 0;
-    gap: 0.32rem;
+    padding: 0.2rem 0.32rem 0.2rem 0;
+    gap: 0.26rem;
   }
 
   .sb-team-name {
-    font-size: 0.88rem;
+    font-size: 0.78rem;
   }
 
   .sb-team-runs {
@@ -2161,11 +2186,11 @@ dialog::backdrop {
   }
 
   .sb-teams {
-    min-width: 90px;
+    min-width: 72px;
   }
 
   .sb-team-name {
-    font-size: 0.74rem;
+    font-size: 0.7rem;
   }
 
   .sb-ticker-row {

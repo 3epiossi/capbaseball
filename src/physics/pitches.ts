@@ -65,9 +65,9 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     nameEn: 'Fastball',
     baseAttitude: 'flat',
     bankRightDeg: 0,
-    noseUpDeg: 5.5,
+    noseUpDeg: 20,
     yawLeftDeg: 0,
-    rpm: 2000,
+    rpm: 3000,
     spinAxis: 'cap',
     rotationSense: 'counterclockwise',
     speedRangeKmh: [64, 76],
@@ -82,17 +82,17 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
       maxElevationDeg: 7.5,
       maxAbsAzimuthDeg: 8.0,
     },
-    description: '12 o\'clock slight rising hop.',
+    description: '12 o\'clock high-spin rising hop.',
   },
   cutter: {
     id: 'cutter',
     code: 'CUT',
     nameEn: 'Cutter',
     baseAttitude: 'flat',
-    bankRightDeg: -34,
-    noseUpDeg: 1.0,
-    yawLeftDeg: 0,
-    rpm: 1500,
+    bankRightDeg: -30,
+    noseUpDeg: 5,
+    yawLeftDeg: 5,
+    rpm: 1300,
     spinAxis: 'cap',
     rotationSense: 'clockwise',
     speedRangeKmh: [64, 75],
@@ -107,7 +107,7 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
       maxElevationDeg: 10.5,
       maxAbsAzimuthDeg: 10.0,
     },
-    description: '4 o\'clock sharp down-right break.',
+    description: 'Sharp right-cutting break.',
   },
   fork: {
     id: 'fork',
@@ -148,9 +148,9 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     rotationSense: 'counterclockwise',
     speedRangeKmh: [44, 56],
     defaultSpeedKmh: 50,
-    clAlphaPerRad: 0.72,
+    clAlphaPerRad: 0.25,
     magnusCoeff: 0.03,
-    cdProjected: 0.28,
+    cdProjected: 0.16,
     envelope: {
       minFlightZ: 0.22,
       maxFlightZ: 2.08,
@@ -410,7 +410,17 @@ export function solvePitchTrajectory(
   targetPlateZ: number,
   options?: PitchTrajectoryOptions,
 ): PitchTrajectoryResult {
-  const spec = PITCH_SPECS[pitchId];
+  return solvePitchTrajectoryForSpec(PITCH_SPECS[pitchId], speedKmh, targetPlateY, targetPlateZ, options);
+}
+
+export function solvePitchTrajectoryForSpec(
+  spec: PitchSpec,
+  speedKmh: number,
+  targetPlateY: number,
+  targetPlateZ: number,
+  options?: PitchTrajectoryOptions,
+): PitchTrajectoryResult {
+  const pitchId = spec.id;
   const releasePos: V3 = options?.releasePos ?? DEFAULT_RELEASE_POS;
   const goalY = targetPlateY + (options?.errorY ?? 0);
   const goalZ = targetPlateZ + (options?.errorZ ?? 0);

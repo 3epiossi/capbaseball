@@ -90,9 +90,11 @@ export interface PitchResultMsg {
       caught: boolean;
       bobbled?: boolean;
       blocked?: boolean;
-      fielderId: 'LF' | 'RF' | null;
+      fielderId: 'LF' | 'RF' | 'P' | 'C' | null;
       catchTimeSec: number | null;
       catchPos: readonly [number, number, number] | null;
+      blockTimeSec?: number | null;
+      blockPos?: readonly [number, number, number] | null;
     };
     outcome: 'FOUL' | 'OUT' | '1B' | '2B' | '3B' | 'HR';
     exitSpeedKmh: number;

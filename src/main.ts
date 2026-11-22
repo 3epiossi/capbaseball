@@ -1,11 +1,15 @@
 import {
   checkCatcherCatch,
   chooseCpuPitch,
+  createCatcherFielder,
   createOutfielders,
+  createPitcherFielder,
   evaluateCpuSwing,
   resetOutfielders,
   updateOutfielders,
   type CpuSwingPlan,
+  type FielderInterceptionTarget,
+  type OutfielderActor,
 } from './ai/cpu';
 import { sfx } from './audio/sfx';
 import {
@@ -39,7 +43,7 @@ import {
   type BattedCapResult,
   type FieldV3,
 } from './physics/batted';
-import { evaluateSwingResolution, simulateOutfieldGroundBlock, type CatchInfo } from './physics/contact';
+import { buildFullDefense, evaluateSwingResolution, simulateOutfieldGroundBlock, type CatchInfo } from './physics/contact';
 import {
   PITCH_IDS,
   PITCH_SPECS,
@@ -841,11 +845,27 @@ let lastPitchTelemetry = 'READY';
 let pendingPitchTelemetry = '';
 
 const outfielders = createOutfielders();
+const pitcherFielder = createPitcherFielder();
+const catcherFielder = createCatcherFielder();
+const allFielders: OutfielderActor[] = [...outfielders, pitcherFielder, catcherFielder];
+
+function findFielderActor(info: CatchInfo | null): OutfielderActor | undefined {
+  if (!info) return undefined;
+  if (info.fielderId) {
+    return allFielders.find((f) => f.id === info.fielderId);
+  }
+  if (typeof info.fielderIndex === 'number') {
+    return allFielders[info.fielderIndex];
+  }
+  return undefined;
+}
 const cam = new GameCamera();
 let sprites: SpriteBank = {
   ready: false,
   pitcherYellow: null,
   pitcherBlack: null,
+  pitcherFieldYellow: null,
+  pitcherFieldBlack: null,
   pitcherMeta: { frames: 60, fps: 24, w: 113, h: 113, baseline_y: 112, release_frame: 30, idle_frame: 0 },
   fielderYellow: null,
   fielderBlack: null,
@@ -1161,10 +1181,17 @@ function triggerAbsChallenge(): void {
   updateHudAndDocks();
 }
 
+function formatScorebugTeamName(raw: string): string {
+  // Scoreboard already displays team color via the left Black/Yellow stripe;
+  // strip redundant "中正黑 "/"中正黃 " prefix when an online player name is present so long names never crowd the score.
+  const stripped = raw.replace(/^中正[黑黃]\s+/, '').trim();
+  return stripped || raw;
+}
+
 function updateHudAndDocks(): void {
   appViewport.classList.toggle('in-game', !onTitleScreen);
-  awayNameEl.textContent = match.away.name;
-  homeNameEl.textContent = match.home.name;
+  awayNameEl.textContent = formatScorebugTeamName(match.away.name);
+  homeNameEl.textContent = formatScorebugTeamName(match.home.name);
   awayScoreEl.textContent = String(match.away.totalRuns);
   homeScoreEl.textContent = String(match.home.totalRuns);
   sbInningEl.textContent = `${match.half === 'top' ? '▲' : '▼'}${match.inning}`;
@@ -1331,7 +1358,7 @@ function startMode(mode: GameMode): void {
   pendingPitchTelemetry = '';
   lastPitchTelemetry = t('telReady');
   cam.resetImmediate();
-  resetOutfielders(outfielders);
+  resetOutfielders(allFielders);
   selectPitch('straight');
   resetPitchClock();
   updateHudAndDocks();
@@ -2801,7 +2828,7 @@ function enterOnlineMatch(
   batterSwungThisPitch = false;
   batCursor = { x: 0, y: 0.72 };
   cam.resetImmediate();
-  resetOutfielders(outfielders);
+  resetOutfielders(allFielders);
   selectPitch('straight');
   pendingPitchTelemetry = '';
   lastPitchTelemetry = getCurrentRole() === 'pitcher' ? t('telYourPitch') : t('telWaitingPitch');
@@ -2856,7 +2883,7 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   batterSwungThisPitch = false;
   batCursor = { x: 0, y: 0.72 };
   cam.resetImmediate();
-  resetOutfielders(outfielders);
+  resetOutfielders(allFielders);
   lastPitchTelemetry = t('telLiveSpectate');
   if (msg.activePitch) {
     const p = msg.activePitch;
@@ -2908,9 +2935,11 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
     activeBatted = simulateBattedCap(res.battedParams);
     activeCatchInfo = (res.catchInfo as CatchInfo | undefined) ?? null;
     if (activeCatchInfo?.blocked) {
-      const blk = simulateOutfieldGroundBlock(activeBatted, outfielders);
+      const blk = simulateOutfieldGroundBlock(activeBatted, buildFullDefense(outfielders));
       if (blk.blocked) {
         activeBatted = blk.battedResult;
+        activeCatchInfo.fielderId = blk.fielderId ?? activeCatchInfo.fielderId;
+        activeCatchInfo.fielderIndex = blk.fielderIndex ?? activeCatchInfo.fielderIndex;
         activeCatchInfo.blockTimeSec = blk.blockTimeSec;
         activeCatchInfo.blockPos = blk.blockPos;
       }
@@ -3923,7 +3952,51 @@ function step(now: number): void {
       const landedBefore = activeBatted.firstLandingPos !== null && battedFlightTime > 0.25 && capPos[1] <= 0.04;
       const airborne = !landedBefore && battedBouncesPlayed === 0;
       const landingTarget = activeBatted.firstLandingPos ?? activeBatted.stoppedPos;
-      updateOutfielders(outfielders, dt, capPos, landingTarget, airborne, battedCaughtInAir, battedFlightTime);
+
+      // Authoritative interception target so the fielding defender physically arrives AT the ball (Zero 隔山打牛)
+      let interception: FielderInterceptionTarget | null = null;
+      if (activeCatchInfo && activeCatchInfo.fielderId) {
+        if (activeCatchInfo.blocked && typeof activeCatchInfo.blockTimeSec === 'number') {
+          const tPos = activeCatchInfo.blockPos ?? activeBatted.stoppedPos;
+          interception = {
+            fielderId: activeCatchInfo.fielderId,
+            targetPos: tPos,
+            targetTimeSec: activeCatchInfo.blockTimeSec,
+            isBlock: true,
+          };
+        } else if (
+          (activeCatchInfo.caught || activeCatchInfo.bobbled) &&
+          typeof activeCatchInfo.catchTimeSec === 'number'
+        ) {
+          let tPos = activeCatchInfo.catchPos;
+          if (!tPos) {
+            const cFrame =
+              activeBatted.frames.find((fr) => fr.t >= activeCatchInfo!.catchTimeSec!) ??
+              activeBatted.frames[activeBatted.frames.length - 1];
+            tPos = cFrame ? cFrame.pos : landingTarget;
+          }
+          interception = {
+            fielderId: activeCatchInfo.fielderId,
+            targetPos: tPos,
+            targetTimeSec: activeCatchInfo.catchTimeSec,
+            isBlock: false,
+          };
+        }
+      }
+
+      const finalTarget = activeBatted.overFence ? landingTarget : activeBatted.stoppedPos;
+
+      updateOutfielders(
+        allFielders,
+        dt,
+        capPos,
+        landingTarget,
+        airborne,
+        battedCaughtInAir,
+        battedFlightTime,
+        interception,
+        finalTarget,
+      );
 
       if (
         activeCatchInfo?.caught &&
@@ -3931,13 +4004,15 @@ function step(now: number): void {
         activeCatchInfo.catchTimeSec !== null &&
         battedFlightTime >= activeCatchInfo.catchTimeSec
       ) {
-        const fIdx = activeCatchInfo.fielderIndex ?? (activeCatchInfo.fielderId === 'RF' ? 1 : 0);
-        const f = outfielders[fIdx];
+        const f = findFielderActor(activeCatchInfo);
         if (f) {
+          const hitP = interception?.targetPos ?? capPos;
+          f.pos[0] = hitP[0];
+          f.pos[2] = hitP[2];
           f.anim = 'dive';
           f.animTime = 0;
           f.diveTimer = 0.6;
-          f.flipX = capPos[0] < f.pos[0];
+          f.flipX = hitP[0] < f.homePos[0];
         }
         battedCaughtInAir = true;
         sfx.playCatchPop();
@@ -3949,28 +4024,32 @@ function step(now: number): void {
         battedFlightTime >= activeCatchInfo.catchTimeSec
       ) {
         bobbledTriggered = true;
-        const fIdx = activeCatchInfo.fielderIndex ?? (activeCatchInfo.fielderId === 'RF' ? 1 : 0);
-        const f = outfielders[fIdx];
+        const f = findFielderActor(activeCatchInfo);
         if (f) {
+          const hitP = interception?.targetPos ?? capPos;
+          f.pos[0] = hitP[0];
+          f.pos[2] = hitP[2];
           f.anim = 'dive';
           f.animTime = 0;
           f.diveTimer = 0.6;
-          f.flipX = capPos[0] < f.pos[0];
+          f.flipX = hitP[0] < f.homePos[0];
         }
       } else if (
         activeCatchInfo?.blocked &&
         !bobbledTriggered &&
         typeof activeCatchInfo.blockTimeSec === 'number' &&
-        battedFlightTime >= activeCatchInfo.blockTimeSec - 0.04
+        battedFlightTime >= activeCatchInfo.blockTimeSec - 0.03
       ) {
         bobbledTriggered = true;
-        const fIdx = activeCatchInfo.fielderIndex ?? (activeCatchInfo.fielderId === 'RF' ? 1 : 0);
-        const f = outfielders[fIdx];
+        const f = findFielderActor(activeCatchInfo);
         if (f) {
+          const hitP = interception?.targetPos ?? capPos;
+          f.pos[0] = hitP[0];
+          f.pos[2] = hitP[2];
           f.anim = 'dive';
           f.animTime = 0;
           f.diveTimer = 0.55;
-          f.flipX = capPos[0] < f.pos[0];
+          f.flipX = hitP[0] < f.homePos[0];
         }
         sfx.playCatchPop();
         finishBattedPlay();
@@ -4001,7 +4080,7 @@ function step(now: number): void {
           batCursor = { x: 0, y: 0.72 };
           capVisible = false;
           capTrail = [];
-          resetOutfielders(outfielders);
+          resetOutfielders(allFielders);
           if (isOnline && !spectating) {
             lastPitchTelemetry =
               getCurrentRole() === 'pitcher' ? t('telYourPitch') : t('telWaitingPitch');
@@ -4015,7 +4094,7 @@ function step(now: number): void {
       }
     } else {
       batterAnimTime += dt;
-      updateOutfielders(outfielders, dt, null, null, false, false);
+      updateOutfielders(allFielders, dt, null, null, false, false);
     }
 
     cam.update(dt);
@@ -4027,6 +4106,20 @@ function step(now: number): void {
   cam.setViewport(pw, ph);
   drawGymBackground(pixelCtx, cam, pw, ph, timeSec);
   const fenceItems = buildFenceDepthItems(pixelCtx, cam, fenceFlashAngle, fenceFlashAlpha);
+  const pitcherOffMound =
+    Math.hypot(
+      pitcherFielder.pos[0] - pitcherFielder.homePos[0],
+      pitcherFielder.pos[2] - pitcherFielder.homePos[2],
+    ) > 0.12 || pitcherFielder.anim === 'dive';
+  const catcherOffPlate =
+    Math.hypot(
+      catcherFielder.pos[0] - catcherFielder.homePos[0],
+      catcherFielder.pos[2] - catcherFielder.homePos[2],
+    ) > 0.18 || catcherFielder.anim === 'dive';
+  const visibleFielders: OutfielderActor[] = [
+    ...outfielders,
+    ...(catcherOffPlate ? [catcherFielder] : []),
+  ];
   drawWorldEntities(pixelCtx, {
     bank: sprites,
     cam,
@@ -4034,7 +4127,14 @@ function step(now: number): void {
     pitchingTeam: getPitchingTeamColor(),
     battingTeam: getBattingTeamColor(),
     pitcherFrame,
-    fielders: outfielders.map((f) => ({
+    pitcherFielder: {
+      active: pitcherOffMound,
+      pos: pitcherFielder.pos,
+      anim: pitcherFielder.anim,
+      animTime: pitcherFielder.animTime,
+      flipX: pitcherFielder.flipX,
+    },
+    fielders: visibleFielders.map((f) => ({
       pos: f.pos,
       anim: f.anim,
       animTime: f.animTime,

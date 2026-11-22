@@ -37,10 +37,10 @@
 
 | `PitchId` | 代碼 | 初始姿態（`baseAttitude`） | 轉速（`rpm`） | 球速範圍（km/h） | 氣動特性 |
 |---|---|---|---|---|---|
-| `straight` | `4SFB` | `flat`（仰角 `5.5°`） | `2000`（`cap` 軸逆時針） | `64–76`（預設 `70`） | `clAlphaPerRad = 0.8`、`magnusCoeff = 0.015`，12 點鐘微上飄 |
-| `cutter` | `CUT` | `flat`（右傾 `-34°`、仰角 `1.0°`） | `1500`（`cap` 軸順時針） | `64–75`（預設 `70`） | `clAlphaPerRad = 0.9`、`magnusCoeff = 0.04`，4 點鐘斜下竄 |
+| `straight` | `4SFB` | `flat`（仰角 `20°`） | `3000`（`cap` 軸逆時針） | `64–76`（預設 `70`） | `clAlphaPerRad = 0.8`、`magnusCoeff = 0.015`，高轉速強上飄直球 |
+| `cutter` | `CUT` | `flat`（右傾 `-30°`、仰角 `5°`、偏航 `5°`） | `1300`（`cap` 軸順時針） | `64–75`（預設 `70`） | `clAlphaPerRad = 0.9`、`magnusCoeff = 0.04`，斜向橫移微升卡特球 |
 | `fork` | `FORK` | `edge_on` | `500`（`world_y` 逆時針） | `58–70`（預設 `65`） | `clAlphaPerRad = 0.08`、`magnusCoeff = 0.25`，6 點鐘急墜 |
-| `changeup` | `CH` | `edge_on`（右傾 `-90°`、仰角 `75°`） | `0` | `44–56`（預設 `50`） | `cdProjected = 0.28`、`clAlphaPerRad = 0.72`，正面迎風高阻力慢墜 |
+| `changeup` | `CH` | `edge_on`（右傾 `-90°`、仰角 `75°`） | `0` | `44–56`（預設 `50`） | `cdProjected = 0.16`、`clAlphaPerRad = 0.25`，適度下墜慢速變速球 |
 
 ### 2. Chord-Newton 投球瞄準求解器（`solvePitchTrajectory`）
 
@@ -75,8 +75,8 @@
   - 垂直偏移 $u_y = \Delta y / (H_{\text{bat}} + R_{\text{ball}})$ 對應圓柱截面表面法向量夾角 $\phi = \arcsin(\text{clamp}(0.95\,u_y,\,-0.95,\,0.95))$；法向分力與斜撞損耗係數 $f_{\text{cyl}} = (\cos\phi)^{1.45}$、橫向甜區衰減 $f_{\text{axis}} = 1 - 0.52\,\tilde{u}_x^2$、時機衰減 $f_{\text{time}} = 1 - 0.28\,\tau^2$，組合得初速 $v_{\text{exit}} = 2.5 + (v_{\text{peak}} - 2.5)\,f_{\text{cyl}}\,f_{\text{axis}}\,f_{\text{time}}$。
   - 擊球仰角依圓柱法向量偏移：$\theta_{\text{launch}} = \text{clamp}(\theta_0 + 0.95\,\phi_{\text{deg}},\,-35^\circ,\,+74^\circ)$（一般 $\theta_0 = 10^\circ$、強振 $13^\circ$）；越偏向上緣打出軟弱高沖天炮、越偏向下緣打出軟弱滾地球。水平噴射角結合揮棒時機拉推與棒端圓弧微偏角 $\psi = \arcsin(0.22\,\tilde{u}_x)$（限縮於 `±44°`）。
   - 擊球品質採乘積式 `rawQuality = fCyl * fAxis * (0.65 + 0.35 * timingQuality)`，確保咬在圓柱極端邊緣時維持鈍悶的 `'weak'` 擊球音效。
-- **確定性接殺評估（`simulateDeterministicCatch`）**：在接球前先檢查不可接殺門檻（出速 `>= 16.5` m/s 或仰角 `< 22°`），接著逐幀推進左／右外野手（反應延遲 `0.45` s、衝刺極速 `3.2` m/s、最大追球距離 `2.6` m、圍牆緩衝限制 `12.45` m）。即使進入接球半徑 `0.48` m 且滯空時間 `>= 0.72` s，仍依出速與追球距離計算 `0.30–0.55` 的漏接率（`bobble`）。
-- **外野滾地攔截守備（`simulateOutfieldGroundBlock`）**：針對未在空中接殺也未直接過牆的擊球，外野手以較短反應延遲（`0.24` s）、較快衝刺（`4.5` m/s）與較大攔截半徑（`1.05` m、最大追球距離 `4.2` m）攔截反彈或滾地強襲球；攔截成功時將擊球軌跡截斷於外野場內，使原本可能滾撞圍牆的二壘安打被壓制為一壘安打（`1B`）。
+- **全場 4 人確定性接殺評估（`buildFullDefense`、`simulateDeterministicCatch`）**：投手（`P`）、捕手（`C`）與左／右外野手（`LF`／`RF`）皆納入守備並可跨進界外區接殺界外飛球（`OUT`）。先檢查不可接殺門檻（出速 `>= 17.5` m/s 或仰角 `< 20°`），再依各守位反應延遲（投手含投球後收尾延遲 `0.62` s）與追球半徑評估接殺與漏接（`bobble`），同時回傳精準攔截點 `catchPos` 與 `catchTimeSec`。
+- **全場 4 人滾地攔截守備（`simulateOutfieldGroundBlock`）**：針對未在空中接殺且未直接過牆的界內／界外擊球，4 名守備員都能前衝攔截反彈或滾地球（界內內野攔截判為 `OUT`，外野攔截壓制為 `1B`，界外攔截維持 `FOUL`）並回傳權威 `fielderId`、`blockPos` 與 `blockTimeSec`。投手套用投球後反應延遲（`PITCHER_BLOCK_REACTION_DELAY = 0.58` s）與過丘最大可攔截球速（`PITCHER_MAX_INTERCEPT_SPEED_MS = 13.5` m/s），讓正面強襲回傳球穿過投手丘，中慢速滾地球則由投手起身前衝撈球出局。
 
 ---
 
