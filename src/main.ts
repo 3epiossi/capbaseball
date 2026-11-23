@@ -1687,6 +1687,9 @@ function launchPitch(
   onlineNoSwingSentForSeq = 0;
   capVisible = false;
   capTrail = [];
+  const f0 = activePitch.sampleAt(0);
+  capPos = simToField([f0.y[0], f0.y[1], f0.y[2]]);
+  capNormalField = simNormalToField(f0.normalWorld);
   resetSpringMeter();
   resetOnlineFreezeState();
   absPromptTimer = 0;
@@ -4220,6 +4223,12 @@ function step(now: number): void {
       if (pitcherFrame >= sprites.pitcherMeta.release_frame) {
         phase = 'pitch_flight';
         pitchFlightTime = 0;
+        if (activePitch) {
+          const f0 = activePitch.sampleAt(0);
+          capPos = simToField([f0.y[0], f0.y[1], f0.y[2]]);
+          capNormalField = simNormalToField(f0.normalWorld);
+          capTrail = [capPos];
+        }
         capVisible = true;
         sfx.playPitchWhoosh();
         updateHudAndDocks();

@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.3.6`（語意化三段式版本號），Pi 現行部署版本 `20261123-170704`
+- **目前里程碑**：`v2.3.7`（語意化三段式版本號），Pi 現行部署版本 `20261123-180437`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -250,3 +250,5 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **3D 速度漸層軌跡曲面與 3Blue1Brown（Manim）幾何美學**：新增 [src/render/speedRibbon.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/speedRibbon.ts) 與 `solvePitchTrajectoryForSpec` 的預覽模式（`previewMode: true`、熱啟動與 32ms 拖曳節流，同步支援 `/pitch-lab`）；以 Catmull-Rom 貝茲樣條、Manim 數學調色盤（`#58C4DD` → `#5CD0B3` → `#F7D060` → `#FC6255`）、4 條參數等時網格線、雙層向量發光筆觸與 `ShowPassingFlash` 流動光脈衝呈現全速域軌跡，加粗藍（下限）／紅（上限）邊界，並以雙節點取代單一黃色瞄準點。
   - **颱風路徑潛勢包絡帶與均勻圓盤控球**：新增 [src/render/typhoonCone.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/typhoonCone.ts) 以解析膠囊 SDF + Marching Squares 繪製連續不跳變的沙漏形潛勢包絡帶；將彈簧光譜統一更名為 `SOFT · BEST · OVER` 並對齊 `0–100%` 完整發射行程（[src/styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) 左側 `0–16%` 彈簧壓縮倉），實作 C1 連續誤差曲線（`BEST` 中心 `0 cm`，往 `SOFT` 至 `11.3 cm`、往 `OVER` 至 `16.9 cm`）與圈內 100% 面積均勻隨機分佈（[`sampleUniformDisk2D`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts)）；按住蓄力維持待機全景，放開回彈後平滑 Morph 收束為單一專屬軌跡與發光圈圈，進入 `BEST` 觸發金色 `Indicate` 光波。
   - **主畫面精簡、快捷對話微調與捕手回傳起點修正**：移除主標題上下列標語，於主標下方以 `你好， [■ 玩家名稱]` 呈現可點擊改名按鈕；`zh-TW` 快捷對話 `emoteFire` 更新為 `114514`；線上連續投球時鐘超時裁定門檻由 3 次下修為 **2 次**（[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts)、[tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 52/52 通過）；捕手像素右手回傳動畫（[src/render/catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts)）改以指尖螢幕座標反推 3D 起點，達成 0 像素瞬移自然拋出。
+- **v2.3.7 修正投手出手瞬間殘留舊瓶蓋閃現（2026-11-23）**：
+  - [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 於進入 `windup` 及抵達 `release_frame` 開啟 `capVisible = true` 當下，同步以 `activePitch.sampleAt(0)` 重置 `capPos`、`capNormalField` 與 `capTrail` 至出手點座標，徹底消除換球後首幀閃出上一球近景大瓶蓋的問題。
