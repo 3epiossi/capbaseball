@@ -16,6 +16,12 @@ import { runSimulation, type SimFrame } from './physics/simulate';
 import { deg2rad, qToMatrix, type V3 } from './physics/vector';
 import { PLATE_WIDTH, STRIKE_ZONE_HI, STRIKE_ZONE_LO } from './rules/field';
 import { computeStrikeZoneMarginM } from './rules/judge';
+import {
+  drawSpeedRibbon3D,
+  RIBBON_SPRING_STOPS,
+  type SpeedRibbonCurve,
+  type SpeedRibbonData,
+} from './render/speedRibbon';
 
 const UNIFIED_LOCKED_AERO = {
   airDensityKgM3: 1.225,
@@ -126,6 +132,7 @@ const btnSlow = el<HTMLButtonElement>('btn-slow');
 const btnLoop = el<HTMLButtonElement>('btn-loop');
 const btnFollow = el<HTMLButtonElement>('btn-follow');
 const btnVectors = el<HTMLButtonElement>('btn-vectors');
+const btnSpeedRibbon = el<HTMLButtonElement>('btn-speed-ribbon');
 const inScrub = el<HTMLInputElement>('in-scrub');
 const valTime = el<HTMLElement>('val-time');
 
@@ -163,11 +170,13 @@ const orbit: OrbitCamera = {
 };
 
 let currentSim: LabSimOutput | null = null;
+let currentRibbon: SpeedRibbonData<V3> | null = null;
 let animPlaying = true;
 let animSlowMo = false;
 let animLoop = true;
 let followCap = false;
 let showVectors = true;
+let showSpeedRibbon = false;
 let animProgress = 0.0;
 let lastRafMs = 0;
 
@@ -357,6 +366,84 @@ function runLabSimulation(): LabSimOutput {
     marginCm: marginM * 100,
     activeAero: aero,
   };
+}
+
+function buildLabSpeedRibbon(): SpeedRibbonData<V3> {
+  const spec = buildActiveSpec();
+  const rel: V3 = [state.releasePos[0], state.releasePos[1], state.releasePos[2]];
+  const preset = PITCH_SPECS[state.presetId];
+  const minS = Math.min(preset.speedRangeKmh[0], Math.max(25, state.speedKmh - 10));
+  const maxS = Math.max(preset.speedRangeKmh[1] + 3, Math.min(110, state.speedKmh + 8));
+  const sampleCount = 16;
+  const curvesRev: SpeedRibbonCurve<V3>[] = [];
+  let prevAz: number | undefined;
+  let prevEl: number | undefined;
+
+  for (let idxStop = RIBBON_SPRING_STOPS.length - 1; idxStop >= 0; idxStop--) {
+    const u = RIBBON_SPRING_STOPS[idxStop];
+    const spd = Math.round(minS + (maxS - minS) * u);
+    let frames: SimFrame[];
+    let hitPos: V3;
+    let hitTimeSec: number;
+
+    if (state.controlMode === 'aim') {
+      const solved = solvePitchTrajectoryForSpec(spec, spd, state.targetX, state.targetY, {
+        releasePos: rel,
+        previewMode: true,
+        initialAzDeg: prevAz,
+        initialElDeg: prevEl,
+        seed: 42,
+      });
+      prevAz = solved.launchAzimuthDeg;
+      prevEl = solved.launchElevationDeg;
+      frames = solved.frames;
+      hitPos = solved.hitPlanePos;
+      hitTimeSec = solved.hitPlaneTimeSec;
+    } else {
+      const raw = buildPitchRawConfig(spec, spd, state.launchAzimuthDeg, state.launchElevationDeg, rel, {
+        fixedStepSec: 0.008,
+        outputHz: 24,
+        pitchDistanceM: PLATE_PLANE_X,
+        seed: 42,
+      });
+      const sim = runSimulation(configFromRaw(raw));
+      frames = sim.frames;
+      const cross = interpolateCrossing(frames, HIT_PLANE_X);
+      hitPos = cross.pos;
+      hitTimeSec = cross.timeSec;
+    }
+
+    const pts: V3[] = new Array(sampleCount);
+    const maxT = Math.max(0.05, hitTimeSec);
+    for (let i = 0; i < sampleCount; i++) {
+      const t = (i / (sampleCount - 1)) * maxT;
+      let idx = frames.length - 1;
+      for (let f = 1; f < frames.length; f++) {
+        if (frames[f].t >= t) {
+          idx = f;
+          break;
+        }
+      }
+      const f0 = frames[Math.max(0, idx - 1)];
+      const f1 = frames[idx];
+      const dt = f1.t - f0.t;
+      const a = dt > 1e-6 ? Math.max(0, Math.min(1, (t - f0.t) / dt)) : 0;
+      pts[i] = [
+        f0.y[0] + (f1.y[0] - f0.y[0]) * a,
+        f0.y[1] + (f1.y[1] - f0.y[1]) * a,
+        Math.max(0.01, f0.y[2] + (f1.y[2] - f0.y[2]) * a),
+      ];
+    }
+    curvesRev.push({
+      u,
+      speedKmh: spd,
+      points: pts,
+      landing: [hitPos[0], hitPos[1], Math.max(0.01, hitPos[2])],
+    });
+  }
+
+  curvesRev.reverse();
+  return { curves: curvesRev };
 }
 
 function renderLockedAeroCards(aero: { cdProjected: number; clAlphaPerRad: number; magnusCoeff: number }): void {
@@ -813,6 +900,24 @@ function render3DScene(): void {
   ctx.stroke();
   ctx.restore();
 
+  // 3.5 Optional 3D Speed-Sweep Gradient Trajectory Ribbon (NORMAL blue -> BEST gold -> OVER red)
+  if (showSpeedRibbon && currentRibbon) {
+    drawSpeedRibbon3D(
+      ctx,
+      currentRibbon,
+      (p) => project3D(cam, p as V3),
+      dpr,
+      {
+        activeU: null,
+        showIdleCenterCurve: false,
+        showActiveCurve: false,
+        showLandingCurve: true,
+        surfaceAlphaScale: 1.15,
+        subSteps: 2,
+      },
+    );
+  }
+
   // 4. Actual 6-DOF 3D Trajectory curve (crisp bright white)
   ctx.save();
   ctx.strokeStyle = '#f8fafc';
@@ -911,6 +1016,7 @@ function syncInputsFromState(): void {
 
 function recomputeAndRender(): void {
   currentSim = runLabSimulation();
+  currentRibbon = showSpeedRibbon ? buildLabSpeedRibbon() : null;
   syncInputsFromState();
   renderLockedAeroCards(currentSim.activeAero);
   renderTelemetry(currentSim);
@@ -1013,6 +1119,13 @@ btnFollow.addEventListener('click', () => {
 btnVectors.addEventListener('click', () => {
   showVectors = !showVectors;
   btnVectors.setAttribute('aria-pressed', String(showVectors));
+});
+
+btnSpeedRibbon.addEventListener('click', () => {
+  showSpeedRibbon = !showSpeedRibbon;
+  btnSpeedRibbon.setAttribute('aria-pressed', String(showSpeedRibbon));
+  currentRibbon = showSpeedRibbon ? buildLabSpeedRibbon() : null;
+  render3DScene();
 });
 
 aeroProfileEl.addEventListener('change', () => {

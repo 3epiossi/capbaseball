@@ -62,6 +62,15 @@ import {
   type OnZoneFeedbackState,
 } from './render/overlay';
 import {
+  RIBBON_SPRING_STOPS,
+  SPRING_BEST_CENTER,
+  SPRING_BEST_START,
+  SPRING_OVER_START,
+  springMaxScatterM,
+  type SpeedRibbonCurve,
+  type SpeedRibbonData,
+} from './render/speedRibbon';
+import {
   drawWorldEntities,
   loadSprites,
   type BatterAnim,
@@ -588,6 +597,7 @@ function applyLocaleToDom(): void {
   btnSound.textContent = sfx.isMuted() ? t('btnMute') : t('btnSfx');
   btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
   updateStandbyToggleBtn();
+  updateNickGreeting();
   pitchSelectedNameEl.textContent = getLocalizedPitchName(selectedPitch);
   if (phase === 'idle') {
     btnThrow.textContent = isPlayCallActive() ? t('btnWait') : t('btnHoldToPitch');
@@ -791,27 +801,30 @@ let selectedPitch: PitchId = 'straight';
 let speedKmh = PITCH_SPECS.straight.defaultSpeedKmh;
 let pitchTarget = { x: 0, y: 0.72 };
 let breakDeltaField: { dx: number; dy: number } | null = null;
-let previewPoints: FieldV3[] = [];
+let previewRibbon: SpeedRibbonData<FieldV3> | null = null;
+let previewDirty = false;
+let lastPreviewAtMs = 0;
+let lastPreviewTargetX = 999;
+let lastPreviewTargetY = 999;
+let lastPreviewPitchId: PitchId | null = null;
 
 let batCursor = { x: 0, y: 0.72 };
 let batterHandedness: 'left' | 'right' = 'left';
 let powerSwing = false;
 
-type SpringZone = 'NORMAL' | 'BEST' | 'OVER';
+type SpringZone = 'SOFT' | 'BEST' | 'OVER';
 type SpringStage = 'idle' | 'charging' | 'rebounding' | 'locked';
-const SPRING_BEST_START = 0.62;
-const SPRING_OVER_START = 0.82;
-const SPRING_BEST_CENTER = 0.72;
 
 const springMeter = {
   stage: 'idle' as SpringStage,
   charge: 0,       // 0..1 compression while holding
   overOsc: 0,      // oscillation phase when held at max compression
-  pos: 0,          // 0..1 current needle position along NORMAL -> BEST -> OVER
+  pos: 0,          // 0..1 current needle position along SOFT -> BEST -> OVER
   peak: 0,         // 0..1 apex position reached after releasing the spring
   reboundTime: 0,
   reboundDur: 0.4,
   lockTimer: 0,
+  bestIndicateTime: -1,
 };
 let pitcherFrame = 0;
 let windupTime = 0;
@@ -1066,29 +1079,29 @@ function evaluateSpring(
   const spec = PITCH_SPECS[pitchId];
   const [minS, maxS] = spec.speedRangeKmh;
   const defS = spec.defaultSpeedKmh;
+  const maxScatterM = springMaxScatterM(v);
 
   if (v <= SPRING_BEST_START) {
     const t = v / SPRING_BEST_START;
     return {
-      zone: 'NORMAL',
+      zone: 'SOFT',
       speedKmh: Math.round(minS + (defS - minS) * t),
-      maxScatterM: 0.036 - 0.018 * t,
+      maxScatterM,
     };
   }
   if (v <= SPRING_OVER_START) {
     const t = (v - SPRING_BEST_START) / (SPRING_OVER_START - SPRING_BEST_START);
-    const distFromCenter = Math.abs(v - SPRING_BEST_CENTER) / 0.1;
     return {
       zone: 'BEST',
       speedKmh: Math.round(defS + (maxS - defS) * t),
-      maxScatterM: distFromCenter * 0.01,
+      maxScatterM,
     };
   }
   const t = (v - SPRING_OVER_START) / (1 - SPRING_OVER_START);
   return {
     zone: 'OVER',
     speedKmh: Math.round(maxS + 3 * t),
-    maxScatterM: 0.075 + 0.165 * t * t,
+    maxScatterM,
   };
 }
 
@@ -1122,14 +1135,15 @@ function renderSpringMeterUi(): void {
     springTitleEl.textContent = t('springTitle');
     const [minS, maxS] = PITCH_SPECS[selectedPitch].speedRangeKmh;
     springReadoutEl.textContent = `${minS}–${maxS} km/h`;
-    springNeedleEl.style.left = `${(restPlungerX / 2).toFixed(1)}%`;
+    springNeedleEl.style.left = '16.0%';
+    springPeakTrailEl.style.left = '16%';
     springPeakTrailEl.style.width = '0%';
   } else if (stage === 'charging') {
     const c = Math.max(0, Math.min(1, springMeter.charge));
-    // Compress plunger tightly leftward (32 -> 9) directly on the left end of the NORMAL-BEST-OVER track
+    // Compress plunger tightly leftward (32 -> 9) inside the 0..16% spring pocket behind u = 0
     plungerX = restPlungerX - c * 23;
     fillWidth = Math.max(0, plungerX - 4);
-    const estPeak = Math.max(0.1, Math.min(1, 0.1 + 0.9 * Math.pow(c, 0.95)));
+    const estPeak = Math.max(0, Math.min(1, Math.pow(c, 0.95)));
     coilColor = estPeak > SPRING_OVER_START ? '#fda4af' : estPeak > SPRING_BEST_START ? '#ffe066' : '#e0f2fe';
     plungerColor = estPeak > SPRING_OVER_START ? '#fda4af' : estPeak > SPRING_BEST_START ? '#ffe066' : '#ffffff';
     fillColor = 'rgba(7, 11, 20, 0.48)';
@@ -1137,14 +1151,15 @@ function renderSpringMeterUi(): void {
     springTitleEl.textContent = t('springCharging');
     springReadoutEl.textContent = `${Math.round(c * 100)}%`;
     springNeedleEl.style.left = `${(plungerX / 2).toFixed(1)}%`;
+    springPeakTrailEl.style.left = '16%';
     springPeakTrailEl.style.width = '0%';
   } else {
-    // Rebounding or Locked at Apex: spring stretches right across the NORMAL - BEST - OVER spectrum!
+    // Rebounding or Locked at Apex: plunger launches from u=0 (x=32, 16%) across the full SOFT - BEST - OVER spectrum!
     const p = Math.max(0, Math.min(1, springMeter.pos));
     const evalRes = evaluateSpring(p, selectedPitch);
     springMeterEl.dataset.zone = evalRes.zone;
-    plungerX = Math.max(10, Math.min(193, p * 193));
-    coils = Math.max(8, Math.round(7 + p * 8));
+    plungerX = restPlungerX + p * (194 - restPlungerX);
+    coils = Math.max(8, Math.round(8 + p * 7));
     fillWidth = Math.max(0, plungerX - 4);
     fillColor = 'rgba(7, 11, 20, 0.22)';
 
@@ -1164,8 +1179,10 @@ function renderSpringMeterUi(): void {
 
     coilColor = evalRes.zone === 'BEST' ? '#ffe066' : evalRes.zone === 'OVER' ? '#fecdd3' : '#ffffff';
     plungerColor = evalRes.zone === 'BEST' ? '#ffe066' : evalRes.zone === 'OVER' ? '#fda4af' : '#ffffff';
-    springNeedleEl.style.left = `${(p * 100).toFixed(1)}%`;
-    springPeakTrailEl.style.width = `${(p * 100).toFixed(1)}%`;
+    const needlePct = 16 + p * 84;
+    springNeedleEl.style.left = `${needlePct.toFixed(1)}%`;
+    springPeakTrailEl.style.left = '16%';
+    springPeakTrailEl.style.width = `${(p * 84).toFixed(1)}%`;
   }
 
   springPlungerEl.setAttribute('x', plungerX.toFixed(1));
@@ -1177,35 +1194,74 @@ function renderSpringMeterUi(): void {
 }
 
 function updateBreakPreview(): void {
-  const res = solvePitchTrajectory(selectedPitch, speedKmh, pitchTarget.x, pitchTarget.y, {
-    outputHz: 45,
+  previewDirty = false;
+  lastPreviewAtMs = performance.now();
+  lastPreviewTargetX = pitchTarget.x;
+  lastPreviewTargetY = pitchTarget.y;
+  lastPreviewPitchId = selectedPitch;
+
+  const bestSpeed = evaluateSpring(SPRING_BEST_CENTER, selectedPitch).speedKmh;
+  const bestRes = solvePitchTrajectory(selectedPitch, bestSpeed, pitchTarget.x, pitchTarget.y, {
+    previewMode: true,
     seed: 1,
   });
 
-  // Always couple aim crosshair tightly to the pitch's legal envelope endpoint so reticle & trajectory NEVER decouple!
-  const hitEndField = simToField(res.hitPlanePos);
+  // Always couple aim crosshair tightly to the BEST pitch's legal envelope endpoint
+  const hitEndField = simToField(bestRes.hitPlanePos);
   if (Math.hypot(hitEndField[0] - pitchTarget.x, hitEndField[1] - pitchTarget.y) > 0.02) {
     pitchTarget = { x: hitEndField[0], y: hitEndField[1] };
+    lastPreviewTargetX = pitchTarget.x;
+    lastPreviewTargetY = pitchTarget.y;
   }
 
   if (!showBreakPreview) {
     breakDeltaField = null;
-    previewPoints = [];
+    previewRibbon = null;
     return;
   }
 
-  breakDeltaField = { dx: res.breakDelta[1], dy: res.breakDelta[2] };
+  breakDeltaField = { dx: bestRes.breakDelta[1], dy: bestRes.breakDelta[2] };
 
-  // Sample ~22 evenly spaced points from release to hit plane for full 3D trajectory preview
-  const targetCount = 22;
-  const maxT = Math.max(0.05, res.hitPlaneTimeSec);
-  const pts: FieldV3[] = [];
-  for (let i = 0; i < targetCount; i++) {
-    const t = (i / (targetCount - 1)) * maxT;
-    const f = res.sampleAt(t);
-    pts.push(simToField([f.y[0], f.y[1], f.y[2]]));
+  // Build 6-curve warm-started speed-sweep ribbon aligned with NORMAL -> BEST -> OVER spring stops
+  const sampleCount = 14;
+  const sampleCurve = (res: PitchTrajectoryResult, u: number, spd: number): SpeedRibbonCurve<FieldV3> => {
+    const maxT = Math.max(0.05, res.hitPlaneTimeSec);
+    const pts: FieldV3[] = new Array(sampleCount);
+    for (let i = 0; i < sampleCount; i++) {
+      const t = (i / (sampleCount - 1)) * maxT;
+      const f = res.sampleAt(t);
+      pts[i] = simToField([f.y[0], f.y[1], f.y[2]]);
+    }
+    return {
+      u,
+      speedKmh: spd,
+      points: pts,
+      landing: simToField(res.hitPlanePos),
+    };
+  };
+
+  // Solve from highest speed down to lowest speed so Newton warm-starting converges in 1-2 iterations!
+  const curvesRev: SpeedRibbonCurve<FieldV3>[] = [];
+  let prevAz = bestRes.launchAzimuthDeg;
+  let prevEl = bestRes.launchElevationDeg;
+  for (let i = RIBBON_SPRING_STOPS.length - 1; i >= 0; i--) {
+    const u = RIBBON_SPRING_STOPS[i];
+    const spd = evaluateSpring(u, selectedPitch).speedKmh;
+    const res =
+      Math.abs(u - SPRING_BEST_CENTER) < 1e-4
+        ? bestRes
+        : solvePitchTrajectory(selectedPitch, spd, pitchTarget.x, pitchTarget.y, {
+            previewMode: true,
+            initialAzDeg: prevAz,
+            initialElDeg: prevEl,
+            seed: 1,
+          });
+    prevAz = res.launchAzimuthDeg;
+    prevEl = res.launchElevationDeg;
+    curvesRev.push(sampleCurve(res, u, spd));
   }
-  previewPoints = pts;
+  curvesRev.reverse();
+  previewRibbon = { curves: curvesRev };
 }
 
 function selectPitch(id: PitchId): void {
@@ -1646,6 +1702,7 @@ function resetSpringMeter(): void {
   springMeter.peak = 0;
   springMeter.reboundTime = 0;
   springMeter.lockTimer = 0;
+  springMeter.bestIndicateTime = -1;
   btnThrow.textContent = t('btnHoldToPitch');
   btnThrow.classList.remove('charging');
   renderSpringMeterUi();
@@ -1677,6 +1734,17 @@ function cancelSpringCharge(): void {
   resetSpringMeter();
 }
 
+function sampleUniformDisk2D(maxRadiusM: number): { errX: number; errY: number } {
+  if (maxRadiusM < 0.0005) return { errX: 0, errY: 0 };
+  const angle = Math.random() * Math.PI * 2;
+  // sqrt(U) guarantees exact area-uniform random distribution inside the entire ellipse
+  const r = Math.sqrt(Math.random()) * maxRadiusM;
+  return {
+    errX: Math.cos(angle) * r,
+    errY: Math.sin(angle) * r * 0.85,
+  };
+}
+
 function commitSpringPitch(peakVal: number): void {
   if (spectating || onTitleScreen || match.isGameOver || isGamePaused()) return;
   if (isOnline && onlineTurnState !== 'awaiting_pitch') return;
@@ -1686,13 +1754,7 @@ function commitSpringPitch(peakVal: number): void {
   const evalRes = evaluateSpring(peakVal, selectedPitch);
   speedKmh = evalRes.speedKmh;
 
-  const mag =
-    evalRes.maxScatterM < 0.002
-      ? 0
-      : (0.35 + Math.random() * 0.65) * evalRes.maxScatterM;
-  const ang = Math.random() * Math.PI * 2;
-  const errX = Math.cos(ang) * mag;
-  const errY = Math.sin(ang) * mag * 0.85;
+  const { errX, errY } = sampleUniformDisk2D(evalRes.maxScatterM);
 
   if (isOnline) {
     resetSpringMeter();
@@ -1722,13 +1784,14 @@ function releaseSpringThrow(overridePeak?: number): void {
   }
   if (springMeter.stage !== 'charging') return;
 
-  // Release compressed spring: launch needle forward toward its apex on NORMAL - BEST - OVER!
+  // Release compressed spring: launch needle forward across full reachable [0.00 .. 1.00] SOFT - BEST - OVER spectrum!
   const c = Math.max(0, Math.min(1, springMeter.charge));
-  springMeter.peak = Math.max(0.1, Math.min(1, 0.1 + 0.9 * Math.pow(c, 0.95)));
+  springMeter.peak = Math.max(0, Math.min(1, Math.pow(c, 0.95)));
   springMeter.pos = 0;
   springMeter.reboundTime = 0;
-  springMeter.reboundDur = 0.28 + 0.24 * springMeter.peak;
+  springMeter.reboundDur = 0.22 + 0.28 * springMeter.peak;
   springMeter.lockTimer = 0.36;
+  springMeter.bestIndicateTime = -1;
   springMeter.stage = 'rebounding';
   btnThrow.textContent = t('btnLaunching');
   btnThrow.classList.remove('charging');
@@ -2377,19 +2440,23 @@ function projectClientToHitPlane(clientX: number, clientY: number, yOffsetPx = 0
   return cam.screenToPlaneZ(sx, sy, HIT_PLANE_Z);
 }
 
+let pitchDragOffset = { x: 0, y: 0 };
+
 function updateAimFromClient(clientX: number, clientY: number, yOffsetPx = 0): void {
   const hit = projectClientToHitPlane(clientX, clientY, yOffsetPx);
   if (!hit) return;
 
   const role = getCurrentRole();
   const maxX = PLATE_WIDTH * 1.45;
-  const x = Math.max(-maxX, Math.min(maxX, hit[0]));
-  const y = Math.max(0.18, Math.min(1.38, hit[1]));
 
   if (role === 'pitcher' && (phase === 'idle' || phase === 'pitch_meter')) {
+    const x = Math.max(-maxX, Math.min(maxX, hit[0] + pitchDragOffset.x));
+    const y = Math.max(0.18, Math.min(1.38, hit[1] + pitchDragOffset.y));
     pitchTarget = { x, y };
-    updateBreakPreview();
+    previewDirty = true;
   } else if (role === 'batter') {
+    const x = Math.max(-maxX, Math.min(maxX, hit[0]));
+    const y = Math.max(0.18, Math.min(1.38, hit[1]));
     batCursor = { x, y };
   }
 }
@@ -2449,6 +2516,23 @@ overlayCanvas.addEventListener('pointerdown', (e) => {
       }
     }
   } else {
+    // Allow grabbing either the slow (blue) or fast (red) control reticle smoothly without jumping
+    pitchDragOffset = { x: 0, y: 0 };
+    if (getCurrentRole() === 'pitcher' && showBreakPreview && previewRibbon && previewRibbon.curves.length >= 2) {
+      const rawHit = projectClientToHitPlane(e.clientX, e.clientY, 0);
+      if (rawHit) {
+        const slow = previewRibbon.curves[0].landing;
+        const fast = previewRibbon.curves[previewRibbon.curves.length - 1].landing;
+        const sep = Math.hypot(fast[0] - slow[0], fast[1] - slow[1]);
+        if (sep > 0.03) {
+          const dSlow = Math.hypot(rawHit[0] - slow[0], rawHit[1] - slow[1]);
+          const dFast = Math.hypot(rawHit[0] - fast[0], rawHit[1] - fast[1]);
+          if (dSlow < 0.14 && dSlow < dFast) {
+            pitchDragOffset = { x: pitchTarget.x - slow[0], y: pitchTarget.y - slow[1] };
+          }
+        }
+      }
+    }
     updateAimFromClient(e.clientX, e.clientY, 0);
   }
 });
@@ -2479,6 +2563,7 @@ window.addEventListener('pointerup', (e) => {
     }
   }
   pointerDownOnCanvas = false;
+  pitchDragOffset = { x: 0, y: 0 };
 });
 window.addEventListener('pointercancel', (e) => {
   if (activeBatTouchId !== null && e.pointerId === activeBatTouchId) {
@@ -2487,6 +2572,7 @@ window.addEventListener('pointercancel', (e) => {
     batTouchUseOffset = false;
   }
   pointerDownOnCanvas = false;
+  pitchDragOffset = { x: 0, y: 0 };
 });
 
 function navigateBack(): boolean {
@@ -2735,23 +2821,30 @@ if (savedNickRaw === '瓶蓋玩家' || savedNickRaw === 'PLAYER') {
 } else if (savedNick && savedNick !== savedNickRaw) {
   localStorage.setItem('capbaseball_nick', savedNick);
 }
+function updateNickGreeting(explicitName?: string): void {
+  const raw = (explicitName ?? onlineNameInput.value).trim().slice(0, 12);
+  const display =
+    raw && raw !== '瓶蓋玩家' && raw !== 'PLAYER'
+      ? raw
+      : (onlineNameInput.placeholder || 'PLAYER');
+  nickChipLabel.textContent = display;
+}
+
 onlineNameInput.placeholder = guestNick;
 if (savedNick) {
   onlineNameInput.value = savedNick;
-  nickChipLabel.textContent = savedNick;
-} else {
-  nickChipLabel.textContent = guestNick;
 }
+updateNickGreeting(savedNick ?? undefined);
 onlineNameInput.addEventListener('change', () => {
   const raw = onlineNameInput.value.trim().slice(0, 12);
   if (raw && raw !== '瓶蓋玩家' && raw !== 'PLAYER') {
     onlineNameInput.value = raw;
     localStorage.setItem('capbaseball_nick', raw);
-    nickChipLabel.textContent = raw;
+    updateNickGreeting(raw);
   } else {
     localStorage.removeItem('capbaseball_nick');
     onlineNameInput.value = '';
-    nickChipLabel.textContent = guestNick!;
+    updateNickGreeting(guestNick!);
   }
 });
 
@@ -2759,10 +2852,10 @@ function getOnlinePlayerName(): string {
   const n = onlineNameInput.value.trim().slice(0, 12);
   if (n && n !== '瓶蓋玩家' && n !== 'PLAYER') {
     localStorage.setItem('capbaseball_nick', n);
-    nickChipLabel.textContent = n;
+    updateNickGreeting(n);
     return n;
   }
-  nickChipLabel.textContent = guestNick!;
+  updateNickGreeting(guestNick!);
   return guestNick!;
 }
 
@@ -4089,13 +4182,32 @@ function step(now: number): void {
         const u = Math.max(0, Math.min(1, springMeter.reboundTime / Math.max(0.05, springMeter.reboundDur)));
         // Fast spring launch decelerating smoothly to the exact apex (highest point)
         springMeter.pos = springMeter.peak * (1 - Math.pow(1 - u, 3));
+        if (
+          springMeter.bestIndicateTime < 0 &&
+          springMeter.pos >= SPRING_BEST_START &&
+          springMeter.pos <= SPRING_OVER_START
+        ) {
+          springMeter.bestIndicateTime = 0;
+        } else if (springMeter.bestIndicateTime >= 0) {
+          springMeter.bestIndicateTime += dt;
+        }
         renderSpringMeterUi();
         if (u >= 1) {
           springMeter.pos = springMeter.peak;
           springMeter.stage = 'locked';
+          if (
+            springMeter.bestIndicateTime < 0 &&
+            springMeter.peak >= SPRING_BEST_START &&
+            springMeter.peak <= SPRING_OVER_START
+          ) {
+            springMeter.bestIndicateTime = 0;
+          }
           renderSpringMeterUi();
         }
       } else if (springMeter.stage === 'locked') {
+        if (springMeter.bestIndicateTime >= 0) {
+          springMeter.bestIndicateTime += dt;
+        }
         springMeter.lockTimer -= dt;
         if (springMeter.lockTimer <= 0) {
           commitSpringPitch(springMeter.peak);
@@ -4571,6 +4683,33 @@ function step(now: number): void {
     absTimerFillEl.style.width = `${pct.toFixed(1)}%`;
   }
 
+  if (previewDirty && !onTitleScreen && getCurrentRole() === 'pitcher') {
+    const moved =
+      selectedPitch !== lastPreviewPitchId ||
+      Math.hypot(pitchTarget.x - lastPreviewTargetX, pitchTarget.y - lastPreviewTargetY) >= 0.008;
+    if (moved && (!pointerDownOnCanvas || performance.now() - lastPreviewAtMs >= 32)) {
+      updateBreakPreview();
+    } else if (!moved) {
+      previewDirty = false;
+    }
+  }
+
+  let activeSpringU: number | null = null;
+  let releaseCollapse = 0;
+  if (springMeter.stage === 'rebounding') {
+    activeSpringU = springMeter.pos;
+    releaseCollapse = Math.min(1, springMeter.reboundTime / 0.18);
+  } else if (springMeter.stage === 'locked') {
+    activeSpringU = springMeter.pos;
+    releaseCollapse = 1;
+  }
+  const activeScatterM =
+    activeSpringU !== null ? evaluateSpring(activeSpringU, selectedPitch).maxScatterM : null;
+  const bestIndicateProgress =
+    springMeter.bestIndicateTime >= 0 && springMeter.bestIndicateTime < 0.28
+      ? springMeter.bestIndicateTime / 0.28
+      : null;
+
   overlayCtx.save();
   if (fx.shakeX !== 0 || fx.shakeY !== 0) {
     overlayCtx.translate(fx.shakeX * dpr, fx.shakeY * dpr);
@@ -4583,7 +4722,12 @@ function step(now: number): void {
     dpr,
     pitchTarget,
     breakDeltaField,
-    previewPoints,
+    previewRibbon,
+    activeSpringU,
+    activeScatterM,
+    releaseCollapse,
+    bestIndicateProgress,
+    timeSec,
     showBreakPreview,
     batCursor,
     showBatCursor: !batterSwungThisPitch && phase !== 'awaiting_result',

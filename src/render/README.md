@@ -14,8 +14,10 @@
 | [gymScene.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/gymScene.ts) | 繪製台灣學校大禮堂（楓木地板、多運動場線、2025-02 瓶蓋棒球標線、舞台布幕與燈具）、離屏背景快取及 24 段 13 m 藍黃圍牆。 |
 | [cap3d.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/cap3d.ts) | 將 6-DOF 瓶蓋法向量轉為 `Field3D` 朝向（`simNormalToField`），並以正面圓盤、側面裙邊與背面陰影繪製真實傾斜的 3D 瓶蓋（`drawTrue3DCap`）。 |
 | [sprites.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/sprites.ts) | 非同步載入投手／打者／外野手／擊球特效精靈圖集，並以畫家演算法（Painter's algorithm）深度排序繪製所有場上實體。 |
-| [overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) | 在高 DPI 覆蓋層繪製 3×3 好球帶、3D 投球軌跡預覽、打者括號 PCI、縮圈時機導引環、高解析度投球瓶蓋、獨立靜止攝影機側邊回饋卡與 ABS 鷹眼重播。 |
-| [catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts) | 繪製捕手接球停頓 `0.36` s 後，由畫面右下角以 16-bit 像素右手拋回投手丘的溫和拋物線回傳動畫。 |
+| [overlay.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/overlay.ts) | 在高 DPI 覆蓋層繪製 3×3 好球帶、Manim 雙節點投球控制、打者括號 PCI、縮圈時機導引環、高解析度投球瓶蓋、獨立靜止攝影機側邊回饋卡與 ABS 鷹眼重播。 |
+| [speedRibbon.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/speedRibbon.ts) | 繪製 3Blue1Brown（Manim）風格 3D 速度漸層軌跡曲面、Catmull-Rom 貝茲邊界（加粗藍下限／紅上限）、參數等時網格與 `ShowPassingFlash` 流動光脈衝；並於彈簧放開後收束為單一專屬軌跡。 |
+| [typhoonCone.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/typhoonCone.ts) | 以解析膠囊 SDF + Marching Squares 繪製連續不跳變的沙漏形颱風潛勢控球帶（`SOFT → BEST → OVER`）、直球同心發光環，以及放開後的專屬發光圓圈與 `BEST` 金色 `Indicate` 光波。 |
+| [catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts) | 繪製捕手接球停頓 `0.36` s 後，由畫面右下角以 16-bit 像素右手自指尖螢幕座標反推 3D 起點、0 像素瞬移拋回投手丘的自然拋物線回傳動畫。 |
 
 ---
 

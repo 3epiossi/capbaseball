@@ -4,6 +4,20 @@ import type { PitchId } from '../physics/pitches';
 import { PLATE_WIDTH, STRIKE_ZONE_HI, STRIKE_ZONE_LO } from '../rules/field';
 import { GameCamera } from './camera';
 import { drawTrue3DCap } from './cap3d';
+import {
+  drawSpeedRibbon3D,
+  interpolateRibbonAt,
+  SPRING_BEST_CENTER,
+  SPRING_BEST_START,
+  SPRING_OVER_START,
+  springMaxScatterM,
+  type SpeedRibbonData,
+} from './speedRibbon';
+import {
+  drawDynamicStormCircle,
+  drawTyphoonCone,
+  type TyphoonSample,
+} from './typhoonCone';
 
 export const HIT_PLANE_Z = -0.22;
 
@@ -74,7 +88,15 @@ export interface OverlayState {
   // Pitcher aim & 3D trajectory preview
   pitchTarget: { x: number; y: number };
   breakDeltaField: { dx: number; dy: number } | null;
-  previewPoints?: FieldV3[];
+  previewRibbon?: SpeedRibbonData<FieldV3> | null;
+  activeSpringU?: number | null;
+  activeScatterM?: number | null;
+  /** Smooth 0..1 collapse progress after spring release for Manim Morph transition */
+  releaseCollapse?: number;
+  /** Optional 0..1 golden Indicate ripple wave progress when entering/locking BEST */
+  bestIndicateProgress?: number | null;
+  /** Running clock in seconds for subtle Manim ShowPassingFlash pulses */
+  timeSec?: number;
   showBreakPreview: boolean;
   // Batter aim & timing
   batCursor: { x: number; y: number };
@@ -331,77 +353,224 @@ export function drawStrikeZoneAndOverlay(
     }
   }
 
-  // 2. Pitcher Turn: Full 3D Pitch Trajectory Preview + Aim Reticle + Accuracy Bar
+  // 2. Pitcher Turn: Hit-Plane Typhoon Forecast Cone + 3D Speed-Gradient Trajectory Surface + Dual Reticles
   if (state.role === 'pitcher' && (state.phase === 'idle' || state.phase === 'pitch_meter')) {
-    if (state.showBreakPreview && state.previewPoints && state.previewPoints.length >= 2) {
-      const projectedPts: { sx: number; sy: number; depth: number; scale: number }[] = [];
-      for (const pt of state.previewPoints) {
-        const pr = cam.project(pt);
-        if (pr.depth > 0.2) projectedPts.push(pr);
+    const curves = state.showBreakPreview && state.previewRibbon && state.previewRibbon.curves.length >= 2
+      ? state.previewRibbon.curves
+      : null;
+
+    const fallbackPos: FieldV3 = [state.pitchTarget.x, state.pitchTarget.y, HIT_PLANE_Z];
+    const slowPos: FieldV3 = curves ? curves[0].landing : fallbackPos;
+    const fastPos: FieldV3 = curves ? curves[curves.length - 1].landing : fallbackPos;
+    const slowP = cam.project(slowPos);
+    const fastP = cam.project(fastPos);
+
+    const isSpringLive = state.activeSpringU != null && state.activeScatterM != null;
+    const rawCollapse = isSpringLive ? Math.max(0, Math.min(1, state.releaseCollapse ?? 1)) : 0;
+    const morphEase = 1 - Math.pow(1 - rawCollapse, 3);
+    const fullAlpha = isSpringLive ? 1 - morphEase : 1;
+    const soloAlpha = isSpringLive ? Math.max(0.25, morphEase) : 0;
+
+    // 2a. Full 3B1B Typhoon Cone + 3D Speed Ribbon + Manim Geometric Nodes (fades out smoothly during 0.18s release morph)
+    if (fullAlpha > 0.015) {
+      if (curves && state.previewRibbon) {
+        const coneStops = [
+          0.0, 0.1, 0.2, 0.3, 0.4, 0.5, SPRING_BEST_START, SPRING_BEST_CENTER, SPRING_OVER_START, 0.91, 1.0,
+        ];
+        const coneSamples: TyphoonSample[] = [];
+        for (const u of coneStops) {
+          const interp = interpolateRibbonAt(state.previewRibbon, u);
+          if (!interp) continue;
+          const pr = cam.project(interp.landing as FieldV3);
+          if (pr.depth <= 0.2) continue;
+          coneSamples.push({
+            u,
+            sx: pr.sx,
+            sy: pr.sy,
+            scale: pr.scale,
+            maxScatterM: springMaxScatterM(u),
+          });
+        }
+        if (coneSamples.length >= 2) {
+          drawTyphoonCone(ctx, coneSamples, dpr, fullAlpha);
+        }
+      } else if (slowP.depth > 0.2 && fastP.depth > 0.2) {
+        drawTyphoonCone(
+          ctx,
+          [
+            { u: 0, sx: slowP.sx, sy: slowP.sy, scale: slowP.scale, maxScatterM: springMaxScatterM(0) },
+            { u: SPRING_BEST_CENTER, sx: (slowP.sx + fastP.sx) * 0.5, sy: (slowP.sy + fastP.sy) * 0.5, scale: fastP.scale, maxScatterM: 0 },
+            { u: 1, sx: fastP.sx, sy: fastP.sy, scale: fastP.scale, maxScatterM: springMaxScatterM(1) },
+          ],
+          dpr,
+          fullAlpha,
+        );
       }
-      if (projectedPts.length >= 2) {
+
+      if (curves && state.previewRibbon) {
+        drawSpeedRibbon3D(
+          ctx,
+          state.previewRibbon,
+          (p) => {
+            const pr = cam.project(p as FieldV3);
+            return { sx: pr.sx, sy: pr.sy, depth: pr.depth, ok: pr.depth > 0.2 };
+          },
+          dpr,
+          {
+            activeU: null,
+            showIdleCenterCurve: false,
+            showActiveCurve: false,
+            showLandingCurve: true,
+            showLandingEndpoints: false,
+            surfaceAlphaScale: fullAlpha,
+            subSteps: 2,
+            timeSec: isSpringLive ? undefined : state.timeSec,
+          },
+        );
+      }
+
+      // Manim Geometric Luminous Nodes (crisp white-cored mathematical dot + delicate luminous outer halo ring)
+      const drawManimNode = (sx: number, sy: number, rgb: readonly [number, number, number]) => {
+        const [r, g, b] = rgb;
+        const a = fullAlpha;
         ctx.save();
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        // Outer glow
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.32)';
-        ctx.lineWidth = 5 * dpr;
+        // Soft luminous outer aura
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(0.20 * a).toFixed(3)})`;
         ctx.beginPath();
-        ctx.moveTo(projectedPts[0].sx, projectedPts[0].sy);
-        for (let i = 1; i < projectedPts.length; i++) {
-          ctx.lineTo(projectedPts[i].sx, projectedPts[i].sy);
-        }
+        ctx.arc(sx, sy, 10.5 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Outer halo glow ring
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(0.32 * a).toFixed(3)})`;
+        ctx.lineWidth = 4.0 * dpr;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 6.8 * dpr, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Crisp inner core
-        ctx.strokeStyle = 'rgba(186, 230, 253, 0.92)';
-        ctx.lineWidth = 2 * dpr;
+        // Crisp Manim solid geometric ring
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(0.95 * a).toFixed(3)})`;
+        ctx.lineWidth = 1.55 * dpr;
         ctx.beginPath();
-        ctx.moveTo(projectedPts[0].sx, projectedPts[0].sy);
-        for (let i = 1; i < projectedPts.length; i++) {
-          ctx.lineTo(projectedPts[i].sx, projectedPts[i].sy);
-        }
+        ctx.arc(sx, sy, 6.8 * dpr, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Perspective beads along the curve
-        for (let i = 1; i < projectedPts.length - 1; i += 2) {
-          const p = projectedPts[i];
-          const tRatio = i / (projectedPts.length - 1);
-          const br = Math.max(1.4 * dpr, (1.5 + tRatio * 2.4) * dpr);
-          ctx.fillStyle = tRatio > 0.7 ? '#ffd23f' : '#e0f2fe';
-          ctx.beginPath();
-          ctx.arc(p.sx, p.sy, br, 0, Math.PI * 2);
-          ctx.fill();
-        }
+        // Luminous colored node + bright white core dot
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(0.95 * a).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.0 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = `rgba(255, 255, 255, ${(0.96 * a).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 1.55 * dpr, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
+      };
+
+      const manimBlue: readonly [number, number, number] = [88, 196, 221]; // #58C4DD
+      const manimCoral: readonly [number, number, number] = [252, 98, 85]; // #FC6255
+
+      if (slowP.depth > 0.2 && fastP.depth > 0.2) {
+        const distPx = Math.hypot(fastP.sx - slowP.sx, fastP.sy - slowP.sy);
+        if (distPx >= 10 * dpr) {
+          drawManimNode(slowP.sx, slowP.sy, manimBlue);
+          drawManimNode(fastP.sx, fastP.sy, manimCoral);
+        } else {
+          // Split dual-tone Manim node when SOFT and OVER endpoints overlap (e.g. Straight Fastball)
+          const mx = (slowP.sx + fastP.sx) * 0.5;
+          const my = (slowP.sy + fastP.sy) * 0.5;
+          const ringR = 7.4 * dpr;
+          const a = fullAlpha;
+          ctx.save();
+          // Soft dual aura
+          ctx.fillStyle = `rgba(88, 196, 221, ${(0.14 * a).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(mx, my, 11 * dpr, Math.PI * 0.25, Math.PI * 1.25);
+          ctx.fill();
+          ctx.fillStyle = `rgba(252, 98, 85, ${(0.14 * a).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(mx, my, 11 * dpr, -Math.PI * 0.75, Math.PI * 0.25);
+          ctx.fill();
+
+          // Manim Blue half-ring (bottom-left: SOFT)
+          ctx.strokeStyle = `rgba(88, 196, 221, ${(0.30 * a).toFixed(3)})`;
+          ctx.lineWidth = 4.0 * dpr;
+          ctx.beginPath();
+          ctx.arc(mx, my, ringR, Math.PI * 0.25, Math.PI * 1.25);
+          ctx.stroke();
+          ctx.strokeStyle = `rgba(88, 196, 221, ${(0.95 * a).toFixed(3)})`;
+          ctx.lineWidth = 1.6 * dpr;
+          ctx.stroke();
+
+          // Manim Coral half-ring (top-right: OVER)
+          ctx.strokeStyle = `rgba(252, 98, 85, ${(0.30 * a).toFixed(3)})`;
+          ctx.lineWidth = 4.0 * dpr;
+          ctx.beginPath();
+          ctx.arc(mx, my, ringR, -Math.PI * 0.75, Math.PI * 0.25);
+          ctx.stroke();
+          ctx.strokeStyle = `rgba(252, 98, 85, ${(0.95 * a).toFixed(3)})`;
+          ctx.lineWidth = 1.6 * dpr;
+          ctx.stroke();
+
+          // Crisp luminous white center dot
+          ctx.fillStyle = `rgba(247, 208, 96, ${(0.95 * a).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(mx, my, 3.0 * dpr, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `rgba(255, 255, 255, ${(0.98 * a).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(mx, my, 1.55 * dpr, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      } else if (fastP.depth > 0.2) {
+        drawManimNode(fastP.sx, fastP.sy, manimCoral);
+      } else if (slowP.depth > 0.2) {
+        drawManimNode(slowP.sx, slowP.sy, manimBlue);
       }
     }
 
-    const aimP = cam.project([state.pitchTarget.x, state.pitchTarget.y, HIT_PLANE_Z]);
-    if (aimP.depth > 0.2) {
-      const ax = Math.round(aimP.sx);
-      const ay = Math.round(aimP.sy);
+    // 2b. Post-release solo dedicated Manim trajectory + dedicated luminous circle (+ BEST Indicate ripple)
+    if (isSpringLive && state.activeSpringU != null && state.activeScatterM != null && soloAlpha > 0.015) {
+      const livePos: FieldV3 =
+        curves && state.previewRibbon
+          ? ((interpolateRibbonAt(state.previewRibbon, state.activeSpringU)?.landing as FieldV3) ?? fallbackPos)
+          : fallbackPos;
+      const liveP = cam.project(livePos);
+      if (liveP.depth > 0.2) {
+        drawDynamicStormCircle(
+          ctx,
+          liveP.sx,
+          liveP.sy,
+          state.activeSpringU,
+          state.activeScatterM,
+          liveP.scale,
+          dpr,
+          soloAlpha,
+          state.bestIndicateProgress ?? null,
+        );
+      }
 
-      // Target aim reticle
-      ctx.save();
-      ctx.strokeStyle = '#ffd23f';
-      ctx.lineWidth = 2 * dpr;
-      ctx.beginPath();
-      ctx.arc(ax, ay, 10 * dpr, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(ax - 14 * dpr, ay);
-      ctx.lineTo(ax - 5 * dpr, ay);
-      ctx.moveTo(ax + 5 * dpr, ay);
-      ctx.lineTo(ax + 14 * dpr, ay);
-      ctx.moveTo(ax, ay - 14 * dpr);
-      ctx.lineTo(ax, ay - 5 * dpr);
-      ctx.moveTo(ax, ay + 5 * dpr);
-      ctx.lineTo(ax, ay + 14 * dpr);
-      ctx.stroke();
-      ctx.fillStyle = '#ffd23f';
-      ctx.fillRect(ax - 1.5 * dpr, ay - 1.5 * dpr, 3 * dpr, 3 * dpr);
-      ctx.restore();
+      if (curves && state.previewRibbon) {
+        drawSpeedRibbon3D(
+          ctx,
+          state.previewRibbon,
+          (p) => {
+            const pr = cam.project(p as FieldV3);
+            return { sx: pr.sx, sy: pr.sy, depth: pr.depth, ok: pr.depth > 0.2 };
+          },
+          dpr,
+          {
+            activeU: state.activeSpringU,
+            soloActiveCurve: true,
+            activeAlphaScale: soloAlpha,
+            showIdleCenterCurve: false,
+            showActiveCurve: true,
+            showLandingCurve: false,
+            showLandingEndpoints: false,
+          },
+        );
+      }
     }
   }
 

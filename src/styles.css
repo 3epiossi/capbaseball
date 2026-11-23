@@ -140,7 +140,7 @@ select {
 .hub-btn:focus-visible,
 .pitch-btn:focus-visible,
 .dlg-close:focus-visible,
-.nick-chip:focus-visible,
+.title-nick-btn:focus-visible,
 .abs-challenge-btn:focus-visible,
 .spring-chamber:focus-visible {
   outline: 2px solid var(--gold-hi);
@@ -622,27 +622,6 @@ select {
   white-space: nowrap;
 }
 
-.nick-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.34rem;
-  font-family: var(--font-pixel);
-  font-size: 0.62rem;
-  font-weight: 700;
-  color: var(--text-main);
-  background: var(--panel-bg);
-  border: 2px solid var(--steel-dim);
-  border-radius: 0;
-  padding: 0.26rem 0.48rem;
-  cursor: pointer;
-  box-shadow: 2px 2px 0 rgba(4, 7, 15, 0.9);
-  white-space: nowrap;
-}
-
-.nick-chip:hover {
-  border-color: var(--gold);
-}
-
 .nick-dot {
   width: 6px;
   height: 6px;
@@ -653,6 +632,7 @@ select {
 #nick-chip-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Live Network Speed / Ping Box */
@@ -886,18 +866,6 @@ select {
     6px 6px 0 rgba(4, 7, 15, 0.95);
 }
 
-.title-eyebrow {
-  display: inline-block;
-  font-family: var(--font-pixel);
-  font-size: 0.6rem;
-  letter-spacing: 0.1em;
-  color: var(--cyan-hi);
-  background: #14223e;
-  border: 1.5px solid var(--cyan);
-  padding: 0.18rem 0.55rem;
-  margin-bottom: 0.72rem;
-}
-
 .game-title {
   margin: 0 0 0.85rem;
   display: flex;
@@ -923,38 +891,48 @@ select {
   text-shadow: 4px 4px 0 #090d17, 2px 2px 0 var(--gold-dark);
 }
 
-.title-matchup {
+.title-greeting-row {
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.28rem 0.75rem;
+  justify-content: center;
+  gap: 0.36rem;
   margin-bottom: 1.15rem;
-  background: rgba(7, 11, 20, 0.9);
-  border: 1.5px solid var(--steel-dim);
+  max-width: 100%;
+}
+
+.title-greeting-prefix {
+  font-family: var(--font-pixel);
+  font-size: 0.86rem;
   font-weight: 700;
-  font-size: 0.84rem;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
-.tm-team {
-  padding: 0.08rem 0.42rem;
+.title-nick-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.44rem;
+  padding: 0.34rem 0.78rem;
+  background: rgba(7, 11, 20, 0.92);
+  border: 2px solid var(--steel-dim);
+  color: var(--text-main);
+  font-family: var(--font-pixel);
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 rgba(4, 7, 15, 0.9);
+  transition: border-color 0.14s ease, transform 0.1s ease;
+  max-width: 100%;
 }
 
-.tm-black {
-  background: #1c2433;
-  border-left: 4px solid #e2e8f0;
-  color: #f1f5f9;
-}
-
-.tm-yellow {
-  background: #33280a;
-  border-right: 4px solid var(--gold);
+.title-nick-btn:hover {
+  border-color: var(--gold);
   color: var(--gold-hi);
 }
 
-.tm-vs {
-  font-family: var(--font-pixel);
-  font-size: 0.62rem;
-  color: var(--text-muted);
+.title-nick-btn:active {
+  transform: translateY(1px);
 }
 
 .hub-buttons {
@@ -1203,7 +1181,7 @@ select {
   transition: border-color 0.08s linear;
 }
 
-.spring-meter[data-zone='NORMAL'] {
+.spring-meter[data-zone='SOFT'] {
   border-color: var(--cyan);
 }
 
@@ -1247,7 +1225,7 @@ select {
   white-space: nowrap;
 }
 
-.spring-meter[data-zone='NORMAL'] .sm-readout {
+.spring-meter[data-zone='SOFT'] .sm-readout {
   color: var(--cyan-hi);
 }
 
@@ -1267,7 +1245,9 @@ select {
   touch-action: none;
 }
 
-/* Unified Spring-on-Spectrum Track: 0-62% NORMAL, 62-82% BEST, 82-100% OVER with live spring coil directly on top */
+/* Unified Spring-on-Spectrum Track:
+   0-16% recessed spring compression pocket;
+   16-100% launchable u=[0..1] spectrum (SOFT 0..62%, BEST 62..82%, OVER 82..100%) */
 .spring-rail {
   position: relative;
   width: 100%;
@@ -1275,13 +1255,16 @@ select {
   border: 2px solid #e2e8f0;
   background: linear-gradient(
     90deg,
-    #1d4ed8 0%,
-    #38bdf8 52%,
-    #22c55e 64%,
-    #f4c41c 74%,
-    #f59e0b 82%,
-    #f97316 88%,
-    #e11d48 100%
+    #0c1220 0%,
+    #111827 15.4%,
+    #cbd5e1 15.4%,
+    #cbd5e1 16.2%,
+    #29abca 16.2%,
+    #58c4dd 45.4%,
+    #5cd0b3 68.1%,
+    #f7d060 76.5%,
+    #f0ac5f 84.9%,
+    #fc6255 100%
   );
   box-shadow: inset 0 3px 0 rgba(0, 0, 0, 0.25), inset 0 -3px 0 rgba(0, 0, 0, 0.35);
   overflow: visible;
@@ -1300,13 +1283,13 @@ select {
   filter: drop-shadow(0 1px 2px rgba(4, 7, 15, 0.95));
 }
 
-/* Subtle top/bottom notch ticks highlighting the BEST sweet-spot band (62%..82%) without breaking the rail */
+/* Subtle top/bottom notch ticks highlighting the BEST sweet-spot band (u=0.62..0.82 -> 68.1%..84.9%) */
 .spring-best-ticks {
   position: absolute;
   top: -3px;
   bottom: -3px;
-  left: 62%;
-  width: 20%;
+  left: 68.1%;
+  width: 16.8%;
   border-left: 2px solid #ffffff;
   border-right: 2px solid #ffffff;
   pointer-events: none;
@@ -1357,6 +1340,7 @@ select {
 .spring-zone-labels {
   display: grid;
   grid-template-columns: 62fr 20fr 18fr;
+  padding-left: 16%;
   font-family: var(--font-pixel);
   font-size: 0.48rem;
   letter-spacing: 0.02em;
@@ -1379,7 +1363,7 @@ select {
   padding-right: 2px;
 }
 
-.spring-meter[data-zone='NORMAL'] .sz-normal {
+.spring-meter[data-zone='SOFT'] .sz-normal {
   color: var(--cyan-hi);
   opacity: 1;
 }
@@ -2288,18 +2272,6 @@ dialog.watch-dialog {
     flex-direction: row;
     align-items: center;
     gap: 0.2rem;
-  }
-
-  .nick-chip {
-    display: inline-flex;
-    height: 34px;
-    padding: 0 0.46rem;
-    font-size: 0.58rem;
-    max-width: min(44vw, 168px);
-  }
-
-  .hud-top-region:has(#scoreboard:not([hidden])) .nick-chip {
-    display: none;
   }
 
   .sb-teams {

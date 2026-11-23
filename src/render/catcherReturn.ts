@@ -168,10 +168,36 @@ function drawPixelCatcherHand(
 }
 
 /**
+ * Computes the exact screen-space pixel center of the bottle cap sitting on the catcher's
+ * fingertip at the end of windup (u = 1) so the 3D return lob launches with 0-pixel teleport.
+ */
+function getReleaseCapTipScreenPos(
+  w: number,
+  h: number,
+  handedness: 'right' | 'left',
+): { tipX: number; tipY: number; baseUnit: number } {
+  const dir = handedness === 'right' ? 1 : -1;
+  const baseUnit = Math.max(3, Math.round(Math.min(w, h) * 0.0085));
+  const hx = Math.round((0.5 + dir * 0.18) * w);
+  const hy = Math.round(0.74 * h);
+  const rotRad = dir * -0.12;
+  // Matches block(-3, -8, 5, 3) cap center in drawPixelCatcherHand: local (-0.5, -6.5) grid units
+  const lx = dir * (-0.5 * baseUnit);
+  const ly = -6.5 * baseUnit;
+  const cosR = Math.cos(rotRad);
+  const sinR = Math.sin(rotRad);
+  return {
+    tipX: hx + lx * cosR - ly * sinR,
+    tipY: hy + lx * sinR + ly * cosR,
+    baseUnit,
+  };
+}
+
+/**
  * Draw authentic behind-catcher return throw:
  * 1) Brief beat while catcher catches/grips the cap off-screen
  * 2) Pixel-art foreground throwing hand swings in from bottom-right & flicks the cap
- * 3) Gentle high-arc lob from right-hand release point back to pitcher's glove
+ * 3) Natural parabolic lob launching directly off the exact pixel fingertip (0-px teleport) to pitcher's glove
  */
 export function drawCatcherReturnThrow(
   ctx: CanvasRenderingContext2D,
@@ -189,47 +215,64 @@ export function drawCatcherReturnThrow(
   const h = ctx.canvas.height;
   const dir = state.handedness === 'right' ? 1 : -1;
 
-  // 1. Cap lob flight (only AFTER release moment!)
-  if (t >= releaseT) {
-    const flightElapsed = t - releaseT;
-    if (flightElapsed <= state.flightSec) {
-      const u = Math.max(0, Math.min(1, flightElapsed / Math.max(0.05, state.flightSec)));
-      // Smooth ease-out distance so it feels like a relaxed toss back, not a batted rocket
-      const distU = 1 - Math.pow(1 - u, 1.28);
+  // 1. Foreground pixel-art catcher throwing hand (windup + release follow-through)
+  //    Drawn before the launched cap during follow-through so the cap visibly pops off the fingertips.
+  if (t < releaseT) {
+    const u = (t - state.pauseSec) / Math.max(0.01, state.windupSec);
+    drawPixelCatcherHand(ctx, w, h, 'windup', Math.max(0, Math.min(1, u)), state.teamColor, state.handedness, dpr);
+    return;
+  }
 
-      // Start clearly offset to catcher's throwing-hand side (x = ±0.36, y = 1.24, z = +1.05) -> Pitcher glove
-      const startX = dir * 0.36;
-      const endX = -0.18;
-      const startZ = 1.05;
-      const endZ = -9.22;
-      const startY = 1.24;
-      const endY = 1.18;
+  if (t < releaseT + state.followThroughSec) {
+    const u = (t - releaseT) / Math.max(0.01, state.followThroughSec);
+    drawPixelCatcherHand(ctx, w, h, 'follow', Math.max(0, Math.min(1, u)), state.teamColor, state.handedness, dpr);
+  }
 
-      const x = startX + (endX - startX) * distU;
-      const z = startZ + (endZ - startZ) * distU;
-      const arcY = startY + (endY - startY) * distU + Math.sin(Math.PI * u) * 0.88;
+  // 2. Cap lob flight (launches directly from the exact pixel fingertip position at t = releaseT!)
+  const flightElapsed = t - releaseT;
+  if (flightElapsed <= state.flightSec) {
+    const u = Math.max(0, Math.min(1, flightElapsed / Math.max(0.05, state.flightSec)));
+    // Natural forward progress so the cap smoothly accelerates out of the flicked fingertips
+    const distU = 1 - Math.pow(1 - u, 1.22);
 
-      const p = cam.project([x, arcY, z]);
-      const g = cam.project([x, 0.02, z]);
-      if (p.depth > 0.2) {
-        ctx.save();
-        // Ground shadow
-        if (g.depth > 0.2) {
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
-          ctx.beginPath();
-          ctx.ellipse(g.sx, g.sy, Math.max(2, 0.055 * g.scale), Math.max(1, 0.022 * g.scale), 0, 0, Math.PI * 2);
-          ctx.fill();
-        }
+    const { tipX, tipY, baseUnit } = getReleaseCapTipScreenPos(w, h, state.handedness);
+    const startZ = 1.25;
+    const startWorld = cam.screenToPlaneZ(tipX, tipY, startZ) ?? [dir * 0.36, 0.72, startZ];
 
-        // Soft lob arc trail
-        const uPrev = Math.max(0, u - 0.13);
-        const dPrev = 1 - Math.pow(1 - uPrev, 1.28);
+    const startX = startWorld[0];
+    const startY = startWorld[1];
+    const endX = -0.18;
+    const endY = 1.18;
+    const endZ = -9.22;
+    const arcHeight = 0.62;
+
+    const x = startX + (endX - startX) * distU;
+    const z = startZ + (endZ - startZ) * distU;
+    const arcY = startY + (endY - startY) * distU + Math.sin(Math.PI * u) * arcHeight;
+
+    const p = cam.project([x, arcY, z]);
+    const g = cam.project([x, 0.02, z]);
+    if (p.depth > 0.2) {
+      ctx.save();
+      // Ground shadow (fades in smoothly after leaving catcher's hand)
+      if (g.depth > 0.2 && u > 0.04) {
+        const shadowAlpha = Math.min(0.24, ((u - 0.04) / 0.12) * 0.24);
+        ctx.fillStyle = `rgba(0, 0, 0, ${shadowAlpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(g.sx, g.sy, Math.max(2, 0.055 * g.scale), Math.max(1, 0.022 * g.scale), 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Soft lob arc trail (only visible once cap separates from fingertip)
+      if (u > 0.02) {
+        const uPrev = Math.max(0, u - 0.11);
+        const dPrev = 1 - Math.pow(1 - uPrev, 1.22);
         const px = startX + (endX - startX) * dPrev;
         const pz = startZ + (endZ - startZ) * dPrev;
-        const py = startY + (endY - startY) * dPrev + Math.sin(Math.PI * uPrev) * 0.88;
+        const py = startY + (endY - startY) * dPrev + Math.sin(Math.PI * uPrev) * arcHeight;
         const pPrev = cam.project([px, py, pz]);
         if (pPrev.depth > 0.2) {
-          ctx.strokeStyle = 'rgba(248, 250, 252, 0.42)';
+          ctx.strokeStyle = 'rgba(248, 250, 252, 0.44)';
           ctx.lineWidth = Math.max(1.5, 2.0 * dpr);
           ctx.lineCap = 'round';
           ctx.beginPath();
@@ -237,27 +280,24 @@ export function drawCatcherReturnThrow(
           ctx.lineTo(p.sx, p.sy);
           ctx.stroke();
         }
-
-        // Cap puck
-        const rad = Math.max(2.6 * dpr, Math.min(8.5 * dpr, 0.023 * p.scale));
-        ctx.fillStyle = state.teamColor === 'yellow' ? '#f4c41c' : '#38bdf8';
-        ctx.beginPath();
-        ctx.arc(p.sx, p.sy, rad, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.2 * dpr;
-        ctx.stroke();
-        ctx.restore();
       }
-    }
-  }
 
-  // 2. Foreground pixel-art catcher throwing hand (windup + release follow-through)
-  if (t < releaseT) {
-    const u = (t - state.pauseSec) / Math.max(0.01, state.windupSec);
-    drawPixelCatcherHand(ctx, w, h, 'windup', Math.max(0, Math.min(1, u)), state.teamColor, state.handedness, dpr);
-  } else if (t < releaseT + state.followThroughSec) {
-    const u = (t - releaseT) / Math.max(0.01, state.followThroughSec);
-    drawPixelCatcherHand(ctx, w, h, 'follow', Math.max(0, Math.min(1, u)), state.teamColor, state.handedness, dpr);
+      // Cap puck: starts matching the pixel cap size at the fingertip and shrinks smoothly with 3D depth
+      const tipCapRad = Math.max(4 * dpr, baseUnit * 2.2);
+      const perspRad = Math.max(2.6 * dpr, 0.023 * p.scale);
+      const rad = Math.min(tipCapRad, perspRad);
+
+      ctx.fillStyle = state.teamColor === 'yellow' ? '#f4c41c' : '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, rad, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#090d16';
+      ctx.lineWidth = Math.max(1.2 * dpr, rad * 0.22);
+      ctx.stroke();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = Math.max(1.0 * dpr, rad * 0.14);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 }

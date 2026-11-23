@@ -1507,7 +1507,7 @@ describe('Online Multiplayer Server Integration', () => {
     }
   });
 
-  it('30. 3 consecutive Pitch Clock violations forfeit the stalling pitcher (and a real pitch resets the counter)', async () => {
+  it('30. 2 consecutive Pitch Clock violations forfeit the stalling pitcher (and a real pitch resets the counter)', async () => {
     const pcSrv = await startServer(0, {
       pitchClockScale: 0.01, // ~180ms per violation
       absWindowMs: 0,
@@ -1522,16 +1522,14 @@ describe('Online Multiplayer Server Integration', () => {
       await host.nextMsg((m) => m.type === 'match_start');
       await guest.nextMsg((m) => m.type === 'match_start');
 
-      // Violation 1/3 & 2/3
+      // Violation 1/2
       const v1 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
-      expect((v1.callout as { subtitle: string }).subtitle).toContain('1/3');
-      const v2 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
-      expect((v2.callout as { subtitle: string }).subtitle).toContain('2/3');
+      expect((v1.callout as { subtitle: string }).subtitle).toContain('1/2');
 
       // Pitcher throws a real pitch -> resets consecutive violation counter to 0!
       host.send({
         type: 'pitch_submit',
-        pitchSeq: v2.nextPitchSeq,
+        pitchSeq: v1.nextPitchSeq,
         pitchId: 'straight',
         speedKmh: 70,
         targetX: 0,
@@ -1545,11 +1543,9 @@ describe('Online Multiplayer Server Integration', () => {
       await host.nextMsg((m) => m.type === 'pitch_result', 3000);
       await guest.nextMsg((m) => m.type === 'pitch_result', 3000);
 
-      // Now stall 3 consecutive times -> 1/3, 2/3, then 3rd immediately forfeits the pitcher!
+      // Now stall 2 consecutive times -> 1/2, then 2nd immediately forfeits the pitcher!
       const s1 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
-      expect((s1.callout as { subtitle: string }).subtitle).toContain('1/3');
-      const s2 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
-      expect((s2.callout as { subtitle: string }).subtitle).toContain('2/3');
+      expect((s1.callout as { subtitle: string }).subtitle).toContain('1/2');
 
       const [overH, overG] = await Promise.all([
         host.nextMsg((m) => m.type === 'match_over', 3000),

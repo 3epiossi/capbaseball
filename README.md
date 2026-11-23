@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.3.5`（語意化三段式版本號），Pi 現行部署版本 `20261123-131708`
+- **目前里程碑**：`v2.3.6`（語意化三段式版本號），Pi 現行部署版本 `20261123-170704`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -57,7 +57,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
 以下完整記錄從開發調整到 Raspberry Pi 正式上線期間遇到的所有關鍵問題、設計決策與修正細節：
 
 ### 1. 投打操作與手感調整
-- **兩階段彈簧投球發射器**：修正原本「蓄力放開直接出手」的問題，改為「按住壓縮蓄力 → 放開彈出並觀察指針最高點落在 `NORMAL · BEST · OVER` 光譜區間 → 短暫鎖定峰值後實際出手」。
+- **兩階段彈簧投球發射器**：修正原本「蓄力放開直接出手」的問題，改為「按住壓縮蓄力 → 放開彈出並觀察指針最高點落在 `SOFT · BEST · OVER` 光譜區間 → 短暫鎖定峰值後實際出手」。
 - **介面精簡與按鈕整理**：移除投球 `TRAIL` 與打擊 `SWING` 等多餘按鈕；右上角固定 2 排顯示玩家狀態、網速、線上人數與功能按鈕；`MENU` 固定於最右側避免左右切換時按鈕出現／消失造成排版抖動；將返回／主選單／棄權收進 `MENU` 對話框並支援快捷鍵返回。
 - **字體清晰度**：避免小像素英數字黏連，UI 與播報卡片主力字體改用 `Chakra Petch`（標題保留 `Silkscreen`）。
 
@@ -107,7 +107,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
 - **判定訊息與好球帶 3D 投影脫鉤**：`.zone-top-hud` 改為固定釘在螢幕前景安全區（不再跟隨 3D 鏡頭或追球運鏡移動）。
 - **手機觸控拖曳放開打擊＋多語系自動偵測**：新增 `activeBatTouchId`（按住拖曳移動球棒、放開即揮棒，同時保留點擊揮棒），並加入 `src/i18n/index.ts` 自動偵測 `ja`／`zh-TW`／`en`。
 - **路線 A 競技與維運機制**：加入 **投球時鐘（15s/20s）**（伺服器權威計時＋超時自動壞球，測試通過 31/31 項）與 **伺服器更新刷新橫幅**（比對 `__BUILD__` 與 `welcome`/`/health`）。
-- **UI 收斂與大螢幕可讀性**：將右上角收折為單列 `[PLAYER] [延遲] [在線] [☰]` 漢堡選單，並將打擊時的「左／右打切換（`#btn-hand`）」與「一般／強振模式（`#btn-swing-type`）」移入可折疊的 `☰` 選單內（不佔用主畫面空間）；將彈簧線圈直接整合進 `NORMAL–BEST–OVER` 光譜軌條上方，並放大桌機計分板與投手面板字體。
+- **UI 收斂與大螢幕可讀性**：將右上角收折為單列 `[在線] [☰]` 漢堡選單，並將打擊時的「左／右打切換（`#btn-hand`）」與「一般／強振模式（`#btn-swing-type`）」移入可折疊的 `☰` 選單內（不佔用主畫面空間）；將彈簧線圈直接整合進 `SOFT–BEST–OVER` 光譜軌條上方，並放大桌機計分板與投手面板字體。
 - **線上模式選單計時強制恢復**：單機模式開啟 `☰` 選單會無限暫停遊戲；但在線上對戰模式下，開啟選單／規則／設定會啟動 **20 秒倒數（`#menu-online-timer`）**，時間一到會強制關閉選單並恢復進行，防止拖延或卡住對戰節奏。
 - **開源授權（MIT License）**：根目錄已補上 [`LICENSE`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/LICENSE)（MIT 授權）並更新 [`.gitignore`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/.gitignore) 排除本地參考 PDF 與規劃文件。
 - **GitHub Fork 協作說明（`3epiossi/capbaseball` ← `koshien2015/cap-flight-sim`）**：
@@ -246,3 +246,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **先攻／後攻全面隨機分配**：好友房（[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) `case 'join'`）與所有 CPU 模式（三局對戰、打擊練習、投球練習，[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) `cpuPlayerSide`）改為開局 50/50 隨機決定先攻（客隊黑）／後攻（主隊黃），並同步切換玩家隊名、投打半局與 ABS 挑戰權限。
   - **移除賽後「再戰一場（Rematch）」**：清理結算視窗 `#result-dialog` 按鈕及前後端／v2 協定中的 `rematch` 流程，賽後統一回主畫面。
   - **修正 ABS 挑戰成功誤播換局動畫與對手／觀戰端搶播時序**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 新增 `visualInning` 搭配 `visualHalf` 鎖定畫面顯示局數，並於 `PresentationQueue` 新增 `{ kind: 'wait_opp_abs' }` 卡住 2.2 秒 ABS 決策窗；[`triggerAbsChallenge`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 與 `case 'abs_result'` 改與 `(visualInning, visualHalf)` 比對，確保第 3 出局遭 ABS 改判回原半局時絕不觸發假換局動畫，且必須等 ABS 視窗或鷹眼重播結束後才執行後續轉場（測試擴充至 **52/52** 全部通過）。
+- **v2.3.6 3Blue1Brown 速度漸層軌跡面、颱風潛勢控球帶、`SOFT · BEST · OVER` 連續控球與多項體驗打磨（2026-11-23）**：
+  - **3D 速度漸層軌跡曲面與 3Blue1Brown（Manim）幾何美學**：新增 [src/render/speedRibbon.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/speedRibbon.ts) 與 `solvePitchTrajectoryForSpec` 的預覽模式（`previewMode: true`、熱啟動與 32ms 拖曳節流，同步支援 `/pitch-lab`）；以 Catmull-Rom 貝茲樣條、Manim 數學調色盤（`#58C4DD` → `#5CD0B3` → `#F7D060` → `#FC6255`）、4 條參數等時網格線、雙層向量發光筆觸與 `ShowPassingFlash` 流動光脈衝呈現全速域軌跡，加粗藍（下限）／紅（上限）邊界，並以雙節點取代單一黃色瞄準點。
+  - **颱風路徑潛勢包絡帶與均勻圓盤控球**：新增 [src/render/typhoonCone.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/typhoonCone.ts) 以解析膠囊 SDF + Marching Squares 繪製連續不跳變的沙漏形潛勢包絡帶；將彈簧光譜統一更名為 `SOFT · BEST · OVER` 並對齊 `0–100%` 完整發射行程（[src/styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) 左側 `0–16%` 彈簧壓縮倉），實作 C1 連續誤差曲線（`BEST` 中心 `0 cm`，往 `SOFT` 至 `11.3 cm`、往 `OVER` 至 `16.9 cm`）與圈內 100% 面積均勻隨機分佈（[`sampleUniformDisk2D`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts)）；按住蓄力維持待機全景，放開回彈後平滑 Morph 收束為單一專屬軌跡與發光圈圈，進入 `BEST` 觸發金色 `Indicate` 光波。
+  - **主畫面精簡、快捷對話微調與捕手回傳起點修正**：移除主標題上下列標語，於主標下方以 `你好， [■ 玩家名稱]` 呈現可點擊改名按鈕；`zh-TW` 快捷對話 `emoteFire` 更新為 `114514`；線上連續投球時鐘超時裁定門檻由 3 次下修為 **2 次**（[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts)、[tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 52/52 通過）；捕手像素右手回傳動畫（[src/render/catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts)）改以指尖螢幕座標反推 3D 起點，達成 0 像素瞬移自然拋出。

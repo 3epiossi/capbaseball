@@ -293,6 +293,13 @@ export interface PitchTrajectoryOptions {
   errorY?: number;
   errorZ?: number;
   outputHz?: number;
+  fixedStepSec?: number;
+  /** Lightweight solver tolerances & step sizes for interactive UI preview ribbons only. */
+  previewMode?: boolean;
+  /** Optional warm-start launch azimuth (deg) from a nearby speed solve. */
+  initialAzDeg?: number;
+  /** Optional warm-start launch elevation (deg) from a nearby speed solve. */
+  initialElDeg?: number;
 }
 
 export interface PitchTrajectoryResult {
@@ -430,14 +437,21 @@ export function solvePitchTrajectoryForSpec(
   const clampAz = (v: number) => Math.max(-env.maxAbsAzimuthDeg, Math.min(env.maxAbsAzimuthDeg, v));
   const clampEl = (v: number) => Math.max(env.minElevationDeg, Math.min(env.maxElevationDeg, v));
 
-  let azDeg = clampAz((Math.atan2(goalY - releasePos[1], dx) * 180) / Math.PI);
-  let elDeg = clampEl((Math.atan2(goalZ - releasePos[2], dx) * 180) / Math.PI);
+  const preview = Boolean(options?.previewMode);
+  let azDeg =
+    options?.initialAzDeg !== undefined
+      ? clampAz(options.initialAzDeg)
+      : clampAz((Math.atan2(goalY - releasePos[1], dx) * 180) / Math.PI);
+  let elDeg =
+    options?.initialElDeg !== undefined
+      ? clampEl(options.initialElDeg)
+      : clampEl((Math.atan2(goalZ - releasePos[2], dx) * 180) / Math.PI);
 
   const evalOffset = (az: number, el: number) => {
     const raw = buildPitchRawConfig(spec, speedKmh, az, el, releasePos, {
       enableWake: false,
-      fixedStepSec: 0.004,
-      outputHz: 30,
+      fixedStepSec: preview ? 0.008 : 0.004,
+      outputHz: preview ? 24 : 30,
       stopAtGround: false,
       pitchDistanceM: HIT_PLANE_X,
     });
@@ -447,15 +461,17 @@ export function solvePitchTrajectoryForSpec(
 
   // Chord-Newton aim solver: compute Jacobian on iter 0 (or if stalled) for ~20x faster solving on ARM/Pi
   const epsDeg = 0.25;
+  const maxIter = preview ? 6 : 14;
+  const tolM = preview ? 0.014 : 0.008;
   let j11 = 0, j21 = 0, j12 = 0, j22 = 0, det = 0;
   let hasJac = false;
   let prevErr = Infinity;
-  for (let iter = 0; iter < 14; iter++) {
+  for (let iter = 0; iter < maxIter; iter++) {
     const cur = evalOffset(azDeg, elDeg);
     const errY = goalY - cur.y;
     const errZ = goalZ - cur.z;
     const errNorm = Math.hypot(errY, errZ);
-    if (cur.reached && errNorm < 0.008) {
+    if (cur.reached && errNorm < tolM) {
       break;
     }
 
@@ -493,10 +509,11 @@ export function solvePitchTrajectoryForSpec(
   const seed = options?.seed ?? ((Math.floor(Math.random() * 0xffffffff) >>> 0) || 1);
   const runFinal = () => {
     const raw = buildPitchRawConfig(spec, speedKmh, azDeg, elDeg, releasePos, {
-      enableWake: Boolean(spec.wake),
+      enableWake: preview ? false : Boolean(spec.wake),
       seed,
-      fixedStepSec: 0.002,
-      outputHz: options?.outputHz ?? 120,
+      fixedStepSec: options?.fixedStepSec ?? (preview ? 0.008 : 0.002),
+      outputHz: options?.outputHz ?? (preview ? 24 : 120),
+      pitchDistanceM: preview ? PLATE_PLANE_X : PITCH_END_SIM_X,
     });
     return runSimulation(configFromRaw(raw, pitchId));
   };
@@ -514,6 +531,7 @@ export function solvePitchTrajectoryForSpec(
     return { maxZ, minZ, worstY };
   };
 
+  const envSearchSteps = preview ? 4 : 7;
   let simResult = runFinal();
   let envStats = measureEnvelope(simResult);
 
@@ -521,7 +539,7 @@ export function solvePitchTrajectoryForSpec(
   if (envStats.maxZ > env.maxFlightZ) {
     let loEl = env.minElevationDeg;
     let hiEl = elDeg;
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < envSearchSteps; i++) {
       const mid = (loEl + hiEl) * 0.5;
       elDeg = clampEl(mid);
       simResult = runFinal();
@@ -538,7 +556,7 @@ export function solvePitchTrajectoryForSpec(
   } else if (envStats.minZ < env.minFlightZ) {
     let loEl = elDeg;
     let hiEl = env.maxElevationDeg;
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < envSearchSteps; i++) {
       const mid = (loEl + hiEl) * 0.5;
       elDeg = clampEl(mid);
       simResult = runFinal();
@@ -559,7 +577,7 @@ export function solvePitchTrajectoryForSpec(
     const signY = Math.sign(envStats.worstY);
     let innerAz = 0;
     let outerAz = azDeg;
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < envSearchSteps; i++) {
       const mid = (innerAz + outerAz) * 0.5;
       azDeg = clampAz(mid);
       simResult = runFinal();

@@ -169,7 +169,7 @@ export interface ServerOptions {
   swingTimeoutPaddingMs?: number;
   /** Scale factor for server Pitch Clock duration (1 = normal 15s/20s; 0 disables; <1 accelerates tests). */
   pitchClockScale?: number;
-  /** Consecutive pitch clock timeouts by the same pitcher before automatic forfeit loss (default 3). */
+  /** Consecutive pitch clock timeouts by the same pitcher before automatic forfeit loss (default 2). */
   pitchClockForfeitLimit?: number;
   /** Max duration (ms) a single player's online menu pause can hold the match (default 20000). */
   menuPauseMs?: number;
@@ -325,7 +325,7 @@ export function startServer(
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const pitchClockScale = opts.pitchClockScale ?? 1;
-  const pitchClockForfeitLimit = Math.max(1, opts.pitchClockForfeitLimit ?? 3);
+  const pitchClockForfeitLimit = Math.max(1, opts.pitchClockForfeitLimit ?? 2);
   const randomizeFriendSides = opts.randomizeFriendSides ?? true;
   const menuPauseMs = opts.menuPauseMs ?? 20_000;
   const absWindowMs = opts.absWindowMs ?? 2_200;
