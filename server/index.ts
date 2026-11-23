@@ -154,7 +154,6 @@ interface Room {
     away: RoomPlayer | null;
   };
   spectators: Set<ClientMeta>;
-  rematchVotes: Set<Side>;
   recorded: boolean;
 }
 
@@ -178,6 +177,8 @@ export interface ServerOptions {
   absWindowMs?: number;
   /** How long (ms) a standby player has to accept/decline an online match offer once shown (default 20000). */
   offerTimeoutMs?: number;
+  /** Randomize first/second batting (away/home) when a guest joins a friend room (default true). */
+  randomizeFriendSides?: boolean;
   maxRooms?: number;
   maxClients?: number;
   /** Soft cap for public matchmaking; clients above this up to maxClients are reserved for Friend Rooms (default maxClients - 20 = 480). */
@@ -325,6 +326,7 @@ export function startServer(
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const pitchClockScale = opts.pitchClockScale ?? 1;
   const pitchClockForfeitLimit = Math.max(1, opts.pitchClockForfeitLimit ?? 3);
+  const randomizeFriendSides = opts.randomizeFriendSides ?? true;
   const menuPauseMs = opts.menuPauseMs ?? 20_000;
   const absWindowMs = opts.absWindowMs ?? 2_200;
   const offerTimeoutMs = opts.offerTimeoutMs ?? 20_000;
@@ -1076,6 +1078,14 @@ export function startServer(
           }
         : null,
       rtt: client?.rttMs ?? 0,
+      spectators: room.spectators.size,
+    });
+  }
+
+  function broadcastSpectatorCount(room: Room) {
+    sendToRoom(room, {
+      type: 'spectator_count',
+      count: room.spectators.size,
     });
   }
 
@@ -1491,6 +1501,7 @@ export function startServer(
         batterSide: room.batterSide,
         match: room.match,
         names,
+        spectators: room.spectators.size,
       });
     }
     armPitchClock(room, 1500);
@@ -1547,7 +1558,6 @@ export function startServer(
         },
       },
       spectators: new Set(),
-      rematchVotes: new Set(),
       recorded: false,
     };
     rooms.set(code, room);
@@ -2163,7 +2173,6 @@ export function startServer(
               away: null,
             },
             spectators: new Set(),
-            rematchVotes: new Set(),
             recorded: false,
           };
           rooms.set(code, room);
@@ -2209,7 +2218,7 @@ export function startServer(
           removeFromQueues(clientId);
           if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
           const token = crypto.randomUUID();
-          room.players.away = {
+          const guestPlayer: RoomPlayer = {
             token,
             name: client.name,
             clientId,
@@ -2217,23 +2226,40 @@ export function startServer(
             connected: true,
             disconnectTimer: null,
           };
-          room.match.away.name = `中正黑 ${client.name}`;
+          const hostPlayer = room.players.home;
+          const swapSides = randomizeFriendSides && crypto.randomInt(0, 2) === 1;
+          let hostSide: Side = 'home';
+          let guestSide: Side = 'away';
+          if (swapSides) {
+            hostSide = 'away';
+            guestSide = 'home';
+            room.players.home = guestPlayer;
+            room.players.away = hostPlayer;
+            room.match.home.name = `中正黃 ${guestPlayer.name}`;
+            room.match.away.name = `中正黑 ${hostPlayer.name}`;
+            const hostClient = hostPlayer.clientId ? clients.get(hostPlayer.clientId) : null;
+            if (hostClient && hostClient.roomCode === code) {
+              hostClient.side = 'away';
+            }
+          } else {
+            room.players.away = guestPlayer;
+            room.match.away.name = `中正黑 ${guestPlayer.name}`;
+          }
           client.roomCode = code;
-          client.side = 'away';
+          client.side = guestSide;
 
           sendJson(ws, {
             type: 'room_joined',
             code,
             mode: room.mode,
             token,
-            side: 'away',
+            side: guestSide,
           });
           startMatchInRoom(room);
-          const host = room.players.home;
-          if (host.disconnectTimer) {
+          if (hostPlayer.disconnectTimer) {
             // Host went offline while waiting; the match has started, so fall back to the normal grace.
-            clearTimeout(host.disconnectTimer);
-            host.disconnectTimer = setTimeout(() => expireSeat(code, 'home'), graceMs);
+            clearTimeout(hostPlayer.disconnectTimer);
+            hostPlayer.disconnectTimer = setTimeout(() => expireSeat(code, hostSide), graceMs);
             sendJson(ws, { type: 'opponent_disconnected', graceSec: Math.round(graceMs / 1000) });
           }
           scheduleStatsBroadcast();
@@ -2244,7 +2270,9 @@ export function startServer(
           removeFromQueues(clientId);
           if (client.watchingCode) {
             const watched = rooms.get(client.watchingCode);
-            watched?.spectators.delete(client);
+            if (watched && watched.spectators.delete(client)) {
+              broadcastSpectatorCount(watched);
+            }
             client.watchingCode = null;
           }
           const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
@@ -2603,8 +2631,11 @@ export function startServer(
           }
           if (client.watchingCode && client.watchingCode !== room.code) {
             const oldRoom = rooms.get(client.watchingCode);
-            oldRoom?.spectators.delete(client);
+            if (oldRoom && oldRoom.spectators.delete(client)) {
+              broadcastSpectatorCount(oldRoom);
+            }
           }
+          const addedSpectator = !room.spectators.has(client);
           room.spectators.add(client);
           client.watchingCode = room.code;
           sendJson(ws, {
@@ -2633,13 +2664,18 @@ export function startServer(
               : null,
             spectators: room.spectators.size,
           });
+          if (addedSpectator) {
+            broadcastSpectatorCount(room);
+          }
           break;
         }
 
         case 'unwatch': {
           if (client.watchingCode) {
             const room = rooms.get(client.watchingCode);
-            room?.spectators.delete(client);
+            if (room && room.spectators.delete(client)) {
+              broadcastSpectatorCount(room);
+            }
             client.watchingCode = null;
           }
           sendJson(ws, { type: 'unwatched' });
@@ -2720,62 +2756,6 @@ export function startServer(
           break;
         }
 
-        case 'rematch': {
-          if (draining) {
-            sendJson(ws, { type: 'error', code: 'draining', message: 'Server updating — rematch paused' });
-            return;
-          }
-          if (!client.roomCode || !client.side) {
-            sendJson(ws, { type: 'error', code: 'opponent_left', message: 'Opponent left' });
-            return;
-          }
-          const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'game_over' || !room.players.away) {
-            sendJson(ws, { type: 'error', code: 'opponent_left', message: 'Opponent left' });
-            return;
-          }
-          const oppSide: Side = client.side === 'home' ? 'away' : 'home';
-          const opp = room.players[oppSide];
-          if (!opp || !opp.connected || !opp.ws || opp.ws.readyState !== WebSocket.OPEN) {
-            sendJson(ws, { type: 'error', code: 'opponent_left', message: 'Opponent left' });
-            return;
-          }
-
-          room.rematchVotes.add(client.side);
-          if (room.rematchVotes.size < 2) {
-            sendJson(opp.ws, { type: 'rematch_requested', side: client.side });
-            return;
-          }
-
-          // Swap home/away sides for fair rematch
-          const oldHome = room.players.home;
-          const oldAway = room.players.away;
-          room.players.home = oldAway;
-          room.players.away = oldHome;
-
-          const homeClient = oldAway.clientId ? clients.get(oldAway.clientId) : null;
-          const awayClient = oldHome.clientId ? clients.get(oldHome.clientId) : null;
-          if (homeClient) homeClient.side = 'home';
-          if (awayClient) awayClient.side = 'away';
-
-          room.rematchVotes.clear();
-          clearRoomPauses(room);
-          clearPitchClock(room);
-          room.consecutiveClockViolations = { home: 0, away: 0 };
-          room.absWindowUntil = 0;
-          room.match = buildMatchState(room.mode, room.players.home.name, room.players.away.name, room.mercyRule);
-          room.pitchSeq = 1;
-          room.solvingSeq = null;
-          room.turnState = 'awaiting_pitch';
-          room.batterSide = 'L';
-          room.activePitch = null;
-          room.recorded = false;
-          monitor.rematchesStarted += 1;
-
-          startMatchInRoom(room);
-          break;
-        }
-
         case 'emote': {
           const targetCode = client.roomCode || client.watchingCode;
           if (!targetCode) return;
@@ -2852,7 +2832,9 @@ export function startServer(
       removeFromQueues(clientId);
       if (client.watchingCode) {
         const watched = rooms.get(client.watchingCode);
-        watched?.spectators.delete(client);
+        if (watched && watched.spectators.delete(client)) {
+          broadcastSpectatorCount(watched);
+        }
         client.watchingCode = null;
       }
       const code = client.roomCode;

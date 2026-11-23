@@ -571,40 +571,26 @@ select {
 }
 
 .sb-telemetry-text {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
   font-family: var(--font-pixel);
   font-size: 0.58rem;
   color: var(--cyan-hi);
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sb-eye-ico {
+  width: 1.18em;
+  height: 1.18em;
+  display: block;
+  flex-shrink: 0;
 }
 
 .sb-telemetry-text[hidden] {
   display: none;
-}
-
-.sb-room-kind {
-  margin-left: auto;
-  padding: 0.06rem 0.36rem;
-  font-family: var(--font-pixel);
-  font-size: 0.54rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  border: 1px solid currentColor;
-  line-height: 1.2;
-  flex-shrink: 0;
-}
-
-.sb-room-kind[hidden] {
-  display: none;
-}
-
-.sb-room-kind[data-kind='live'] {
-  color: #fb7185;
-  background: rgba(244, 63, 94, 0.16);
-}
-
-.sb-room-kind[data-kind='friend'] {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.16);
 }
 
 /* ==========================================================================

@@ -22,7 +22,7 @@
 
 ### 1. 權威對戰迴圈與冪等防護
 
-- **配對與房間生命週期**：支援快速配對佇列（`quick3`／`official6`，標記為 `roomKind: 'live'`）、CPU 候補邀約（`standby_join` → `match_offer` → `offer_shown` 20 秒倒數 → `offer_reply` 接受建房或拒絕／逾時自動轉邀下一位）、4 碼親友房建立與加入（標記為 `roomKind: 'friend'`）、即時觀戰（`list` 回傳 `roomKind` 與 `outs`）、交換主客場再戰（`rematch`）與 **`20` 秒**斷線寬限重連（`reconnect`，逾時判勝並設定 `match.endReason = 'disconnect'`）。
+- **配對與房間生命週期**：支援快速配對佇列（`quick3`／`official6`，標記為 `roomKind: 'live'`）、CPU 候補邀約（`standby_join` → `match_offer` → `offer_shown` 20 秒倒數 → `offer_reply` 接受建房或拒絕／逾時自動轉邀下一位）、4 碼親友房建立與加入（標記為 `roomKind: 'friend'`，加入時 50/50 隨機分配先攻／後攻）、即時觀戰（`list` 回傳 `roomKind` 與 `outs`；進出房間與斷線時透過 `spectator_count` 即時廣播觀戰人數）與 **`20` 秒**斷線寬限重連（`reconnect`，逾時判勝並設定 `match.endReason = 'disconnect'`；已移除賽後 `rematch`）。
 - **斷線與房間回收（2026-11-21 修正手機「Room code not found／Room is full」）**：
   - 房主在好友尚未加入時斷線，房間不再立刻刪除，改保留 `waitingGraceMs`（預設 `300` 秒）；手機切去 LINE 貼房號時連線被系統中止，好友仍能加入。好友在房主離線時加入，會收到 `opponent_disconnected`，並改用 `graceMs`（`20` 秒）計時，逾時由 `expireSeat` 判對手勝並回收房間。
   - 房主對尚無好友的房間 `reconnect`，回傳 `room_created`（同房號與 `token`）而非 `state_sync`，避免被丟進對 `WAITING` 的球場。

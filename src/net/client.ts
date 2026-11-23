@@ -151,6 +151,7 @@ export type ServerMessage =
       batterSide: 'R' | 'L';
       match: MatchState;
       names: { home: string; away: string };
+      spectators?: number;
     }
   | {
       type: 'state_sync';
@@ -165,6 +166,7 @@ export type ServerMessage =
       names: { home: string; away: string };
       activePitch: Omit<PitchLaunchMsg, 'type' | 'batterSide'> | null;
       rtt: number;
+      spectators?: number;
     }
   | PitchLaunchMsg
   | { type: 'batter_side'; side: 'R' | 'L' }
@@ -172,7 +174,6 @@ export type ServerMessage =
   | { type: 'opponent_disconnected'; graceSec: number }
   | { type: 'opponent_reconnected' }
   | { type: 'match_over'; winner: OnlineSide; reason: string; match: MatchState }
-  | { type: 'rematch_requested'; side: OnlineSide }
   | { type: 'room_list'; rooms: LiveRoomInfo[] }
   | {
       type: 'spectate_sync';
@@ -203,6 +204,7 @@ export type ServerMessage =
     }
   | { type: 'emote'; side: OnlineSide | 'spectator'; id: string; senderName?: string }
   | { type: 'pause_state'; pausedSides: OnlineSide[]; remainingSec: number }
+  | { type: 'spectator_count'; count: number }
   | { type: 'match_offer'; offerId: string; opponentName: string; mode: OnlineMode; timeoutSec: number }
   | { type: 'offer_cancelled'; offerId: string; reason: string }
   | { type: 'notice'; kind: string; countdownSec?: number; updateAtMs?: number }
@@ -590,10 +592,6 @@ export class OnlineClient {
 
   resign(): void {
     this.sendRaw({ t: 'rs' });
-  }
-
-  rematch(): void {
-    this.sendRaw({ t: 'rm' });
   }
 
   listRooms(): void {

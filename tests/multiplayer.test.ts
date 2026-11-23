@@ -96,6 +96,7 @@ describe('Online Multiplayer Server Integration', () => {
       matchLogPath: path.join(tmpDir, 'matches.jsonl'),
       pingIntervalMs: 5000,
       graceMs: 10_000,
+      randomizeFriendSides: false,
     });
   });
 
@@ -655,6 +656,7 @@ describe('Online Multiplayer Server Integration', () => {
       matchLogPath: path.join(tmpDir, 'join-offline-host.jsonl'),
       pingIntervalMs: 5000,
       graceMs: 150,
+      randomizeFriendSides: false,
       waitingGraceMs: 60_000,
     });
     const host = await connectClient(shortSrv.port, 'Host');
@@ -760,6 +762,7 @@ describe('Online Multiplayer Server Integration', () => {
     const clockSrv = await startServer(0, {
       pitchClockScale: 0.012,
       graceMs: 1000,
+      randomizeFriendSides: false,
     });
     const host = await connectClient(clockSrv.port, 'ClockHost');
     const guest = await connectClient(clockSrv.port, 'ClockGuest');
@@ -982,6 +985,7 @@ describe('Online Multiplayer Server Integration', () => {
       pitchClockScale: 0.015,
       swingTimeoutPaddingMs: 30,
       graceMs: 1000,
+      randomizeFriendSides: false,
     });
     const host = await connectClient(anomSrv.port, 'AnomHost');
     const guest = await connectClient(anomSrv.port, 'AnomGuest');
@@ -1164,6 +1168,7 @@ describe('Online Multiplayer Server Integration', () => {
       pitchClockScale: 0.03, // ~450ms pitch clock
       menuPauseMs: 500, // 500ms authoritative menu pause timeout
       absWindowMs: 0,
+      randomizeFriendSides: false,
     });
     const host = await connectClient(pauseSrv.port, 'PauseHost');
     const guest = await connectClient(pauseSrv.port, 'PauseGuest');
@@ -1215,6 +1220,7 @@ describe('Online Multiplayer Server Integration', () => {
     const absSrv = await startServer(0, {
       pitchClockScale: 0,
       absWindowMs: 350,
+      randomizeFriendSides: false,
     });
     const host = await connectClient(absSrv.port, 'AbsHost');
     const guest = await connectClient(absSrv.port, 'AbsGuest');
@@ -1505,6 +1511,7 @@ describe('Online Multiplayer Server Integration', () => {
     const pcSrv = await startServer(0, {
       pitchClockScale: 0.01, // ~180ms per violation
       absWindowMs: 0,
+      randomizeFriendSides: false,
     });
     const host = await connectClient(pcSrv.port, 'StallP');
     const guest = await connectClient(pcSrv.port, 'WaitB');
@@ -1558,6 +1565,73 @@ describe('Online Multiplayer Server Integration', () => {
       await host.close();
       await guest.close();
       await pcSrv.close();
+    }
+  });
+
+  it('31. Live spectator_count broadcasts on watch/unwatch/disconnect and friend rooms randomize home/away sides', async () => {
+    const rsSrv = await startServer(0, { pitchClockScale: 0, maxConnPerIp: 40 });
+    const h = await connectClient(rsSrv.port, 'SpecHost');
+    const g = await connectClient(rsSrv.port, 'SpecGuest');
+    const sp1 = await connectClient(rsSrv.port, 'Watcher1');
+    const sp2 = await connectClient(rsSrv.port, 'Watcher2');
+    try {
+      h.send({ type: 'create', mode: 'quick3', name: 'SpecHost' });
+      const created = await h.nextMsg((m) => m.type === 'room_created');
+      g.send({ type: 'join', code: created.code, name: 'SpecGuest' });
+      const msH = await h.nextMsg((m) => m.type === 'match_start');
+      const msG = await g.nextMsg((m) => m.type === 'match_start');
+      expect(msH.spectators).toBe(0);
+      expect(msG.spectators).toBe(0);
+      expect(new Set([msH.side, msG.side])).toEqual(new Set(['home', 'away']));
+
+      // Spectator 1 watches -> both players receive spectator_count: 1
+      sp1.send({ type: 'watch', code: created.code });
+      const sync1 = await sp1.nextMsg((m) => m.type === 'spectate_sync');
+      expect(sync1.spectators).toBe(1);
+      const scH1 = await h.nextMsg((m) => m.type === 'spectator_count');
+      const scG1 = await g.nextMsg((m) => m.type === 'spectator_count');
+      expect(scH1.count).toBe(1);
+      expect(scG1.count).toBe(1);
+
+      // Spectator 2 watches -> players & Spectator 1 receive spectator_count: 2
+      sp2.send({ type: 'watch', code: created.code });
+      await sp2.nextMsg((m) => m.type === 'spectate_sync');
+      const scH2 = await h.nextMsg((m) => m.type === 'spectator_count');
+      const scS1 = await sp1.nextMsg((m) => m.type === 'spectator_count' && m.count === 2);
+      expect(scH2.count).toBe(2);
+      expect(scS1.count).toBe(2);
+
+      // Spectator 1 unwatches -> spectator_count drops to 1
+      sp1.send({ type: 'unwatch' });
+      await sp1.nextMsg((m) => m.type === 'unwatched');
+      const scH3 = await h.nextMsg((m) => m.type === 'spectator_count' && m.count === 1);
+      expect(scH3.count).toBe(1);
+
+      // Spectator 2 disconnects -> spectator_count drops to 0
+      await sp2.close();
+      const scH4 = await h.nextMsg((m) => m.type === 'spectator_count' && m.count === 0);
+      expect(scH4.count).toBe(0);
+
+      // Verify friend room side randomization assigns both home & away across repeated rooms
+      const hostSides = new Set<string>();
+      for (let i = 0; i < 16 && hostSides.size < 2; i++) {
+        const rh = await connectClient(rsSrv.port, `RH${i}`);
+        const rg = await connectClient(rsSrv.port, `RG${i}`);
+        rh.send({ type: 'create', mode: 'quick3', name: `RH${i}` });
+        const rc = await rh.nextMsg((m) => m.type === 'room_created');
+        rg.send({ type: 'join', code: rc.code, name: `RG${i}` });
+        const rJoin = await rg.nextMsg((m) => m.type === 'room_joined');
+        const rStartH = await rh.nextMsg((m) => m.type === 'match_start');
+        const rStartG = await rg.nextMsg((m) => m.type === 'match_start');
+        expect(rJoin.side).toBe(rStartG.side);
+        expect(rStartH.side).not.toBe(rStartG.side);
+        hostSides.add(String(rStartH.side));
+        await Promise.all([rh.close(), rg.close()]);
+      }
+      expect(hostSides.size).toBe(2);
+    } finally {
+      await Promise.all([h.close(), g.close(), sp1.close(), sp2.close()]);
+      await rsSrv.close();
     }
   });
 });

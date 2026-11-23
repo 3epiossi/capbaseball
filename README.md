@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.3.4`（語意化三段式版本號），Pi 現行部署版本 `20261123-115047`
+- **目前里程碑**：`v2.3.5`（語意化三段式版本號），Pi 現行部署版本 `20261123-131708`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 51 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 52 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -240,3 +240,9 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **修復 Cloudflare 快取舊版 `/monitor.js` 與拆出候補人數徽章**：
     - **排查紀錄**：`v2.3.3` 上線後 `/monitor` 的即時分布區塊一度停在 `Loading...`，實測發現 Cloudflare 對僅設 `Cache-Control: no-cache` 的 `.js` 檔會套用預設 4 小時快取（`max-age=14400`），導致瀏覽器載入新版 HTML 卻執行舊版 `monitor.js`。
     - **解法**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 將 `/monitor` 與 `/monitor.js` 標頭改為 `Cache-Control: no-store, no-cache, must-revalidate` 並自動附加 `src="./monitor.js?v=<build>"`；同時將頁面分布調整為 10 條真實所在頁面進度條，並於標題右側獨立顯示 **`線上候補名單：X 人`**（`connections.standbyCount`，測試擴充至 **51/51** 全部通過）。
+- **v2.3.5 計分板即時觀戰人數、先後攻全面隨機、移除再戰與 ABS 轉場時序修正（2026-11-23）**：
+  - **計分板改顯示「眼睛圖示 + 觀戰人數」並移除計分板 `LIVE`/`FRIEND` 標籤**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 新增 `spectator_count`（v2 `{ t: 'sc', n }`）於觀眾進入、離開或斷線時即時推播；[index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 移除計分板上的 `LIVE`／`FRIEND` 標籤（觀戰列表 `#watch-dialog` 仍完整保留），改於計分板右下角顯示眼睛 SVG 圖示與 `: N` 觀戰人數。
+  - **更新 8 句三語快捷對話**：[src/ui/emotes.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/emotes.ts) 與 [src/i18n/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/i18n/index.ts) 更新 8 組內容（`壓力馬斯內！`／`やりますねぇ！`、`不會不會`／`いえいえ`、`好啊！來吧！`／`いいよ！こいよ！`、`一轉攻勢！`／`一転攻勢！`、`有一點碰到囉～`／`ちょっと当たってるよ～`、`三回啊三回！`／`3回な、3回！`、`嗯？`／`ん？`、`不妙啊！`／`まずいですよ！`）。
+  - **先攻／後攻全面隨機分配**：好友房（[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) `case 'join'`）與所有 CPU 模式（三局對戰、打擊練習、投球練習，[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) `cpuPlayerSide`）改為開局 50/50 隨機決定先攻（客隊黑）／後攻（主隊黃），並同步切換玩家隊名、投打半局與 ABS 挑戰權限。
+  - **移除賽後「再戰一場（Rematch）」**：清理結算視窗 `#result-dialog` 按鈕及前後端／v2 協定中的 `rematch` 流程，賽後統一回主畫面。
+  - **修正 ABS 挑戰成功誤播換局動畫與對手／觀戰端搶播時序**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 新增 `visualInning` 搭配 `visualHalf` 鎖定畫面顯示局數，並於 `PresentationQueue` 新增 `{ kind: 'wait_opp_abs' }` 卡住 2.2 秒 ABS 決策窗；[`triggerAbsChallenge`](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 與 `case 'abs_result'` 改與 `(visualInning, visualHalf)` 比對，確保第 3 出局遭 ABS 改判回原半局時絕不觸發假換局動畫，且必須等 ABS 視窗或鷹眼重播結束後才執行後續轉場（測試擴充至 **52/52** 全部通過）。

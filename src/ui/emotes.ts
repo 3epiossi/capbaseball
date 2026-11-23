@@ -20,9 +20,9 @@ export const EMOTE_CATALOG: readonly QuickChatDef[] = [
   { id: 'fire', fallbackLabel: 'Alright! Bring it!', accent: '#f97316' },
   { id: 'clap', fallbackLabel: 'Tables turned!', accent: '#facc15' },
   { id: 'hr', fallbackLabel: 'Barely grazed it~', accent: '#ffd23f' },
+  { id: 'k', fallbackLabel: 'Three times! Three!', accent: '#f43f5e' },
   { id: 'wow', fallbackLabel: 'Hmm?', accent: '#38bdf8' },
   { id: 'sweat', fallbackLabel: 'This is bad!', accent: '#60a5fa' },
-  { id: 'k', fallbackLabel: "It's all over!", accent: '#f43f5e' },
 ];
 
 export const ALL_EMOTE_IDS: readonly EmoteId[] = EMOTE_CATALOG.map((e) => e.id);

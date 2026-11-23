@@ -35,7 +35,6 @@ import {
   type OnlineSide,
   type PitchLaunchMsg,
   type PitchResultMsg,
-  type RoomKind,
   type ServerMessage,
   type TurnState,
 } from './net/client';
@@ -160,8 +159,8 @@ const nickChipLabel = document.getElementById('nick-chip-label') as HTMLElement;
 const topOnlinePill = document.getElementById('top-online-pill') as HTMLElement;
 const topOnlineText = document.getElementById('top-online-text') as HTMLElement;
 let lastOnlineCount = 0;
-const sbRoomKindEl = document.getElementById('sb-room-kind') as HTMLElement;
 const sbTelemetryEl = document.getElementById('sb-telemetry') as HTMLElement;
+const sbSpecNumEl = document.getElementById('sb-spec-num') as HTMLElement;
 
 const awayNameEl = document.getElementById('away-name') as HTMLElement;
 const homeNameEl = document.getElementById('home-name') as HTMLElement;
@@ -243,6 +242,7 @@ let lastPitchBreakCm = 0;
 type PresentationStep =
   | { kind: 'wait_camera_rest'; maxSec: number; elapsedSec: number }
   | { kind: 'wait_abs' }
+  | { kind: 'wait_opp_abs' }
   | { kind: 'wait_abs_replay' }
   | { kind: 'brief_pause'; remainingSec: number }
   | {
@@ -341,6 +341,14 @@ function stepPresentationQueue(rawDt: number): void {
       }
       break;
     }
+    if (head.kind === 'wait_opp_abs') {
+      if (oppAbsWaitTimer <= 0 && !(absReplay && absReplay.active)) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
     if (head.kind === 'wait_abs_replay') {
       if (!(absReplay && absReplay.active)) {
         presentationQueue.shift();
@@ -417,6 +425,7 @@ function stepPresentationQueue(rawDt: number): void {
       }
       if (!transitionDirector.isActive()) {
         presentationQueue.shift();
+        visualInning = head.inning;
         visualHalf = head.half;
         changed = true;
         continue;
@@ -436,7 +445,12 @@ function stepPresentationQueue(rawDt: number): void {
       continue;
     }
   }
-  if (presentationQueue.length === 0 && !transitionDirector.isActive() && visualHalf !== match.half) {
+  if (
+    presentationQueue.length === 0 &&
+    !transitionDirector.isActive() &&
+    (visualHalf !== match.half || visualInning !== match.inning)
+  ) {
+    visualInning = match.inning;
     visualHalf = match.half;
     changed = true;
   }
@@ -648,12 +662,14 @@ let isOnline = false;
 let spectating = false;
 const onlineModeChoice: OnlineMode = 'quick3';
 let onlineSide: OnlineSide | null = null;
+let cpuPlayerSide: OnlineSide = 'home';
 let onlineRoomCode: string | null = null;
-let onlineRoomKind: RoomKind | null = null;
+let onlineSpectatorCount = 0;
 let onlinePitchSeq = 1;
 let onlineTurnState: TurnState = 'awaiting_pitch';
 let onlineWaitingQueue = false;
 let queueElapsedSec = 0;
+let visualInning = 1;
 let visualHalf: 'top' | 'bottom' = 'top';
 let lastReportedActivity: ClientPageActivity | null = null;
 
@@ -1030,7 +1046,8 @@ function getCurrentRole(): Role {
   if (match.mode === 'hotseat2p') {
     return phase === 'windup' || phase === 'pitch_flight' ? 'batter' : 'pitcher';
   }
-  return match.half === 'top' ? 'pitcher' : 'batter';
+  const pitchingSide: OnlineSide = match.half === 'top' ? 'home' : 'away';
+  return cpuPlayerSide === pitchingSide ? 'pitcher' : 'batter';
 }
 
 function getPitchingTeamColor(): TeamColor {
@@ -1241,9 +1258,9 @@ function isAbsChallengeEligibleForPlayer(): boolean {
     return onlineSide === side && onlineTurnState === 'awaiting_pitch';
   }
   if (match.mode === 'hotseat2p') return true;
-  if (match.mode === 'practice_bat') return side === 'home';
-  if (match.mode === 'practice_pitch') return side === 'home';
-  return side === 'home';
+  if (match.mode === 'practice_bat') return side === cpuPlayerSide;
+  if (match.mode === 'practice_pitch') return side === cpuPlayerSide;
+  return side === cpuPlayerSide;
 }
 
 function isAbsChallengeAvailable(): boolean {
@@ -1262,8 +1279,7 @@ function triggerAbsChallenge(): void {
     return;
   }
 
-  const prevInning = match.inning;
-  const prevHalf = match.half;
+  transitionDirector.clear();
   const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
   const prevBatterName = getCurrentBatter(match).name;
 
@@ -1283,9 +1299,12 @@ function triggerAbsChallenge(): void {
   };
   sfx.playUmpireTone(res.overturned ? 'ball' : 'strike');
 
-  // Queue post-ABS transitions cleanly after Hawk-Eye replay completes
+  // Queue post-ABS transitions cleanly after Hawk-Eye replay completes.
+  // Compare against (visualInning, visualHalf) so an overturned 3rd-out call returning to the
+  // original half NEVER triggers a bogus change-sides banner, while an upheld or newly-called
+  // 3rd out plays inning_change right after ABS replay finishes.
   presentationQueue.push({ kind: 'wait_abs_replay' });
-  const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+  const inningChanged = match.inning !== visualInning || match.half !== visualHalf;
   const struckOut = match.strikes === 0 && match.lastEvent.includes('strikes out');
   if (struckOut && !match.isGameOver) {
     presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
@@ -1323,7 +1342,7 @@ function updateHudAndDocks(): void {
   homeNameEl.textContent = formatScorebugTeamName(match.home.name);
   awayScoreEl.textContent = String(match.away.totalRuns);
   homeScoreEl.textContent = String(match.home.totalRuns);
-  sbInningEl.textContent = `${match.half === 'top' ? '▲' : '▼'}${match.inning}`;
+  sbInningEl.textContent = `${visualHalf === 'top' ? '▲' : '▼'}${visualInning}`;
 
   const batter = getCurrentBatter(match);
   const fielding = getFieldingTeam(match);
@@ -1331,18 +1350,11 @@ function updateHudAndDocks(): void {
   sbBatterEl.textContent = batter.name;
   sbPitcherEl.textContent = pitcherSlot?.name ?? '--';
 
-  // Show LIVE (matchmaking) vs FRIEND (friend room) badge in scoreboard ticker for all online/spectate games
-  const showKind = isOnline && !onTitleScreen && onlineRoomKind !== null;
-  sbRoomKindEl.hidden = !showKind;
-  if (showKind && onlineRoomKind) {
-    sbRoomKindEl.dataset.kind = onlineRoomKind;
-    sbRoomKindEl.textContent = onlineRoomKind === 'friend' ? t('roomTagFriend') : t('roomTagLive');
-  }
-
-  // Pitch type / speed / break now lives inside the side Pitch Location panel so Scorebug stays sleek & narrow
-  sbTelemetryEl.hidden = onTitleScreen || !spectating;
-  if (spectating) {
-    sbTelemetryEl.textContent = `${t('watchPrefix')} ${onlineRoomCode ?? ''}`;
+  // Online / Friend / Spectate scoreboard shows live spectator count (eye icon + ": N")
+  const showSpecCount = isOnline && !onTitleScreen;
+  sbTelemetryEl.hidden = !showSpecCount;
+  if (showSpecCount) {
+    sbSpecNumEl.textContent = `: ${onlineSpectatorCount}`;
   }
 
   if (match.derby.active) {
@@ -1365,7 +1377,7 @@ function updateHudAndDocks(): void {
     document.getElementById(`s${i}`)?.classList.toggle('on', match.strikes >= i);
     document.getElementById(`o${i}`)?.classList.toggle('on', match.outs >= i);
   }
-  const absSide = isOnline && onlineSide ? onlineSide : 'home';
+  const absSide = isOnline && onlineSide ? onlineSide : cpuPlayerSide;
   const absLeft = match.absChallenges[absSide];
   for (let i = 1; i <= 2; i++) {
     document.getElementById(`abs-${i}`)?.classList.toggle('on', absLeft >= i);
@@ -1451,21 +1463,27 @@ function startMode(mode: GameMode, suppressStandbyNotice = false): void {
   spectating = false;
   onlineSide = null;
   onlineRoomCode = null;
-  onlineRoomKind = null;
+  onlineSpectatorCount = 0;
   onlineTurnState = 'awaiting_pitch';
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
   saveSession(null);
 
+  // Randomize first/second batting (away=先攻 vs home=後攻) for CPU 3-inning & practice modes
+  cpuPlayerSide = Math.random() < 0.5 ? 'away' : 'home';
+  const cpuHumanName = getOnlinePlayerName();
   match = createMatch(mode, {
-    awayName: '中正黑',
-    homeName: '中正黃',
+    awayName: cpuPlayerSide === 'away' ? `中正黑 ${cpuHumanName}` : '中正黑 CPU',
+    homeName: cpuPlayerSide === 'home' ? `中正黃 ${cpuHumanName}` : '中正黃 CPU',
     awayLineup: AWAY_LINEUP,
     homeLineup: HOME_LINEUP,
   });
   if (mode === 'practice_bat') {
-    match.half = 'bottom';
+    match.half = cpuPlayerSide === 'away' ? 'top' : 'bottom';
+  } else if (mode === 'practice_pitch') {
+    match.half = cpuPlayerSide === 'home' ? 'top' : 'bottom';
   }
+  visualInning = match.inning;
   visualHalf = match.half;
   onTitleScreen = false;
   titleScreen.hidden = true;
@@ -1532,8 +1550,9 @@ function returnToTitle(): void {
   spectating = false;
   onlineSide = null;
   onlineRoomCode = null;
-  onlineRoomKind = null;
+  onlineSpectatorCount = 0;
   onlineWaitingQueue = false;
+  visualInning = 1;
   visualHalf = 'top';
   lobbyHub.hidden = false;
   queuePanel.hidden = true;
@@ -3049,12 +3068,13 @@ function enterOnlineMatch(
   queuePanel.hidden = true;
   onlineSide = msg.side;
   onlineRoomCode = msg.code;
-  onlineRoomKind = msg.roomKind ?? 'live';
+  onlineSpectatorCount = msg.spectators ?? 0;
   onlinePitchSeq = msg.pitchSeq;
   onlineTurnState = msg.turnState;
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
   match = msg.match;
+  visualInning = match.inning;
   visualHalf = match.half;
   batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
@@ -3110,12 +3130,13 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   hideMatchOfferToast();
   onlineSide = null;
   onlineRoomCode = msg.code;
-  onlineRoomKind = msg.roomKind ?? 'live';
+  onlineSpectatorCount = msg.spectators ?? 0;
   onlinePitchSeq = msg.pitchSeq;
   onlineTurnState = msg.turnState;
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
   match = msg.match;
+  visualInning = match.inning;
   visualHalf = match.half;
   batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
@@ -3352,16 +3373,20 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       showOnZoneFeedback(takePayload, getFeedbackDurationSec(), true);
       startAbsPromptWindow();
       presentationQueue.push({ kind: 'wait_abs' });
+      presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
     } else if (
-      !spectating &&
       match.lastChallenge &&
       !match.lastChallenge.challenged &&
       match.absChallenges[match.lastChallenge.eligibleSide] > 0
     ) {
-      // Opponent has a 2.2s ABS decision window; hold pitcher briefly so they cannot sneak-throw over ABS!
+      // Opponent / spectator: show pitch card while holding strikeout/inning_change/game_over
+      // until the challenger's full 2.2s ABS decision window expires!
       oppAbsWaitTimer = 2.2;
+      presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
+      presentationQueue.push({ kind: 'wait_opp_abs' });
+    } else {
+      presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
     }
-    presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
   }
 
   if (isStrikeout && !match.isGameOver) {
@@ -3404,6 +3429,13 @@ onlineClient.onMessage((msg) => {
     case 'stats': {
       lastOnlineCount = msg.stats.online;
       topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
+      break;
+    }
+    case 'spectator_count': {
+      if (isOnline && !onTitleScreen) {
+        onlineSpectatorCount = msg.count;
+        sbSpecNumEl.textContent = `: ${onlineSpectatorCount}`;
+      }
       break;
     }
     case 'room_created': {
@@ -3484,8 +3516,6 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'abs_result': {
-      const prevInning = match.inning;
-      const prevHalf = match.half;
       const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
       const prevBatterName = getCurrentBatter(match).name;
       match = msg.match;
@@ -3495,6 +3525,7 @@ onlineClient.onMessage((msg) => {
       oppAbsWaitTimer = 0;
       btnAbsChallenge.hidden = true;
       clearPresentationQueue();
+      transitionDirector.clear();
       absReplay = {
         active: true,
         plateX: msg.plateX,
@@ -3510,9 +3541,11 @@ onlineClient.onMessage((msg) => {
       if (match.isGameOver) saveSession(null);
       else resetPitchClock();
 
-      // Queue post-ABS transitions cleanly after Hawk-Eye replay finishes
+      // Queue post-ABS transitions cleanly after Hawk-Eye replay finishes.
+      // Compare against (visualInning, visualHalf) so overturning a 3rd-out call back to the
+      // original half never triggers a bogus change-sides banner.
       presentationQueue.push({ kind: 'wait_abs_replay' });
-      const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+      const inningChanged = match.inning !== visualInning || match.half !== visualHalf;
       const struckOut = match.strikes === 0 && match.lastEvent.includes('strikes out');
       if (struckOut && !match.isGameOver) {
         presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
@@ -3591,17 +3624,14 @@ onlineClient.onMessage((msg) => {
         else if (msg.reason === 'resign') match.endReason = 'resign';
         else if (msg.reason === 'pitch_clock_forfeit') match.endReason = 'pitch_clock';
       }
-      visualHalf = match.half;
+      visualInning = match.inning;
+  visualHalf = match.half;
       onlineTurnState = 'game_over';
       phase = 'result';
       cam.setFollowTarget(null);
       saveSession(null);
       updateHudAndDocks();
       showGameOverModal();
-      break;
-    }
-    case 'rematch_requested': {
-      emoteCtrl.showSystem(t('rematchReqTitle'), t('rematchReqSub'), '#f4c41c', 2600);
       break;
     }
     case 'emote': {
@@ -3764,14 +3794,7 @@ for (const dlg of [menuDialog, cpuDialog, friendDialog, watchDialog, rulesDialog
     const val = dlg.returnValue;
     dlg.returnValue = '';
     if (dlg === resultDialog) {
-      if (val === 'rematch') {
-        if (isOnline && !spectating) {
-          onlineClient.rematch();
-          emoteCtrl.showSystem(t('rematchSent'), t('rematchWait'), '#f4c41c', 2400);
-        } else {
-          startMode(match.mode);
-        }
-      } else if (val === 'menu') {
+      if (val === 'menu' || val === '') {
         returnToTitle();
       }
     }

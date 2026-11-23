@@ -360,8 +360,6 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
       return { type: 'abs_challenge', pitchSeq: raw.q };
     case 'rs':
       return { type: 'resign' };
-    case 'rm':
-      return { type: 'rematch' };
     case 'em':
       return { type: 'emote', id: raw.e };
     case 'mp':
@@ -537,6 +535,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
       if (msg.token) out.k = msg.token;
       if (msg.names) out.nm = msg.names;
       if (typeof msg.rtt === 'number') out.rt = msg.rtt;
+      if (typeof msg.spectators === 'number') out.sc = msg.spectators;
       if (msg.activePitch) {
         const ap = msg.activePitch as Record<string, unknown>;
         out.ap = [
@@ -615,6 +614,11 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
           ? (msg.pausedSides as string[]).map((s) => (s === 'home' ? 1 : 0))
           : [],
         sec: typeof msg.remainingSec === 'number' ? msg.remainingSec : 0,
+      };
+    case 'spectator_count':
+      return {
+        t: 'sc',
+        n: typeof msg.count === 'number' ? msg.count : 0,
       };
     case 'match_offer':
       return {
@@ -820,6 +824,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         names: raw.nm ?? { home: match.home.name, away: match.away.name },
         activePitch: decodeAp(raw.ap),
         rtt: raw.rt ?? 0,
+        spectators: typeof raw.sc === 'number' ? raw.sc : 0,
       };
     }
     case 'sp': {
@@ -871,6 +876,11 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         type: 'pause_state',
         pausedSides: Array.isArray(raw.sd) ? raw.sd.map((v) => (v === 1 ? 'home' : 'away')) : [],
         remainingSec: typeof raw.sec === 'number' ? raw.sec : 0,
+      };
+    case 'sc':
+      return {
+        type: 'spectator_count',
+        count: typeof raw.n === 'number' ? raw.n : 0,
       };
     case 'of':
       return {

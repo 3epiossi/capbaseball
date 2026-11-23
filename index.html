@@ -89,8 +89,13 @@
               <span class="sb-matchup-item"><em class="sb-tag" data-i18n="sbAb">AB</em><span id="sb-batter">NastYboY #99</span></span>
               <span class="sb-div" aria-hidden="true"></span>
               <span class="sb-matchup-item"><em class="sb-tag" data-i18n="sbP">P</em><span id="sb-pitcher">skywalker #18</span></span>
-              <span id="sb-room-kind" class="sb-room-kind" hidden>LIVE</span>
-              <span id="sb-telemetry" class="sb-telemetry-text" hidden>READY</span>
+              <span id="sb-telemetry" class="sb-telemetry-text" hidden aria-label="Spectators">
+                <svg class="sb-eye-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                <span id="sb-spec-num">: 0</span>
+              </span>
             </div>
           </aside>
         </div>
@@ -518,8 +523,7 @@
       </div>
       <div class="dlg-body" id="result-body"></div>
       <form method="dialog" class="dlg-foot">
-        <button class="act-btn" value="menu" data-i18n="btnMainMenu">MAIN MENU</button>
-        <button class="act-btn primary" value="rematch" data-i18n="btnRematch" autofocus>REMATCH</button>
+        <button class="act-btn primary" value="menu" data-i18n="btnMainMenu" autofocus>MAIN MENU</button>
       </form>
     </dialog>
 
