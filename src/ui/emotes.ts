@@ -58,6 +58,21 @@ const SEND_COOLDOWN_MS = 3000;
 const MAX_HISTORY = 5;
 
 /**
+ * Applies a gentle font shrink to long player-name labels (CJK / full-width glyphs count as 2 units)
+ * and exposes the full name via `title`. Any residual overflow is ellipsized by CSS, so long names
+ * never change the surrounding layout or clip the accompanying message / score.
+ */
+export function fitNameLabel(el: HTMLElement, name: string, shortUnits = 8, longUnits = 12): void {
+  let units = 0;
+  for (const ch of name) {
+    units += /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 2 : 1;
+  }
+  const scale = units <= shortUnits ? 1 : units <= longUnits ? 0.86 : 0.76;
+  el.style.setProperty('--name-scale', String(scale));
+  el.title = units > shortUnits ? name : '';
+}
+
+/**
  * Unified Speech-Bubble Chat & Broadcast Hub:
  * - Hosts 8 fixed text-only quick-chat presets
  * - Hosts all non-pitch game broadcasts (Next Batter, IBB, Pitch Clock) & online system notices
@@ -209,6 +224,7 @@ export class EmoteController {
         tagEl.className = 'chat-log-tag';
         tagEl.style.color = item.accent;
         tagEl.textContent = item.tag;
+        fitNameLabel(tagEl, item.tag);
         const msgEl = document.createElement('span');
         msgEl.className = 'chat-log-text';
         msgEl.textContent = item.text;
@@ -319,6 +335,7 @@ export class EmoteController {
     tagEl.className = 'chat-b-tag';
     tagEl.style.color = entry.accent;
     tagEl.textContent = entry.tag;
+    fitNameLabel(tagEl, entry.tag);
 
     const textEl = document.createElement('span');
     textEl.className = 'chat-b-text';

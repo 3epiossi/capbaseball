@@ -1,0 +1,11 @@
+{
+  "name": "中正瓶蓋棒球社 · Cap Baseball",
+  "short_name": "瓶蓋棒球",
+  "description": "6-DOF 3D Aerodynamic Bottle Cap Baseball Game (Online & Offline CPU)",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#070b14",
+  "theme_color": "#0b1120"
+}

@@ -5,6 +5,7 @@ import {
   encodePitchId,
   round2,
   round3,
+  type CompactMatchDecodeContext,
   type ServerLoadStatus,
 } from './protocol';
 
@@ -207,14 +208,25 @@ export type ServerMessage =
   | { type: 'spectator_count'; count: number }
   | { type: 'match_offer'; offerId: string; opponentName: string; mode: OnlineMode; timeoutSec: number }
   | { type: 'offer_cancelled'; offerId: string; reason: string }
+  | {
+      type: 'session_status';
+      active: boolean;
+      code: string;
+      roomKind: RoomKind;
+      opponentName: string;
+      remainingSec: number;
+      waiting: boolean;
+    }
   | { type: 'notice'; kind: string; countdownSec?: number; updateAtMs?: number }
   | { type: 'error'; code: string; message: string; load?: ServerLoadStatus };
 
 const SESSION_KEY = 'capbaseball_online_session';
+const SESSION_TTL_MS = 10 * 60 * 1000;
 
 export interface StoredSession {
   code: string;
   token: string;
+  savedAtMs?: number;
 }
 
 export function getBasePath(): string {
@@ -234,8 +246,11 @@ export function saveSession(session: StoredSession | null): void {
   try {
     if (!session) {
       sessionStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(SESSION_KEY);
     } else {
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      const payload = JSON.stringify({ ...session, savedAtMs: Date.now() });
+      sessionStorage.setItem(SESSION_KEY, payload);
+      localStorage.setItem(SESSION_KEY, payload);
     }
   } catch {
     // ignore storage errors
@@ -244,10 +259,16 @@ export function saveSession(session: StoredSession | null): void {
 
 export function loadSession(): StoredSession | null {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    const raw = sessionStorage.getItem(SESSION_KEY) ?? localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredSession;
-    if (parsed?.code && parsed?.token) return parsed;
+    if (parsed?.code && parsed?.token) {
+      if (typeof parsed.savedAtMs === 'number' && Date.now() - parsed.savedAtMs > SESSION_TTL_MS) {
+        saveSession(null);
+        return null;
+      }
+      return parsed;
+    }
   } catch {
     // ignore
   }
@@ -264,6 +285,7 @@ export class OnlineClient {
   private pendingPingAt = 0;
   private missedPings = 0;
   private rttWindow: number[] = [];
+  private matchDecodeCtx: CompactMatchDecodeContext = {};
 
   connected = false;
   rttMs = 0;
@@ -441,7 +463,19 @@ export class OnlineClient {
         } catch {
           return;
         }
-        const msg = decodeServerMsg(parsed) as ServerMessage;
+        const msg = decodeServerMsg(parsed, this.matchDecodeCtx) as ServerMessage;
+        if (
+          msg.type === 'match_start' ||
+          msg.type === 'state_sync' ||
+          msg.type === 'spectate_sync'
+        ) {
+          this.matchDecodeCtx = {
+            awayName: msg.match.away.name,
+            homeName: msg.match.home.name,
+            mode: msg.match.mode,
+            regulationInnings: msg.match.regulationInnings,
+          };
+        }
         if (msg.type === 'ping') {
           this.sendRaw({ t: 'po', n: msg.t });
           return;
@@ -536,6 +570,14 @@ export class OnlineClient {
 
   reconnect(code: string, token: string): void {
     this.sendRaw({ t: 'rc', c: code, k: token });
+  }
+
+  checkSession(code: string, token: string): void {
+    this.sendRaw({ t: 'scq', c: code, k: token });
+  }
+
+  forfeitSession(code: string, token: string): void {
+    this.sendRaw({ t: 'scf', c: code, k: token });
   }
 
   submitPitch(payload: {

@@ -28,6 +28,22 @@ export interface MetricsSample {
   piTempC: number | null;
 }
 
+export interface StorageHealthStats {
+  status: MonitorLoadStatus;
+  device: string;
+  fsType: string;
+  readOnly: boolean;
+  totalGb: number;
+  availGb: number;
+  usedPct: number;
+  writtenGbBoot: number | null;
+  writeKbPerSec: number;
+  avgWriteAwaitMs: number;
+  ioBusyPct: number;
+  fsErrorsCount: number;
+  hwLifeInfo: string | null;
+}
+
 export interface PiSystemStats {
   platform: string;
   arch: string;
@@ -40,6 +56,7 @@ export interface PiSystemStats {
   cpuTempC: number | null;
   throttledHex: string | null;
   tcpEstab8788: number | null;
+  storage?: StorageHealthStats;
 }
 
 export interface RoomHealthSnapshot {
@@ -168,6 +185,28 @@ export class ServerMonitor {
     wsOutKbPerSec: 0,
   };
 
+  private storageStats: StorageHealthStats = {
+    status: 'green',
+    device: '--',
+    fsType: '--',
+    readOnly: false,
+    totalGb: 0,
+    availGb: 0,
+    usedPct: 0,
+    writtenGbBoot: null,
+    writeKbPerSec: 0,
+    avgWriteAwaitMs: 0,
+    ioBusyPct: 0,
+    fsErrorsCount: 0,
+    hwLifeInfo: null,
+  };
+
+  private lastDiskSampleAt = 0;
+  private lastDiskSectorsWritten = -1;
+  private lastDiskWritesCompleted = -1;
+  private lastDiskWriteMs = -1;
+  private lastDiskIoMs = -1;
+
   private piStats: PiSystemStats = {
     platform: os.platform(),
     arch: os.arch(),
@@ -187,6 +226,7 @@ export class ServerMonitor {
   private sampleTimer: NodeJS.Timeout | null = null;
   private piTimer: NodeJS.Timeout | null = null;
   private throttleTimer: NodeJS.Timeout | null = null;
+  private storageTimer: NodeJS.Timeout | null = null;
   private persistCounter = 0;
   private getSnapshot: (() => ServerSnapshotInput) | null = null;
 
@@ -198,8 +238,11 @@ export class ServerMonitor {
     this.getSnapshot = getSnapshot;
     this.samplePiSystemAsync();
     this.sampleThrottleAsync();
+    this.sampleStorageHealthAsync();
     this.piTimer = setInterval(() => this.samplePiSystemAsync(), 10_000);
     this.throttleTimer = setInterval(() => this.sampleThrottleAsync(), 60_000);
+    // Storage health reads only kernel RAM virtual files (statfs / procfs / sysfs) every 30s -> ZERO SD card wear!
+    this.storageTimer = setInterval(() => this.sampleStorageHealthAsync(), 30_000);
     this.sampleTimer = setInterval(() => this.tickSample(), sampleMs);
   }
 
@@ -215,6 +258,10 @@ export class ServerMonitor {
     if (this.throttleTimer) {
       clearInterval(this.throttleTimer);
       this.throttleTimer = null;
+    }
+    if (this.storageTimer) {
+      clearInterval(this.storageTimer);
+      this.storageTimer = null;
     }
   }
 
@@ -287,7 +334,7 @@ export class ServerMonitor {
           const tempC = Number((milliC > 1000 ? milliC / 1000 : milliC).toFixed(1));
           this.piStats.cpuTempC = tempC;
           if (tempC >= 78) {
-            this.pushAlert('crit', 'TEMP_HIGH', `Pi CPU temperature reached ${tempC}°C`);
+            this.pushAlert('crit', 'TEMP_HIGH', `伺服器 CPU 溫度達 ${tempC}°C`);
           }
         }
       }
@@ -302,12 +349,144 @@ export class ServerMonitor {
           if (m) {
             this.piStats.throttledHex = m[1];
             if (m[1] !== '0x0') {
-              this.pushAlert('warn', 'PI_THROTTLED', `Raspberry Pi throttle/undervoltage flag: ${m[1]}`);
+              this.pushAlert('warn', 'SERVER_THROTTLED', `伺服器降頻或電壓不足旗標：${m[1]}`);
             }
           }
         }
       });
     }
+  }
+
+  /**
+   * Zero-wear storage health check: reads only in-memory kernel structures (VFS statfs, /proc/mounts,
+   * /proc/diskstats, /sys/fs/ext4, /sys/block). Performs zero physical disk reads or writes.
+   */
+  private sampleStorageHealthAsync(): void {
+    if (typeof fs.statfs === 'function') {
+      fs.statfs(process.cwd(), (err, st) => {
+        if (!err && st) {
+          const totalBytes = st.blocks * st.bsize;
+          const availBytes = st.bavail * st.bsize;
+          this.storageStats.totalGb = Number((totalBytes / 1073741824).toFixed(2));
+          this.storageStats.availGb = Number((availBytes / 1073741824).toFixed(2));
+          this.storageStats.usedPct =
+            totalBytes > 0 ? Number((((totalBytes - availBytes) / totalBytes) * 100).toFixed(1)) : 0;
+          this.recomputeStorageStatus();
+        }
+      });
+    }
+
+    if (os.platform() !== 'linux') {
+      this.storageStats.device = os.platform();
+      this.storageStats.fsType = 'local';
+      this.recomputeStorageStatus();
+      return;
+    }
+
+    fs.readFile('/proc/mounts', 'utf8', (err, data) => {
+      if (err || !data) return;
+      let bestMountLen = -1;
+      let rootDev = '';
+      let rootFs = '';
+      let rootOpts = '';
+      const cwd = process.cwd();
+      for (const line of data.split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 4) continue;
+        const [dev, mnt, fstype, opts] = parts;
+        if (!dev.startsWith('/dev/')) continue;
+        if (cwd.startsWith(mnt) && mnt.length > bestMountLen) {
+          bestMountLen = mnt.length;
+          rootDev = dev.replace('/dev/', '');
+          rootFs = fstype;
+          rootOpts = opts;
+        }
+      }
+      if (rootDev) {
+        this.storageStats.device = rootDev;
+        this.storageStats.fsType = rootFs;
+        this.storageStats.readOnly = /(^|,)ro(,|$)/.test(rootOpts);
+
+        // Read EXT4 kernel superblock error counter from sysfs (in-RAM)
+        fs.readFile(`/sys/fs/ext4/${rootDev}/errors_count`, 'utf8', (e2, errTxt) => {
+          if (!e2 && errTxt) {
+            const n = Number(errTxt.trim());
+            if (Number.isFinite(n)) this.storageStats.fsErrorsCount = n;
+          }
+          this.recomputeStorageStatus();
+        });
+
+        // Base block device (e.g. mmcblk0p2 -> mmcblk0, nvme0n1p2 -> nvme0n1, sda1 -> sda)
+        const baseDev = rootDev.replace(/p?\d+$/, '');
+        fs.readFile(`/sys/block/${baseDev}/device/life_time`, 'utf8', (e3, lifeTxt) => {
+          if (!e3 && lifeTxt) {
+            this.storageStats.hwLifeInfo = lifeTxt.trim();
+          }
+        });
+      }
+    });
+
+    fs.readFile('/proc/diskstats', 'utf8', (err, data) => {
+      if (err || !data) return;
+      const now = Date.now();
+      for (const line of data.split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 14) continue;
+        const devName = parts[2];
+        if (devName !== 'mmcblk0' && devName !== 'nvme0n1' && devName !== 'sda' && devName !== 'vda') {
+          continue;
+        }
+        const writesCompleted = Number(parts[7]);
+        const sectorsWritten = Number(parts[9]);
+        const writeMs = Number(parts[10]);
+        const ioMs = Number(parts[12]);
+        if (!Number.isFinite(sectorsWritten)) break;
+
+        this.storageStats.writtenGbBoot = Number(((sectorsWritten * 512) / 1073741824).toFixed(2));
+        if (this.lastDiskSampleAt > 0 && this.lastDiskSectorsWritten >= 0) {
+          const dtSec = Math.max(1, (now - this.lastDiskSampleAt) / 1000);
+          const dSectors = Math.max(0, sectorsWritten - this.lastDiskSectorsWritten);
+          const dWrites = Math.max(0, writesCompleted - this.lastDiskWritesCompleted);
+          const dWriteMs = Math.max(0, writeMs - this.lastDiskWriteMs);
+          const dIoMs = Math.max(0, ioMs - this.lastDiskIoMs);
+
+          this.storageStats.writeKbPerSec = Number(((dSectors * 0.5) / dtSec).toFixed(1));
+          this.storageStats.avgWriteAwaitMs = dWrites > 0 ? Number((dWriteMs / dWrites).toFixed(2)) : 0;
+          this.storageStats.ioBusyPct = Number(Math.min(100, (dIoMs / (dtSec * 1000)) * 100).toFixed(1));
+        }
+        this.lastDiskSampleAt = now;
+        this.lastDiskSectorsWritten = sectorsWritten;
+        this.lastDiskWritesCompleted = writesCompleted;
+        this.lastDiskWriteMs = writeMs;
+        this.lastDiskIoMs = ioMs;
+        break;
+      }
+      this.recomputeStorageStatus();
+    });
+  }
+
+  private recomputeStorageStatus(): void {
+    const s = this.storageStats;
+    if (s.readOnly || s.fsErrorsCount > 0 || s.usedPct >= 92 || s.avgWriteAwaitMs >= 150) {
+      s.status = 'red';
+      if (s.readOnly) {
+        this.pushAlert('crit', 'STORAGE_RO', '伺服器儲存空間已被降級為唯讀模式（RO），請立即檢查儲存裝置！');
+      }
+      if (s.fsErrorsCount > 0) {
+        this.pushAlert('crit', 'STORAGE_FS_ERR', `伺服器檔案系統偵測到 ${s.fsErrorsCount} 次 I/O 錯誤！`);
+      }
+      if (s.usedPct >= 92) {
+        this.pushAlert('crit', 'STORAGE_FULL', `伺服器儲存空間使用率達 ${s.usedPct}%（剩餘 ${s.availGb} GB）`);
+      }
+    } else if (s.usedPct >= 82 || s.avgWriteAwaitMs >= 50) {
+      s.status = 'yellow';
+      if (s.avgWriteAwaitMs >= 50) {
+        this.pushAlert('warn', 'STORAGE_SLOW', `伺服器磁碟寫入平均延遲偏高（${s.avgWriteAwaitMs} ms）`);
+      }
+    } else {
+      s.status = 'green';
+    }
+    this.piStats.storage = { ...s };
   }
 
   private tickSample(): void {
@@ -355,21 +534,21 @@ export class ServerMonitor {
         this.pushAlert(
           'crit',
           'LOAD_RED',
-          `Load RED: clients=${snap.load.clients}/${snap.load.maxClients}, rooms=${snap.load.rooms}/${snap.load.maxRooms}, lag=${snap.load.eventLoopLagMs}ms, rss=${snap.load.rssMb}MB`,
+          `負載紅燈：連線=${snap.load.clients}/${snap.load.maxClients}，房間=${snap.load.rooms}/${snap.load.maxRooms}，延遲=${snap.load.eventLoopLagMs}ms，記憶體=${snap.load.rssMb}MB`,
           5000,
         );
       } else if (snap.load.status === 'yellow') {
         this.pushAlert(
           'warn',
           'LOAD_YELLOW',
-          `Load YELLOW: clients=${snap.load.clients}/${snap.load.maxClients}, rooms=${snap.load.rooms}/${snap.load.maxRooms}, lag=${snap.load.eventLoopLagMs}ms, rss=${snap.load.rssMb}MB`,
+          `負載黃燈：連線=${snap.load.clients}/${snap.load.maxClients}，房間=${snap.load.rooms}/${snap.load.maxRooms}，延遲=${snap.load.eventLoopLagMs}ms，記憶體=${snap.load.rssMb}MB`,
           5000,
         );
       }
       this.lastLoadStatus = snap.load.status;
     }
     if (snap.load.eventLoopLagMs >= 75) {
-      this.pushAlert('warn', 'LAG_SPIKE', `Event loop p95 lag spiked to ${snap.load.eventLoopLagMs}ms`);
+      this.pushAlert('warn', 'LAG_SPIKE', `事件迴圈 p95 延遲升高至 ${snap.load.eventLoopLagMs}ms`);
     }
 
     // Gameplay & match-state anomaly alerts
@@ -379,21 +558,21 @@ export class ServerMonitor {
         this.pushAlert(
           'warn',
           'ROOM_STALLED',
-          `${rh.stalledRooms} active room(s) stalled >45s with both players connected`,
+          `${rh.stalledRooms} 間對戰房雙方在線但停滯超過 45 秒`,
         );
       }
       if (rh.highInningRooms > 0) {
-        this.pushAlert('warn', 'HIGH_INNING', `${rh.highInningRooms} room(s) reached inning 8+`);
+        this.pushAlert('warn', 'HIGH_INNING', `${rh.highInningRooms} 間對戰房進入第 8 局以上延長賽`);
       }
       if (rh.extremeRunDiffRooms > 0) {
-        this.pushAlert('warn', 'EXTREME_SCORE', `${rh.extremeRunDiffRooms} room(s) have run differential >= 15`);
+        this.pushAlert('warn', 'EXTREME_SCORE', `${rh.extremeRunDiffRooms} 間對戰房分差達 15 分以上`);
       }
     }
     if (this.nanSanityErrors > this.lastNanErrors) {
       this.pushAlert(
         'crit',
         'PHYSICS_NAN',
-        `Physics solver produced non-finite value (total=${this.nanSanityErrors})`,
+        `物理引擎出現非有限數值 NaN（累計=${this.nanSanityErrors}）`,
         10_000,
       );
     }
@@ -403,7 +582,7 @@ export class ServerMonitor {
       this.pushAlert(
         'warn',
         'SWING_TIMEOUT_SPIKE',
-        `+${this.swingTimeouts - this.lastSwingTimeouts} swing timeouts in 2s (total=${this.swingTimeouts})`,
+        `2 秒內新增 ${this.swingTimeouts - this.lastSwingTimeouts} 次揮棒逾時（累計=${this.swingTimeouts}）`,
       );
     }
     this.lastSwingTimeouts = this.swingTimeouts;
@@ -412,7 +591,7 @@ export class ServerMonitor {
       this.pushAlert(
         'warn',
         'DESYNC_SPIKE',
-        `+${this.staleOrOutOfTurnIgnored - this.lastStaleIgnored} stale/out-of-turn packets ignored in 2s`,
+        `2 秒內忽略 ${this.staleOrOutOfTurnIgnored - this.lastStaleIgnored} 筆過期或非當回合封包`,
       );
     }
     this.lastStaleIgnored = this.staleOrOutOfTurnIgnored;
@@ -421,7 +600,7 @@ export class ServerMonitor {
       this.pushAlert(
         'warn',
         'INPUT_OUT_OF_RANGE',
-        `+${this.outOfRangeInputsClamped - this.lastInputsClamped} out-of-range pitch/swing inputs clamped`,
+        `攔截並修正 ${this.outOfRangeInputsClamped - this.lastInputsClamped} 筆超界投打參數`,
       );
     }
     this.lastInputsClamped = this.outOfRangeInputsClamped;
@@ -550,7 +729,11 @@ export class ServerMonitor {
         physicsWorkerMode: snap.physicsWorkerMode ?? 'inline',
         physicsWorkerCount: snap.physicsWorkerCount ?? 0,
       },
-      pi: this.piStats,
+      pi: {
+        ...this.piStats,
+        storage: { ...this.storageStats },
+      },
+      storage: { ...this.storageStats },
       gameplay: {
         matchesStarted: this.matchesStarted,
         matchesCompleted: this.matchesCompleted,

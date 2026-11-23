@@ -348,15 +348,15 @@ export function updateOutfielders(
       speedMps = PITCHER_BLOCK_SPRINT_SPEED;
       maxChase = PITCHER_BLOCK_MAX_CHASE;
     } else if (f.id === 'C') {
-      isMySide = pursuitTarget[2] >= -3.8 && pursuitTarget[2] <= 2.4 && Math.abs(pursuitTarget[0]) <= 3.2;
+      isMySide = pursuitTarget[2] >= -4.8 && pursuitTarget[2] <= 3.2 && Math.abs(pursuitTarget[0]) <= 4.8;
       if (!isMySide) {
         f.anim = 'idle';
         continue;
       }
       rawTx = pursuitTarget[0];
-      rawTz = Math.max(-3.8, Math.min(2.2, pursuitTarget[2]));
+      rawTz = Math.max(-4.8, Math.min(3.2, pursuitTarget[2]));
       speedMps = CATCHER_BLOCK_SPRINT_SPEED;
-      maxChase = CATCHER_BLOCK_MAX_CHASE;
+      maxChase = Math.max(CATCHER_BLOCK_MAX_CHASE, 4.6);
     }
 
     // Pre-clamp the fixed destination once to both maxChase radius and gym/fence bounds

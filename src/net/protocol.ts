@@ -41,25 +41,25 @@ const DEFAULT_HOME_LINEUP: PlayerSlot[] = [
 const MODE_LIST: readonly GameMode[] = ['quick3', 'official6', 'practice_bat', 'practice_pitch', 'hotseat2p'];
 
 export interface CompactMatch {
-  /** mode index */
-  m: number;
-  /** regulation innings */
-  ri: number;
-  /** away name, home name */
-  a: string;
-  h: string;
+  /** mode index (omitted on delta updates) */
+  m?: number;
+  /** regulation innings (omitted on delta updates) */
+  ri?: number;
+  /** away name, home name (omitted on delta updates; cached on client from match_start/state_sync) */
+  a?: string;
+  h?: string;
   /** [awayRuns, homeRuns, awayHits, homeHits, awayPitches, homePitches, awayBatIdx, homeBatIdx, awayBB, homeBB, awayK, homeK] */
   t: [number, number, number, number, number, number, number, number, number, number, number, number];
   /** [inning, half(0=top,1=bottom), balls, strikes, outs, basesMask(0..7), absAway, absHome, paInHalf, maxPa] */
   g: [number, number, number, number, number, number, number, number, number, number];
-  /** stats tuple [totalPitches, homeRuns, wildPitches, uncaughtThirdStrikes] */
-  s: [number, number, number, number];
+  /** stats tuple [totalPitches, homeRuns, wildPitches, uncaughtThirdStrikes] (omitted when all 0) */
+  s?: [number, number, number, number];
   /** optional derby [half(0=away,1=home), round, pitchesPerSide, awayLeft, homeLeft, awayHR, homeHR] */
   d?: [number, number, number, number, number, number, number];
   /** optional gameOver + winner ('h'|'a'|'t') */
   go?: 1;
   w?: 'h' | 'a' | 't';
-  /** optional runs-by-inning arrays for full BoxScore line score */
+  /** optional runs-by-inning arrays for full BoxScore line score (omitted on mid-game deltas until isGameOver) */
   ar?: number[];
   hr?: number[];
   /** mercy rule off flag (omitted when enabled) & triggered flag */
@@ -71,17 +71,21 @@ export interface CompactMatch {
   lc?: [number, number, number];
 }
 
-export function packMatch(m: MatchState): CompactMatch {
+export interface CompactMatchDecodeContext {
+  awayName?: string;
+  homeName?: string;
+  mode?: GameMode;
+  regulationInnings?: number;
+}
+
+export function packMatch(m: MatchState, opts?: { delta?: boolean }): CompactMatch {
+  const delta = opts?.delta === true;
   const basesMask =
     (m.bases[0] !== null ? 1 : 0) |
     (m.bases[1] !== null ? 2 : 0) |
     (m.bases[2] !== null ? 4 : 0);
 
   const cm: CompactMatch = {
-    m: Math.max(0, MODE_LIST.indexOf(m.mode)),
-    ri: m.regulationInnings,
-    a: m.away.name,
-    h: m.home.name,
     t: [
       m.away.totalRuns,
       m.home.totalRuns,
@@ -108,13 +112,28 @@ export function packMatch(m: MatchState): CompactMatch {
       m.plateAppearancesInHalf,
       m.maxBattersPerInning,
     ],
-    s: [
+  };
+
+  if (!delta) {
+    cm.m = Math.max(0, MODE_LIST.indexOf(m.mode));
+    cm.ri = m.regulationInnings;
+    cm.a = m.away.name;
+    cm.h = m.home.name;
+  }
+
+  if (
+    m.stats.totalPitches > 0 ||
+    m.stats.homeRuns > 0 ||
+    m.stats.wildPitches > 0 ||
+    m.stats.uncaughtThirdStrikes > 0
+  ) {
+    cm.s = [
       m.stats.totalPitches,
       m.stats.homeRuns,
       m.stats.wildPitches,
       m.stats.uncaughtThirdStrikes,
-    ],
-  };
+    ];
+  }
 
   if (m.derby.active) {
     cm.d = [
@@ -128,8 +147,8 @@ export function packMatch(m: MatchState): CompactMatch {
     ];
   }
   if (m.isGameOver) cm.go = 1;
-  if (m.away.runsByInning.length > 0) cm.ar = m.away.runsByInning;
-  if (m.home.runsByInning.length > 0) cm.hr = m.home.runsByInning;
+  if ((!delta || m.isGameOver) && m.away.runsByInning.length > 0) cm.ar = m.away.runsByInning;
+  if ((!delta || m.isGameOver) && m.home.runsByInning.length > 0) cm.hr = m.home.runsByInning;
   if (m.mercyRule === false) cm.mr = 0;
   if (m.mercyTriggered) cm.mt = 1;
   if (m.endReason === 'mercy') cm.er = 1;
@@ -149,11 +168,14 @@ export function packMatch(m: MatchState): CompactMatch {
   return cm;
 }
 
-export function unpackMatch(cm: CompactMatch): MatchState {
-  const mode: GameMode = MODE_LIST[cm.m] ?? 'quick3';
+export function unpackMatch(cm: CompactMatch, ctx?: CompactMatchDecodeContext): MatchState {
+  const mode: GameMode =
+    typeof cm.m === 'number' ? (MODE_LIST[cm.m] ?? 'quick3') : (ctx?.mode ?? 'quick3');
+  const regInnings =
+    typeof cm.ri === 'number' ? cm.ri : (ctx?.regulationInnings ?? (mode === 'official6' ? 6 : 3));
   const [ar, hr, ah, hh, ap, hp, abi, hbi, abb, hbb, ak, hk] = cm.t;
   const [inning, halfNum, balls, strikes, outs, basesMask, absAway, absHome, paInHalf, maxPa] = cm.g;
-  const [totalPitches, homeRuns, wildPitches, uncaughtThirdStrikes] = cm.s;
+  const [totalPitches, homeRuns, wildPitches, uncaughtThirdStrikes] = cm.s ?? [0, 0, 0, 0];
   const half = halfNum === 0 ? 'top' : 'bottom';
   const winner = cm.w === 'h' ? 'home' : cm.w === 'a' ? 'away' : cm.w === 't' ? 'tie' : null;
   const bases: [string | null, string | null, string | null] = [
@@ -164,7 +186,7 @@ export function unpackMatch(cm: CompactMatch): MatchState {
 
   return {
     mode,
-    regulationInnings: cm.ri,
+    regulationInnings: regInnings,
     inning,
     half,
     balls,
@@ -172,7 +194,7 @@ export function unpackMatch(cm: CompactMatch): MatchState {
     outs,
     bases,
     away: {
-      name: cm.a,
+      name: cm.a ?? ctx?.awayName ?? '',
       lineup: DEFAULT_AWAY_LINEUP.map((p) => ({ ...p })),
       batterIndex: abi,
       runsByInning: Array.isArray(cm.ar) && cm.ar.length > 0 ? [...cm.ar] : [ar],
@@ -183,7 +205,7 @@ export function unpackMatch(cm: CompactMatch): MatchState {
       pitchesThrown: ap,
     },
     home: {
-      name: cm.h,
+      name: cm.h ?? ctx?.homeName ?? '',
       lineup: DEFAULT_HOME_LINEUP.map((p) => ({ ...p })),
       batterIndex: hbi,
       runsByInning: Array.isArray(cm.hr) && cm.hr.length > 0 ? [...cm.hr] : [hr],
@@ -323,6 +345,10 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
       return { type: 'join', code: raw.c, name: raw.n };
     case 'rc':
       return { type: 'reconnect', code: raw.c, token: raw.k };
+    case 'scq':
+      return { type: 'session_check', code: raw.c, token: raw.k };
+    case 'scf':
+      return { type: 'session_forfeit', code: raw.c, token: raw.k };
     case 'bs':
       return { type: 'set_batter_side', side: raw.s === 1 ? 'R' : 'L' };
     case 'ib':
@@ -407,7 +433,9 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         ...(typeof msg.updateAtMs === 'number' && msg.updateAtMs > 0 ? { ua: msg.updateAtMs } : {}),
       };
     }
-    case 'pitch_launch':
+    case 'pitch_launch': {
+      const ex = round3(Number(msg.errorX));
+      const ey = round3(Number(msg.errorY));
       return {
         t: 'pl',
         q: msg.pitchSeq,
@@ -416,11 +444,12 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         v: round2(Number(msg.speedKmh)),
         x: round3(Number(msg.targetX)),
         y: round3(Number(msg.targetY)),
-        ex: round3(Number(msg.errorX)),
-        ey: round3(Number(msg.errorY)),
+        ...(ex !== 0 ? { ex } : {}),
+        ...(ey !== 0 ? { ey } : {}),
         s: msg.batterSide === 'R' ? 1 : 0,
         b: msg.breakCm,
       };
+    }
     case 'pitch_result': {
       const res = msg.resolution as Record<string, unknown> | null;
       let cr: Record<string, unknown> | undefined;
@@ -429,7 +458,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         cr = {
           c: 0,
           lb: res.label,
-          fb: res.feedback,
+          ...(res.feedback !== res.label ? { fb: res.feedback } : {}),
           dt: res.detail,
           cl: res.color,
           tm: round3(Number(res.dtTiming)),
@@ -456,7 +485,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         const hf = res.hitField as number[];
         cr = {
           lb: res.label,
-          fb: res.feedback,
+          ...(res.feedback !== res.label ? { fb: res.feedback } : {}),
           dt: res.detail,
           cl: res.color,
           ql: res.quality,
@@ -483,7 +512,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
                   : []),
               ]
             : 0,
-          oc: res.outcome,
+          ...(res.outcome !== msg.outcome ? { oc: res.outcome } : {}),
           ev: Math.round(Number(res.exitSpeedKmh)),
           ...(typeof res.launchAngleDeg === 'number' ? { la: Math.round(res.launchAngleDeg) } : {}),
           dm: round2(Number(res.distanceM)),
@@ -493,12 +522,14 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
       const out: Record<string, unknown> = {
         t: 'pr',
         q: msg.pitchSeq,
-        nq: msg.nextPitchSeq,
+        ...(msg.nextPitchSeq !== Number(msg.pitchSeq) + 1 ? { nq: msg.nextPitchSeq } : {}),
         sw: msg.swung ? 1 : 0,
         oc: msg.outcome,
-        co: [co.title, co.subtitle, co.color, round2(co.ttl)],
+        co: co.subtitle === co.title
+          ? [co.title, co.color, round2(co.ttl)]
+          : [co.title, co.subtitle, co.color, round2(co.ttl)],
         tl: msg.telemetry,
-        cm: packMatch(msg.match as MatchState),
+        cm: packMatch(msg.match as MatchState, { delta: true }),
       };
       if (msg.ibb) out.ib = 1;
       if (msg.clockViolation) out.cv = 1;
@@ -591,14 +622,24 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         py: round3(Number(msg.plateY)),
         cs: msg.challengerSide === 'home' ? 1 : 0,
         q: msg.pitchSeq,
-        cm: packMatch(msg.match as MatchState),
+        cm: packMatch(msg.match as MatchState, { delta: true }),
       };
     case 'match_over':
       return {
         t: 'mo',
         w: msg.winner,
         rs: msg.reason,
-        cm: packMatch(msg.match as MatchState),
+        cm: packMatch(msg.match as MatchState, { delta: true }),
+      };
+    case 'session_status':
+      return {
+        t: 'scs',
+        ok: msg.active ? 1 : 0,
+        ...(msg.code ? { c: msg.code } : {}),
+        ...(msg.roomKind ? { rk: msg.roomKind === 'friend' ? 1 : 0 } : {}),
+        ...(typeof msg.opponentName === 'string' && msg.opponentName ? { opp: msg.opponentName } : {}),
+        ...(typeof msg.remainingSec === 'number' ? { rem: Math.max(0, Math.round(msg.remainingSec)) } : {}),
+        ...(msg.waiting ? { wt: 1 } : {}),
       };
     case 'emote':
       return {
@@ -649,7 +690,10 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
 /**
  * Decode compact v2 OR legacy verbose server-to-client message into canonical ServerMessage shape.
  */
-export function decodeServerMsg(raw: Record<string, unknown>): Record<string, unknown> {
+export function decodeServerMsg(
+  raw: Record<string, unknown>,
+  ctx?: CompactMatchDecodeContext,
+): Record<string, unknown> {
   if (typeof raw.type === 'string') return raw;
   const decodeTurn = (v: unknown) =>
     v === 1 ? 'awaiting_swing' : v === 2 ? 'game_over' : 'awaiting_pitch';
@@ -708,8 +752,8 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         speedKmh: raw.v,
         targetX: raw.x,
         targetY: raw.y,
-        errorX: raw.ex,
-        errorY: raw.ey,
+        errorX: raw.ex ?? 0,
+        errorY: raw.ey ?? 0,
         batterSide: raw.s === 1 ? 'R' : 'L',
         breakCm: raw.b,
       };
@@ -720,7 +764,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         resolution = {
           contact: false,
           label: r.lb,
-          feedback: r.fb,
+          feedback: r.fb ?? r.lb,
           detail: r.dt,
           color: r.cl,
           quality: 'weak',
@@ -762,7 +806,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         resolution = {
           contact: true,
           label: r.lb,
-          feedback: r.fb,
+          feedback: r.fb ?? r.lb,
           detail: r.dt,
           color: r.cl,
           quality: r.ql,
@@ -774,18 +818,23 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
             seed: bp[6],
           },
           catchInfo,
-          outcome: r.oc,
+          outcome: r.oc ?? raw.oc,
           exitSpeedKmh: r.ev,
           ...(typeof r.la === 'number' ? { launchAngleDeg: r.la } : {}),
           distanceM: r.dm,
         };
       }
-      const co = raw.co as [string, string, string, number];
+      const coArr = raw.co as unknown[];
+      const callout =
+        coArr.length === 3
+          ? { title: String(coArr[0]), subtitle: String(coArr[0]), color: String(coArr[1]), ttl: Number(coArr[2]) }
+          : { title: String(coArr[0]), subtitle: String(coArr[1]), color: String(coArr[2]), ttl: Number(coArr[3]) };
       const sdArr = Array.isArray(raw.sd) ? (raw.sd as number[]) : null;
+      const pitchSeq = Number(raw.q);
       return {
         type: 'pitch_result',
-        pitchSeq: raw.q,
-        nextPitchSeq: raw.nq,
+        pitchSeq,
+        nextPitchSeq: typeof raw.nq === 'number' ? raw.nq : pitchSeq + 1,
         swung: raw.sw === 1,
         ibb: raw.ib === 1,
         clockViolation: raw.cv === 1,
@@ -800,16 +849,16 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
           : null,
         resolution,
         outcome: raw.oc,
-        callout: { title: co[0], subtitle: co[1], color: co[2], ttl: co[3] },
+        callout,
         inningChanged: raw.ic === 1,
         telemetry: raw.tl,
         ...(Array.isArray(raw.pp) ? { platePos: raw.pp } : {}),
-        match: unpackMatch(raw.cm as CompactMatch),
+        match: unpackMatch(raw.cm as CompactMatch, ctx),
       };
     }
     case 'ms':
     case 'ss': {
-      const match = unpackMatch(raw.cm as CompactMatch);
+      const match = unpackMatch(raw.cm as CompactMatch, ctx);
       return {
         type: raw.t === 'ms' ? 'match_start' : 'state_sync',
         code: raw.c,
@@ -828,7 +877,7 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
       };
     }
     case 'sp': {
-      const match = unpackMatch(raw.cm as CompactMatch);
+      const match = unpackMatch(raw.cm as CompactMatch, ctx);
       return {
         type: 'spectate_sync',
         code: raw.c,
@@ -855,14 +904,24 @@ export function decodeServerMsg(raw: Record<string, unknown>): Record<string, un
         plateY: raw.py,
         challengerSide: raw.cs === 1 ? 'home' : 'away',
         pitchSeq: raw.q,
-        match: unpackMatch(raw.cm as CompactMatch),
+        match: unpackMatch(raw.cm as CompactMatch, ctx),
       };
     case 'mo':
       return {
         type: 'match_over',
         winner: raw.w,
         reason: raw.rs,
-        match: unpackMatch(raw.cm as CompactMatch),
+        match: unpackMatch(raw.cm as CompactMatch, ctx),
+      };
+    case 'scs':
+      return {
+        type: 'session_status',
+        active: raw.ok === 1,
+        code: typeof raw.c === 'string' ? raw.c : '',
+        roomKind: raw.rk === 1 ? 'friend' : 'live',
+        opponentName: typeof raw.opp === 'string' ? raw.opp : '',
+        remainingSec: typeof raw.rem === 'number' ? raw.rem : 0,
+        waiting: raw.wt === 1,
       };
     case 'em':
       return {

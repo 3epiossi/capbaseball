@@ -3,7 +3,7 @@ export const MONITOR_HTML = `<!doctype html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Cap Baseball · Server Monitor</title>
+  <title>瓶蓋棒球 · 伺服器即時監控面板</title>
   <style>
     :root {
       --bg: #070b14;
@@ -48,9 +48,18 @@ export const MONITOR_HTML = `<!doctype html>
     }
     .badge[data-status="yellow"] { border-color: var(--gold); color: var(--gold); background: rgba(244, 196, 28, 0.14); }
     .badge[data-status="red"] { border-color: var(--red); color: #fda4af; background: rgba(244, 63, 94, 0.16); }
+    .nav-link {
+      color: var(--cyan);
+      text-decoration: none;
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      background: #0a1020;
+      font-weight: 700;
+    }
+    .nav-link:hover { border-color: var(--cyan); }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(225px, 1fr));
       gap: 12px;
       margin-bottom: 14px;
     }
@@ -68,9 +77,9 @@ export const MONITOR_HTML = `<!doctype html>
       border-bottom: 1px solid #1e2d4a;
       padding-bottom: 5px;
     }
-    .kv { display: flex; justify-content: space-between; padding: 3px 0; }
+    .kv { display: flex; justify-content: space-between; padding: 3px 0; gap: 8px; }
     .kv span { color: var(--muted); }
-    .kv strong { color: var(--text); }
+    .kv strong { color: var(--text); text-align: right; }
     .warn-val { color: var(--red) !important; }
     .charts {
       display: grid;
@@ -89,14 +98,16 @@ export const MONITOR_HTML = `<!doctype html>
       max-height: 220px;
       overflow-y: auto;
       font-size: 12px;
-      line-height: 1.45;
     }
-    .alert-row { padding: 4px 0; border-bottom: 1px solid #19243b; }
-    .alert-crit { color: #fda4af; }
-    .alert-warn { color: var(--gold); }
-    .act-title-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-    .act-title-bar h2 { margin: 0; }
-    .standby-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(251, 146, 60, 0.14); border: 1px solid rgba(251, 146, 60, 0.55); color: #fdba74; font-variant-numeric: tabular-nums; }
+    .alert-row {
+      padding: 5px 8px;
+      border-bottom: 1px solid #18233a;
+    }
+    .alert-crit { color: #fda4af; background: rgba(244, 63, 94, 0.12); }
+    .alert-warn { color: #fde047; }
+    .act-title-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #1e2d4a; padding-bottom: 6px; margin-bottom: 10px; }
+    .act-title-bar h2 { border-bottom: none; padding-bottom: 0; margin: 0; }
+    .standby-pill { font-size: 11px; font-weight: 700; color: var(--gold); background: rgba(244, 196, 28, 0.14); border: 1px solid rgba(244, 196, 28, 0.5); padding: 2px 8px; border-radius: 999px; }
     .act-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 14px; }
     .act-row { display: flex; flex-direction: column; gap: 3px; }
     .act-head { display: flex; justify-content: space-between; font-size: 12px; }
@@ -110,99 +121,94 @@ export const MONITOR_HTML = `<!doctype html>
 <body>
   <header>
     <div>
-      <h1>CAP BASEBALL · PI LIVE TELEMETRY &amp; TRAFFIC MONITOR</h1>
-      <div class="muted" id="meta-line">Loading metrics...</div>
+      <h1>瓶蓋棒球 · 伺服器即時監控面板</h1>
+      <div class="muted" id="meta-line">載入監控數據中...</div>
     </div>
-    <div id="status-badge" class="badge" data-status="green">LOADING</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <a class="nav-link" href="./analytics">對戰數據分析</a>
+      <a class="nav-link" href="./">返回遊戲</a>
+      <div id="status-badge" class="badge" data-status="green">載入中</div>
+    </div>
   </header>
 
   <section class="grid">
     <div class="card">
-      <h2>Connections &amp; Rooms</h2>
-      <div class="kv"><span>Active Clients</span><strong id="c-active">-</strong></div>
-      <div class="kv"><span>In Match / Queue / Spec</span><strong id="c-split">-</strong></div>
-      <div class="kv"><span>Rooms (Match / Friend)</span><strong id="c-rooms">-</strong></div>
-      <div class="kv"><span>Unique IPs / Max per IP</span><strong id="c-ips">-</strong></div>
-      <div class="kv"><span>Total Accepted / Closed</span><strong id="c-churn">-</strong></div>
+      <h2>連線與房間狀態</h2>
+      <div class="kv"><span>目前在線人數</span><strong id="c-active">-</strong></div>
+      <div class="kv"><span>對戰中 / 排隊 / 觀戰</span><strong id="c-split">-</strong></div>
+      <div class="kv"><span>活躍房間（隨機 / 好友）</span><strong id="c-rooms">-</strong></div>
+      <div class="kv"><span>獨立 IP 數 / 單 IP 上限</span><strong id="c-ips">-</strong></div>
+      <div class="kv"><span>累計連線 / 累計離線</span><strong id="c-churn">-</strong></div>
     </div>
 
     <div class="card">
-      <h2>Live Traffic &amp; Throughput</h2>
-      <div class="kv"><span>WS In / Out (msg/s)</span><strong id="t-ws-rate">-</strong></div>
-      <div class="kv"><span>WS In / Out (KB/s)</span><strong id="t-ws-kb">-</strong></div>
-      <div class="kv"><span>HTTP Req/s &amp; KB/s</span><strong id="t-http-rate">-</strong></div>
-      <div class="kv"><span>Static RAM Cache (Hits/304)</span><strong id="t-cache">-</strong></div>
-      <div class="kv"><span>Total WS Out / HTTP Out</span><strong id="t-totals">-</strong></div>
+      <h2>即時網路流量與吞吐</h2>
+      <div class="kv"><span>WS 收發速率（封包/秒）</span><strong id="t-ws-rate">-</strong></div>
+      <div class="kv"><span>WS 頻寬（收 / 發 KB/s）</span><strong id="t-ws-kb">-</strong></div>
+      <div class="kv"><span>HTTP 請求與流量</span><strong id="t-http-rate">-</strong></div>
+      <div class="kv"><span>記憶體靜態快取（命中/304）</span><strong id="t-cache">-</strong></div>
+      <div class="kv"><span>累計總流量（WS / HTTP）</span><strong id="t-totals">-</strong></div>
     </div>
 
     <div class="card">
-      <h2>Node.js &amp; Raspberry Pi</h2>
-      <div class="kv"><span>Event Loop p95 Lag</span><strong id="r-lag">-</strong></div>
-      <div class="kv"><span>Node CPU / RSS / Heap</span><strong id="r-mem">-</strong></div>
-      <div class="kv"><span>Pi Load Avg (1m / 5m)</span><strong id="r-piload">-</strong></div>
-      <div class="kv"><span>Pi Avail Mem / Temp</span><strong id="r-temp">-</strong></div>
-      <div class="kv"><span>Physics Solve (avg / max)</span><strong id="r-phys">-</strong></div>
+      <h2>Node.js 與伺服器硬體</h2>
+      <div class="kv"><span>事件迴圈延遲 (p95)</span><strong id="r-lag">-</strong></div>
+      <div class="kv"><span>CPU / 常駐記憶體 / 堆積</span><strong id="r-mem">-</strong></div>
+      <div class="kv"><span>伺服器系統負載 (1分 / 5分)</span><strong id="r-piload">-</strong></div>
+      <div class="kv"><span>伺服器可用記憶體 / 溫度</span><strong id="r-temp">-</strong></div>
+      <div class="kv"><span>物理引擎耗時（平均 / 最大）</span><strong id="r-phys">-</strong></div>
     </div>
 
     <div class="card">
-      <h2>Rejections &amp; Fault Counters</h2>
-      <div class="kv"><span>Rejected: Server Busy</span><strong id="f-busy">-</strong></div>
-      <div class="kv"><span>Rejected: IP Limit (1008)</span><strong id="f-ip">-</strong></div>
-      <div class="kv"><span>Rejected: Rate Limit</span><strong id="f-rate">-</strong></div>
-      <div class="kv"><span>Dead Pong (Match / Idle)</span><strong id="f-dead">-</strong></div>
-      <div class="kv"><span>HTTP 4xx / 5xx</span><strong id="f-http">-</strong></div>
+      <h2>伺服器儲存空間健康度</h2>
+      <div class="kv"><span>健康狀態與裝置</span><strong id="s-health">-</strong></div>
+      <div class="kv"><span>可用空間 / 使用率</span><strong id="s-space">-</strong></div>
+      <div class="kv"><span>掛載讀寫狀態</span><strong id="s-mount">-</strong></div>
+      <div class="kv"><span>開機寫入量 / 即時寫入</span><strong id="s-writes">-</strong></div>
+      <div class="kv"><span>寫入延遲 / 檔案系統錯誤</span><strong id="s-errors">-</strong></div>
     </div>
 
     <div class="card">
-      <h2>Match Lifecycle &amp; Live Scan</h2>
-      <div class="kv"><span>Started / Completed / Rematch</span><strong id="g-started">-</strong></div>
-      <div class="kv"><span>Resigned / DC Timeout / Wait Exp</span><strong id="g-ended">-</strong></div>
-      <div class="kv"><span>ABS Challenge (Overturned)</span><strong id="g-abs">-</strong></div>
-      <div class="kv"><span>Oldest Room / Avg Pitches</span><strong id="g-age">-</strong></div>
-      <div class="kv"><span>High Inning (8+) / Diff (15+)</span><strong id="g-extreme">-</strong></div>
-    </div>
-
-    <div class="card">
-      <h2>Gameplay Anomalies &amp; Sync</h2>
-      <div class="kv"><span>Stalled (&gt;45s) / DC Wait Rooms</span><strong id="g-stalled">-</strong></div>
-      <div class="kv"><span>Pitch Clock / Swing Timeouts</span><strong id="g-clocks">-</strong></div>
-      <div class="kv"><span>Stale / Out-of-Turn Ignored</span><strong id="g-stale">-</strong></div>
-      <div class="kv"><span>In-Match DC / Reconn OK / Fail</span><strong id="g-reconn">-</strong></div>
-      <div class="kv"><span>Clamped Inputs / NaN Physics</span><strong id="g-integrity">-</strong></div>
+      <h2>防護攔截與錯誤統計</h2>
+      <div class="kv"><span>伺服器滿載拒連</span><strong id="f-busy">-</strong></div>
+      <div class="kv"><span>單 IP 超限拒連 (1008)</span><strong id="f-ip">-</strong></div>
+      <div class="kv"><span>訊息頻率超限攔截</span><strong id="f-rate">-</strong></div>
+      <div class="kv"><span>逾時斷線（對戰 / 閒置）</span><strong id="f-dead">-</strong></div>
+      <div class="kv"><span>HTTP 異常（4xx / 5xx）</span><strong id="f-http">-</strong></div>
     </div>
   </section>
 
   <section class="card" style="margin-bottom: 12px;">
     <div class="act-title-bar">
-      <h2>Live Player Pages &amp; Activity Breakdown (玩家所在頁面即時分布)</h2>
+      <h2>玩家所在頁面即時分布</h2>
       <span id="standby-pill" class="standby-pill">線上候補名單：0 人</span>
     </div>
-    <div id="activity-grid" class="act-grid muted">Loading...</div>
+    <div id="activity-grid" class="act-grid muted">載入中...</div>
   </section>
 
   <section class="charts">
     <div class="card">
-      <h2>Online Clients &amp; Rooms (Last 10m)</h2>
+      <h2>在線人數與活躍房間趨勢（近 10 分鐘）</h2>
       <svg id="chart-clients" class="spark" viewBox="0 0 360 110" preserveAspectRatio="none"></svg>
     </div>
     <div class="card">
-      <h2>WS Throughput (msg/s &amp; KB/s)</h2>
+      <h2>WebSocket 封包吞吐趨勢（封包/秒）</h2>
       <svg id="chart-ws" class="spark" viewBox="0 0 360 110" preserveAspectRatio="none"></svg>
     </div>
     <div class="card">
-      <h2>Event Loop Lag (ms) &amp; CPU (%)</h2>
+      <h2>事件迴圈延遲 (ms) 與 CPU 使用率 (%)</h2>
       <svg id="chart-lag" class="spark" viewBox="0 0 360 110" preserveAspectRatio="none"></svg>
     </div>
   </section>
 
   <section class="grid">
     <div class="card">
-      <h2>Top WebSocket Packet Types (In / Out)</h2>
+      <h2>熱門 WebSocket 封包類型統計（收 / 發）</h2>
       <div id="top-packets" class="muted">-</div>
     </div>
     <div class="card">
-      <h2>Recent System Alerts</h2>
-      <div id="alerts-box" class="alerts muted">No alerts recorded.</div>
+      <h2>近期系統警報紀錄</h2>
+      <div id="alerts-box" class="alerts muted">目前無任何異常警報。</div>
     </div>
   </section>
 
@@ -213,6 +219,12 @@ export const MONITOR_HTML = `<!doctype html>
 
 export const MONITOR_JS = `(() => {
   const $ = (id) => document.getElementById(id);
+
+  const STATUS_LABELS = {
+    green: '正常運作',
+    yellow: '負載偏高',
+    red: '負載危急',
+  };
 
   function setText(id, val, warn) {
     const el = $(id);
@@ -256,7 +268,7 @@ export const MONITOR_JS = `(() => {
     lbl.setAttribute('y', '13');
     lbl.setAttribute('fill', '#94a3b8');
     lbl.setAttribute('font-size', '10');
-    lbl.textContent = 'peak ' + maxVal.toFixed(maxVal >= 10 ? 0 : 1) + unit + ' · now ' + seriesA[n - 1] + unit;
+    lbl.textContent = '峰值 ' + maxVal.toFixed(maxVal >= 10 ? 0 : 1) + unit + ' · 目前 ' + seriesA[n - 1] + unit;
     svg.appendChild(lbl);
   }
 
@@ -266,26 +278,27 @@ export const MONITOR_JS = `(() => {
       const url = './metrics' + (token ? '?token=' + encodeURIComponent(token) : '');
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) {
-        $('meta-line').textContent = 'Metrics HTTP ' + res.status;
+        $('meta-line').textContent = '監控資料讀取失敗 HTTP ' + res.status;
         return;
       }
       const d = await res.json();
       const badge = $('status-badge');
       badge.dataset.status = d.load.status;
-      badge.textContent = d.load.status.toUpperCase() + (d.draining ? ' (DRAINING)' : '');
+      const stLabel = STATUS_LABELS[d.load.status] || d.load.status.toUpperCase();
+      badge.textContent = stLabel + (d.draining ? '（準備更新中）' : '');
       $('meta-line').textContent =
-        'Version ' + (d.version || 'dev') + ' · Uptime ' + d.uptimeSec + 's · Updated ' + d.timestamp;
+        '版本 ' + (d.version || '開發版') + ' · 已運行 ' + d.uptimeSec + ' 秒 · 更新時間 ' + d.timestamp.slice(11, 19);
 
       const c = d.connections;
       const pubCap = d.load.publicClientCap || d.load.maxClients;
-      const reserveTag = d.load.friendReserveActive ? ' [FRIEND RESERVE]' : '';
+      const reserveTag = d.load.friendReserveActive ? ' [好友房保留席啟用]' : '';
       setText(
         'c-active',
         c.activeClients + ' / ' + pubCap + '+' + Math.max(0, d.load.maxClients - pubCap) + reserveTag,
         c.activeClients >= pubCap
       );
       setText('c-split', c.inMatch + ' / ' + c.queuing + ' / ' + c.spectating);
-      setText('c-rooms', c.roomsActive + ' (' + c.matchmakingRooms + ' / ' + c.friendRooms + ')');
+      setText('c-rooms', c.roomsActive + '（隨機 ' + c.matchmakingRooms + ' / 好友 ' + c.friendRooms + '）');
       setText('c-ips', c.uniqueIps + ' / ' + c.maxConnsSingleIp);
       setText('c-churn', c.acceptedTotal + ' / ' + c.closedTotal);
 
@@ -300,8 +313,8 @@ export const MONITOR_JS = `(() => {
         const acts = c.activities || {};
         const total = Math.max(1, c.activeClients || 0);
         const defs = [
-          ['online_live', '線上配對對戰 (LIVE)', '#fb7185'],
-          ['online_friend', '好友房對戰 (FRIEND)', '#38bdf8'],
+          ['online_live', '線上隨機對戰', '#fb7185'],
+          ['online_friend', '好友房對戰', '#38bdf8'],
           ['online_queue', '線上配對排隊中', '#facc15'],
           ['friend_wait', '好友房等待加入', '#60a5fa'],
           ['spectating', '即時觀戰中', '#c084fc'],
@@ -326,7 +339,7 @@ export const MONITOR_JS = `(() => {
           const cnt = document.createElement('span');
           cnt.className = 'act-cnt';
           cnt.style.color = n > 0 ? color : '#64748b';
-          cnt.textContent = n + ' (' + pct + '%)';
+          cnt.textContent = n + ' 人 (' + pct + '%)';
           head.append(lbl, cnt);
           const track = document.createElement('div');
           track.className = 'act-track';
@@ -344,8 +357,8 @@ export const MONITOR_JS = `(() => {
       const tr = d.traffic;
       setText('t-ws-rate', r.wsInPerSec + ' / ' + r.wsOutPerSec);
       setText('t-ws-kb', r.wsInKbPerSec + ' / ' + r.wsOutKbPerSec);
-      setText('t-http-rate', r.httpReqPerSec + ' req/s · ' + r.httpOutKbPerSec + ' KB/s');
-      setText('t-cache', tr.staticCache.files + ' files (' + tr.staticCache.hits + ' / ' + tr.staticCache.notModified304 + ')');
+      setText('t-http-rate', r.httpReqPerSec + ' 次/秒 · ' + r.httpOutKbPerSec + ' KB/s');
+      setText('t-cache', tr.staticCache.files + ' 檔（命中 ' + tr.staticCache.hits + ' / 304 ' + tr.staticCache.notModified304 + '）');
       setText('t-totals', tr.wsOutMbTotal + ' MB / ' + tr.httpOutMbTotal + ' MB');
 
       const rt = d.runtime;
@@ -355,12 +368,37 @@ export const MONITOR_JS = `(() => {
       setText('r-piload', pi.load1m + ' / ' + pi.load5m);
       setText(
         'r-temp',
-        pi.memAvailMb + ' MB · ' + (pi.cpuTempC !== null ? pi.cpuTempC + '°C' : 'N/A'),
+        pi.memAvailMb + ' MB · ' + (pi.cpuTempC !== null ? pi.cpuTempC + '°C' : '無感測器'),
         pi.cpuTempC !== null && pi.cpuTempC >= 75
       );
       setText(
         'r-phys',
-        rt.physicsAvgMs + ' / ' + rt.physicsMaxMs + ' ms (' + (rt.physicsWorkerCount > 0 ? rt.physicsWorkerCount + 'w' : 'inline') + ')'
+        rt.physicsAvgMs + ' / ' + rt.physicsMaxMs + ' ms（' + (rt.physicsWorkerCount > 0 ? rt.physicsWorkerCount + ' 執行緒' : '主執行緒') + '）'
+      );
+
+      const st = d.storage || (pi && pi.storage) || {};
+      const stHealthMap = { green: '良好', yellow: '注意', red: '危急' };
+      const stHealthTxt = (stHealthMap[st.status] || '良好') + (st.device ? ' (' + st.device + ' · ' + (st.fsType || '-') + ')' : '');
+      setText('s-health', stHealthTxt, st.status === 'red' || st.status === 'yellow');
+      setText(
+        's-space',
+        (st.availGb ?? '-') + ' GB 可用 / ' + (st.totalGb ?? '-') + ' GB (' + (st.usedPct ?? 0) + '%)',
+        (st.usedPct || 0) >= 82
+      );
+      setText(
+        's-mount',
+        st.readOnly ? '異常唯讀 (RO)！' : '正常讀寫 (RW)' + (st.hwLifeInfo ? ' · 壽命 ' + st.hwLifeInfo : ''),
+        Boolean(st.readOnly)
+      );
+      setText(
+        's-writes',
+        (st.writtenGbBoot !== null && st.writtenGbBoot !== undefined ? st.writtenGbBoot + ' GB' : '系統未提供') +
+          ' · ' + (st.writeKbPerSec || 0) + ' KB/s'
+      );
+      setText(
+        's-errors',
+        (st.avgWriteAwaitMs || 0) + ' ms · ' + (st.fsErrorsCount || 0) + ' 次錯誤',
+        (st.fsErrorsCount || 0) > 0 || (st.avgWriteAwaitMs || 0) >= 50
       );
 
       const fj = d.rejections;
@@ -370,49 +408,24 @@ export const MONITOR_JS = `(() => {
       setText('f-dead', fj.deadPongTimeout + ' / ' + (fj.idleClosed || 0), fj.deadPongTimeout >= 10);
       setText('f-http', tr.httpStatuses['4xx'] + ' / ' + tr.httpStatuses['5xx']);
 
-      const gp = d.gameplay || {};
-      const rh = gp.roomsHealth || {};
-      setText('g-started', (gp.matchesStarted || 0) + ' / ' + (gp.matchesCompleted || 0) + ' / ' + (gp.rematchesStarted || 0));
-      setText('g-ended', (gp.matchesResigned || 0) + ' / ' + (gp.matchesDisconnectTimeout || 0) + ' / ' + (gp.waitingExpired || 0));
-      setText('g-abs', (gp.absChallengesTotal || 0) + ' (' + (gp.absOverturned || 0) + ')');
-      setText('g-age', (rh.oldestRoomAgeMin || 0) + 'm / ' + (rh.avgMatchPitches || 0) + 'p (max ' + (rh.maxMatchRuns || 0) + 'r)');
-      setText(
-        'g-extreme',
-        (rh.highInningRooms || 0) + ' / ' + (rh.extremeRunDiffRooms || 0),
-        (rh.highInningRooms || 0) > 0 || (rh.extremeRunDiffRooms || 0) > 0
-      );
-      setText(
-        'g-stalled',
-        (rh.stalledRooms || 0) + ' / ' + (rh.disconnectedRooms || 0),
-        (rh.stalledRooms || 0) > 0
-      );
-      setText('g-clocks', (gp.pitchClockViolations || 0) + ' / ' + (gp.swingTimeouts || 0));
-      setText('g-stale', gp.staleOrOutOfTurnIgnored || 0, (gp.staleOrOutOfTurnIgnored || 0) >= 20);
-      setText('g-reconn', (gp.disconnectsInMatch || 0) + ' / ' + (gp.reconnectsSucceeded || 0) + ' / ' + (gp.reconnectsFailed || 0), (gp.reconnectsFailed || 0) > 0);
-      setText(
-        'g-integrity',
-        (gp.outOfRangeInputsClamped || 0) + ' / ' + (gp.nanSanityErrors || 0),
-        (gp.outOfRangeInputsClamped || 0) > 0 || (gp.nanSanityErrors || 0) > 0
-      );
-
       const hist = d.history || [];
       renderSpark('chart-clients', hist.map((x) => x.clients), '#38bdf8', hist.map((x) => x.rooms), '#f4c41c', '');
-      renderSpark('chart-ws', hist.map((x) => x.wsOutPerSec), '#22c55e', hist.map((x) => x.wsInPerSec), '#38bdf8', '/s');
+      renderSpark('chart-ws', hist.map((x) => x.wsOutPerSec), '#22c55e', hist.map((x) => x.wsInPerSec), '#38bdf8', '/秒');
       renderSpark('chart-lag', hist.map((x) => x.lagMs), '#f43f5e', hist.map((x) => x.cpuPct), '#f4c41c', '');
 
       const topEl = $('top-packets');
       topEl.replaceChildren();
       const fmtList = (label, arr) => {
         const div = document.createElement('div');
-        div.textContent = label + ': ' + arr.map((x) => x.type + '=' + x.count).join(', ');
+        div.textContent = label + '：' + (arr.length > 0 ? arr.map((x) => x.type + '=' + x.count).join(', ') : '無');
         return div;
       };
-      topEl.append(fmtList('IN', tr.topInTypes || []), fmtList('OUT', tr.topOutTypes || []));
+      topEl.append(fmtList('接收', tr.topInTypes || []), fmtList('發送', tr.topOutTypes || []));
 
       const alertsEl = $('alerts-box');
       alertsEl.replaceChildren();
       if (!d.alerts || d.alerts.length === 0) {
-        alertsEl.textContent = 'All clear — zero alerts recorded.';
+        alertsEl.textContent = '系統運作正常 — 目前無任何異常警報。';
       } else {
         for (const a of d.alerts) {
           const row = document.createElement('div');
@@ -422,7 +435,7 @@ export const MONITOR_JS = `(() => {
         }
       }
     } catch (e) {
-      $('meta-line').textContent = 'Monitor fetch error: ' + String(e);
+      $('meta-line').textContent = '監控連線錯誤：' + String(e);
     }
   }
 

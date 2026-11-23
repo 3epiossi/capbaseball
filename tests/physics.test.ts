@@ -493,4 +493,34 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     expect(intSpeeds.length).toBeGreaterThan(40);
     expect(Math.max(...intSpeeds) - Math.min(...intSpeeds)).toBeLessThan(0.05);
   });
+
+  it('allows defenders (C/P/LF/RF) to catch high foul pop-ups from evaluateSwingResolution as FOUL OUT', () => {
+    const traj = solvePitchTrajectory('straight', PITCH_SPECS.straight.defaultSpeedKmh, 0, 0.72, {
+      seed: 42,
+    });
+    const hit = simToField(traj.hitPlanePos);
+    const effHalfH = BAT_PCI_NORMAL.halfH + CONTACT_BALL_RADIUS_M;
+    let caughtCount = 0;
+    const catchers = new Set<string>();
+    for (let s = 1; s <= 40; s++) {
+      const res = evaluateSwingResolution({
+        trajectory: traj,
+        flightTimeSec: traj.hitPlaneTimeSec - 0.095, // early foul timing band (|dt| in (0.068, 0.145])
+        batX: hit[0],
+        batY: hit[1] - 0.65 * effHalfH, // undercut pop-up (uY = +0.65)
+        swingMode: 'normal',
+        batterSide: s % 2 === 0 ? 'R' : 'L',
+        seed: s,
+      });
+      expect(res.contact).toBe(true);
+      if (res.contact && res.catchInfo.caught) {
+        caughtCount += 1;
+        expect(res.outcome).toBe('OUT');
+        expect(res.detail).toContain('FOUL OUT');
+        if (res.catchInfo.fielderId) catchers.add(res.catchInfo.fielderId);
+      }
+    }
+    expect(caughtCount).toBeGreaterThan(0);
+    expect(catchers.size).toBeGreaterThan(0);
+  });
 });

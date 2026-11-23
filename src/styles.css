@@ -234,7 +234,9 @@ select {
 .sb-teams {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
+  /* Fixed column width: long player names shrink / ellipsize instead of widening the scorebug */
+  flex: 0 0 auto;
+  width: var(--sb-teams-w, 120px);
   min-width: 0;
   overflow: hidden;
   border-right: 2px solid #24324d;
@@ -279,7 +281,7 @@ select {
 .sb-team-name {
   font-family: var(--font-broadcast);
   font-weight: 700;
-  font-size: 0.86rem;
+  font-size: calc(0.86rem * var(--name-scale, 1));
   letter-spacing: 0.03em;
   color: var(--text-main);
   white-space: nowrap;
@@ -1939,6 +1941,44 @@ dialog.watch-dialog {
   width: min(95vw, 540px);
 }
 
+dialog.reconnect-dialog {
+  width: min(92vw, 420px);
+}
+
+.reconnect-desc {
+  margin: 0 0 0.55rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--text-main);
+}
+
+.reconnect-timer {
+  margin: 0 0 0.45rem;
+  padding: 0.42rem 0.65rem;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #334155;
+  font-family: var(--font-broadcast);
+  font-size: 0.86rem;
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reconnect-timer strong {
+  color: var(--gold);
+  font-family: var(--font-pixel);
+  font-size: 0.94rem;
+}
+
+.reconnect-warn {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #f87171;
+  line-height: 1.35;
+}
+
 .watch-list {
   display: flex;
   flex-direction: column;
@@ -2275,7 +2315,7 @@ dialog.watch-dialog {
   }
 
   .sb-teams {
-    min-width: 84px;
+    --sb-teams-w: 84px;
   }
 
   .sb-team-row {
@@ -2284,7 +2324,7 @@ dialog.watch-dialog {
   }
 
   .sb-team-name {
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--name-scale, 1));
   }
 
   .sb-team-runs {
@@ -2514,11 +2554,11 @@ dialog.watch-dialog {
   }
 
   .sb-teams {
-    min-width: 72px;
+    --sb-teams-w: 72px;
   }
 
   .sb-team-name {
-    font-size: 0.7rem;
+    font-size: calc(0.7rem * var(--name-scale, 1));
   }
 
   .sb-ticker-row {
@@ -2623,7 +2663,7 @@ dialog.watch-dialog {
   }
 
   .sb-teams {
-    min-width: 176px;
+    --sb-teams-w: 176px;
   }
 
   .sb-team-row {
@@ -2632,7 +2672,7 @@ dialog.watch-dialog {
   }
 
   .sb-team-name {
-    font-size: 1.22rem;
+    font-size: calc(1.22rem * var(--name-scale, 1));
   }
 
   .sb-team-runs {
@@ -2876,7 +2916,7 @@ dialog.watch-dialog {
   width: max-content;
   max-width: min(74vw, 320px);
   padding: 0.42rem 0.78rem;
-  border-radius: 999px;
+  border-radius: 18px;
   background: rgba(9, 15, 30, 0.96);
   border: 2px solid var(--chat-accent, #38bdf8);
   box-shadow: 0 6px 18px rgba(4, 7, 15, 0.78);
@@ -2927,8 +2967,14 @@ dialog.watch-dialog {
 }
 
 .chat-b-tag {
-  flex-shrink: 0;
-  font-size: 0.68rem;
+  /* Long sender names shrink + ellipsize; the message text is never truncated */
+  flex: 0 1 auto;
+  min-width: 2.6em;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(0.68rem * var(--name-scale, 1));
   font-weight: 800;
   letter-spacing: 0.05em;
   padding: 0.08rem 0.38rem;
@@ -2939,9 +2985,10 @@ dialog.watch-dialog {
 
 .chat-b-text {
   color: #f8fafc;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Messenger-Style Quick-Chat & Feed Popover opening UPWARD from the Chat Ball */
@@ -3018,14 +3065,21 @@ dialog.watch-dialog {
 }
 
 .chat-log-tag {
-  flex-shrink: 0;
-  font-size: 0.66rem;
+  flex: 0 1 auto;
+  min-width: 2.6em;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(0.66rem * var(--name-scale, 1));
   font-weight: 800;
 }
 
 .chat-log-text {
   color: #e2e8f0;
-  word-break: break-word;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-options-grid {

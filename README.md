@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.3.7`（語意化三段式版本號），Pi 現行部署版本 `20261123-180437`
+- **目前里程碑**：`v2.4.0`（語意化三段式版本號），Pi 現行部署版本 `20261124-042256`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -252,3 +252,9 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **主畫面精簡、快捷對話微調與捕手回傳起點修正**：移除主標題上下列標語，於主標下方以 `你好， [■ 玩家名稱]` 呈現可點擊改名按鈕；`zh-TW` 快捷對話 `emoteFire` 更新為 `114514`；線上連續投球時鐘超時裁定門檻由 3 次下修為 **2 次**（[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts)、[tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 52/52 通過）；捕手像素右手回傳動畫（[src/render/catcherReturn.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/catcherReturn.ts)）改以指尖螢幕座標反推 3D 起點，達成 0 像素瞬移自然拋出。
 - **v2.3.7 修正投手出手瞬間殘留舊瓶蓋閃現（2026-11-23）**：
   - [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 於進入 `windup` 及抵達 `release_frame` 開啟 `capVisible = true` 當下，同步以 `activePitch.sampleAt(0)` 重置 `capPos`、`capNormalField` 與 `capTrail` 至出手點座標，徹底消除換球後首幀閃出上一球近景大瓶蓋的問題。
+- **v2.4.0 雙層對戰紀錄與 `/analytics` 分析頁、`/monitor` 儲存健康度監測、PWA 離線遊玩與多項細節打磨（2026-11-24）**：
+  - **雙層線上對戰數據紀錄與 `/analytics` 分析頁面**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 於 `data/matches.jsonl` 與 `data/pitches.jsonl` 紀錄所有線上隨機（`live`）與好友（`friend`）對局及逐球遙測，並於 [server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 新增 `/analytics` 頁面（僅從檔案尾端快速讀取最近 100 場／2,000 球統計，硬碟採 5,000 場／50,000 球滾動上限），融合對局生命週期與異常同步監測。
+  - **`/monitor` 全面中文化與零磨損儲存空間健康度監測**：[server/monitor.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitor.ts) 與 [server/monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts) 全面改為繁體中文並統一「伺服器」用語，新增獨立「伺服器儲存空間健康度」卡片，透過 `statfs`／`/proc/mounts`／`/proc/diskstats`／`/sys/fs/ext4`／`/sys/block` 在記憶體內零磨損偵測可用容量、唯讀降級（RO）、寫入延遲與檔案系統錯誤。
+  - **好壞球顯示卡升級與投球預覽精簡**：好壞球卡累積顯示同打席前幾球進壘點（較小純灰實心圓點）與當前球（`1:1` 彩色 `◎`），且依結果區分色系（安打 `1B/2B/3B` 電光藍 `#38bdf8`、全壘打 `HR` 霓虹紫 `#d946ef`、界外球琥珀橘 `#fb923c`、好球金色、壞球綠色、出局紅色）；投球預覽（[src/render/speedRibbon.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/render/speedRibbon.ts)）改只繪製最 `SOFT` 與最 `HARD`（原 `OVER` 改名）兩條 3D 軌跡並保留好球帶機率雲聯集邊界。
+  - **PWA 離線遊玩支援**：[vite.config.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/vite.config.ts) 建置期自動生成 `sw.js` 預快取所有遊戲頁面、JS/CSS、精靈圖與字型（主畫面導航採 Network-First + 3 秒逾時／5xx 自動退回本地快取），搭配 [public/manifest.webmanifest](file:///Users/chang/Documents/raspberry%20pi/capbaseball/public/manifest.webmanifest) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 離線即時切換 CPU 對戰（1.2 秒快速偵測，不乾等 40 秒），就算伺服器關機或手機無網路也能點開即玩。
+  - **網路瘦身、界外飛球接殺與對局體驗修正**：[src/net/protocol.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/protocol.ts) 新增 `delta` 差異封包與 `session_check`/`session_forfeit`；[src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts) 支援全守備員追趕界外高飛球接殺（`FOUL OUT`）；[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 支援斷線重連確認視窗、長名字自動縮字省略、換局動畫結束前凍結全畫面局數／計分板／好球帶／操作面板，以及 CPU 模式投球途中暫停恢復時安全重置該球（測試擴充至 **54/54** 全部通過）。

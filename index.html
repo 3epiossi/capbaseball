@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b101d" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <title>fallen skywalker</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -224,7 +226,7 @@
           <div class="spring-zone-labels" aria-hidden="true">
             <span class="sz-lbl sz-normal" id="sz-normal" data-i18n="springNormal">SOFT</span>
             <span class="sz-lbl sz-best" id="sz-best" data-i18n="springBest">BEST</span>
-            <span class="sz-lbl sz-over" id="sz-over" data-i18n="springOver">OVER</span>
+            <span class="sz-lbl sz-over" id="sz-over" data-i18n="springOver">HARD</span>
           </div>
         </div>
 
@@ -521,6 +523,22 @@
       <div class="dlg-body" id="result-body"></div>
       <form method="dialog" class="dlg-foot">
         <button class="act-btn primary" value="menu" data-i18n="btnMainMenu" autofocus>MAIN MENU</button>
+      </form>
+    </dialog>
+
+    <!-- Reconnect confirmation: shown when returning within the disconnect grace window -->
+    <dialog id="reconnect-dialog" class="reconnect-dialog" aria-labelledby="reconnect-title">
+      <div class="dlg-head">
+        <h2 id="reconnect-title" data-i18n="dlgReconnectTitle">RETURN TO MATCH?</h2>
+      </div>
+      <div class="dlg-body">
+        <p class="reconnect-desc" id="reconnect-desc"></p>
+        <p class="reconnect-timer"><span data-i18n="reconnectRemaining">Time left</span> <strong id="reconnect-countdown">--</strong></p>
+        <p class="reconnect-warn" data-i18n="reconnectForfeitWarn">Leaving counts as a forfeit.</p>
+      </div>
+      <form method="dialog" class="dlg-foot">
+        <button class="act-btn" value="forfeit" data-i18n="btnReconnectForfeit">FORFEIT</button>
+        <button class="act-btn primary" value="rejoin" data-i18n="btnReconnectRejoin" autofocus>RETURN</button>
       </form>
     </dialog>
 

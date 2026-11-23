@@ -231,7 +231,7 @@ export function buildFullDefense(baseFielders?: readonly OutfielderInit[]): Outf
  */
 function clampDefenderToGym(x: number, z: number, role: FielderId): [number, number] {
   let nx = Math.max(-15.5, Math.min(15.5, x));
-  let nz = role === 'C' ? Math.max(-4.8, Math.min(2.6, z)) : Math.max(-14.2, Math.min(2.2, z));
+  let nz = role === 'C' ? Math.max(-5.2, Math.min(3.4, z)) : Math.max(-14.2, Math.min(2.4, z));
   // Only clamp against the 12.45m fence arc when inside the fair sector (foul territory stays open up to walls)
   if (nz < 0 && Math.abs(nx) <= -nz) {
     const r = Math.hypot(nx, nz);
@@ -285,6 +285,7 @@ export function simulateDeterministicCatch(
   }
 
   const landingTarget = batted.firstLandingPos ?? batted.stoppedPos;
+  const isFoulFly = !isFair(landingTarget[0], landingTarget[2]);
 
   const actors = initialOutfielders.map((f, idx) => ({
     id: f.id,
@@ -317,13 +318,25 @@ export function simulateDeterministicCatch(
 
     for (const f of actors) {
       const reactDelay =
-        f.id === 'P' ? 0.62 : f.id === 'C' ? 0.34 : OUTFIELDER_REACTION_DELAY;
+        f.id === 'P'
+          ? isFoulFly ? 0.50 : 0.62
+          : f.id === 'C'
+            ? isFoulFly ? 0.26 : 0.34
+            : isFoulFly ? 0.36 : OUTFIELDER_REACTION_DELAY;
       const sprintSpd =
-        f.id === 'P' ? 3.5 : f.id === 'C' ? 3.4 : OUTFIELDER_SPRINT_SPEED;
+        f.id === 'P'
+          ? isFoulFly ? 3.7 : 3.5
+          : f.id === 'C'
+            ? isFoulFly ? 3.9 : 3.4
+            : isFoulFly ? 3.6 : OUTFIELDER_SPRINT_SPEED;
       const maxChase =
-        f.id === 'P' ? 2.8 : f.id === 'C' ? 3.2 : OUTFIELDER_MAX_CHASE_DIST;
+        f.id === 'P'
+          ? isFoulFly ? 3.8 : 2.8
+          : f.id === 'C'
+            ? isFoulFly ? 4.8 : 3.2
+            : isFoulFly ? 4.5 : OUTFIELDER_MAX_CHASE_DIST;
       const catchRad =
-        f.id === 'P' || f.id === 'C' ? 0.50 : OUTFIELDER_CATCH_RADIUS;
+        f.id === 'P' || f.id === 'C' ? (isFoulFly ? 0.56 : 0.50) : isFoulFly ? 0.54 : OUTFIELDER_CATCH_RADIUS;
 
       // 3. Reaction delay + ramp-up acceleration over first 0.35s of running
       if (frame.t >= reactDelay && dt > 0) {
@@ -332,16 +345,22 @@ export function simulateDeterministicCatch(
         const isMySide =
           (f.id === 'LF' && landingTarget[0] <= 1.2) ||
           (f.id === 'RF' && landingTarget[0] >= -1.2) ||
-          (f.id === 'P' && Math.abs(landingTarget[0]) <= 3.0 && landingTarget[2] >= -11.5 && landingTarget[2] <= -4.5) ||
-          (f.id === 'C' && landingTarget[2] >= -4.2 && landingTarget[2] <= 2.6);
+          (f.id === 'P' &&
+            Math.abs(landingTarget[0]) <= (isFoulFly ? 4.5 : 3.0) &&
+            landingTarget[2] >= -11.5 &&
+            landingTarget[2] <= (isFoulFly ? -3.6 : -4.5)) ||
+          (f.id === 'C' &&
+            Math.abs(landingTarget[0]) <= (isFoulFly ? 5.2 : 3.4) &&
+            landingTarget[2] >= (isFoulFly ? -5.2 : -4.2) &&
+            landingTarget[2] <= (isFoulFly ? 3.4 : 2.6));
 
         const tx = isMySide ? landingTarget[0] : f.id === 'LF' || f.id === 'RF' ? f.homePos[0] * 0.65 : f.homePos[0];
         const tz = isMySide
           ? f.id === 'C'
-            ? Math.max(-4.2, Math.min(2.4, landingTarget[2]))
+            ? Math.max(isFoulFly ? -5.2 : -4.2, Math.min(isFoulFly ? 3.4 : 2.4, landingTarget[2]))
             : f.id === 'P'
-              ? Math.max(-11.5, Math.min(-4.5, landingTarget[2]))
-              : Math.max(-MAX_FIELDER_RADIUS_M, Math.min(1.5, landingTarget[2]))
+              ? Math.max(-11.5, Math.min(isFoulFly ? -3.6 : -4.5, landingTarget[2]))
+              : Math.max(-MAX_FIELDER_RADIUS_M, Math.min(isFoulFly ? 2.2 : 1.5, landingTarget[2]))
           : f.homePos[2];
 
         const dx = tx - f.x;
@@ -370,7 +389,7 @@ export function simulateDeterministicCatch(
       const inCatchableSpace =
         !isPastFenceExtension(capPos[0], capPos[2]) &&
         (!isFair(capPos[0], capPos[2]) || capR <= MAX_CATCH_RADIUS_M) &&
-        capPos[2] <= 2.8;
+        capPos[2] <= (isFoulFly ? 3.4 : 2.8);
       if (
         frame.t >= UNCATCHABLE_AIR_TIME_SEC &&
         inCatchableSpace &&
@@ -659,8 +678,8 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
   const pullSign = isRight ? -1 : 1;
 
   if (!isFairContact) {
-    // Realistic Foul Ball: launch physically into foul territory (+-56..78 deg)
-    // with 3D cylinder-edge elevation bias (top edge -> high foul pop, bottom edge -> low foul chop).
+    // Realistic Foul Ball: launch into 1B/3B foul territory or pop-up around/behind home plate
+    // when grazing the top of the bat cylinder (giving catchable foul flies for C/P/LF/RF).
     const foulSide =
       absTiming > phys.fairTimingWindowSec
         ? dtTiming < 0
@@ -669,19 +688,34 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
         : relX >= 0
           ? 1
           : -1;
-    const sprayDeg = foulSide * (56 + rng() * 22);
+    const isTimingFoul = absTiming > phys.fairTimingWindowSec;
+    const isHighFoulPop = isTimingFoul && uY > 0.22;
+    const isSteepCatcherPop = isHighFoulPop && uY > 0.52;
+    const sprayDeg = isSteepCatcherPop
+      ? foulSide * (48 + rng() * 72)
+      : isHighFoulPop
+        ? foulSide * (46 + rng() * 15)
+        : foulSide * (50 + rng() * 26);
     const sprayRad = (sprayDeg * Math.PI) / 180;
     const clampedGrazeUy = Math.max(-1, Math.min(1, uY));
     const foulSinPhi = Math.max(-0.95, Math.min(0.95, clampedGrazeUy * phys.sinPhiMax));
     const foulCosPhi = Math.sqrt(Math.max(0.05, 1 - foulSinPhi * foulSinPhi));
-    const foulExit =
-      absTiming > phys.fairTimingWindowSec
-        ? 10.5 + foulCosPhi * 6.5 + rng() * 2.5
-        : 8.0 + foulCosPhi * 4.5 + rng() * 2.5;
+    const foulExit = isSteepCatcherPop
+      ? 5.5 + foulCosPhi * 2.2 + rng() * 1.5
+      : isHighFoulPop
+        ? 9.4 + foulCosPhi * 2.6 + rng() * 1.8
+        : isTimingFoul
+          ? 10.5 + foulCosPhi * 6.5 + rng() * 2.5
+          : 8.0 + foulCosPhi * 4.5 + rng() * 2.5;
     const foulPhiDeg = (Math.asin(foulSinPhi) * 180) / Math.PI;
     const elevDeg = Math.max(
       -18,
-      Math.min(68, (isPower ? 14 : 12) + foulPhiDeg * 0.72 + (rng() - 0.5) * 10),
+      Math.min(
+        74,
+        (isSteepCatcherPop ? 38 : isHighFoulPop ? 26 : isPower ? 14 : 12) +
+          foulPhiDeg * 0.78 +
+          (rng() - 0.5) * 8,
+      ),
     );
     const elevRad = (elevDeg * Math.PI) / 180;
 
@@ -695,12 +729,22 @@ export function evaluateSwingResolution(input: SwingEvaluationInput): SwingResol
     const defenders = buildFullDefense(input.outfielders);
     const launchAngleDeg = Math.round(elevDeg);
     // All defenders (P, C, LF, RF) can chase foul pop-ups into foul territory for a foul fly out (OUT),
-    // or stop foul grounders cleanly in foul territory (still FOUL).
-    const catchInfo = simulateDeterministicCatch(rawFoulResult, defenders, {
-      exitSpeedMs: foulExit,
-      launchAngleDeg,
-      seed: input.seed,
-    });
+    // while PCI-edge foul tips remain FOUL TIP and foul grounders can be stopped cleanly (FOUL).
+    const catchInfo: CatchInfo = isTimingFoul
+      ? simulateDeterministicCatch(rawFoulResult, defenders, {
+          exitSpeedMs: foulExit,
+          launchAngleDeg,
+          seed: input.seed,
+        })
+      : {
+          caught: false,
+          bobbled: false,
+          fielderId: null,
+          fielderIndex: null,
+          catchTimeSec: null,
+          catchPos: null,
+          pos: null,
+        };
     let battedResult = rawFoulResult;
     if (!catchInfo.caught) {
       const blk = simulateOutfieldGroundBlock(rawFoulResult, defenders);

@@ -59,6 +59,7 @@ import {
   drawStrikeZoneAndOverlay,
   HIT_PLANE_Z,
   type AbsReplayState,
+  type AtBatPitchEntry,
   type OnZoneFeedbackState,
 } from './render/overlay';
 import {
@@ -80,6 +81,7 @@ import {
 import {
   FENCE_DIST,
   FENCE_HEIGHT,
+  isFair,
   isInfield,
   PLATE_WIDTH,
 } from './rules/field';
@@ -110,7 +112,7 @@ import {
   stepCatcherReturn,
 } from './render/catcherReturn';
 import { renderBoxScore } from './ui/boxScore';
-import { EmoteController } from './ui/emotes';
+import { EmoteController, fitNameLabel } from './ui/emotes';
 import type { SwingFeedbackPayload } from './ui/swingFeedback';
 import { TransitionDirector, type TransitionSpeed } from './ui/transitions';
 
@@ -212,6 +214,9 @@ const rulesDialog = document.getElementById('rules-dialog') as HTMLDialogElement
 const settingsDialog = document.getElementById('settings-dialog') as HTMLDialogElement;
 const resultDialog = document.getElementById('result-dialog') as HTMLDialogElement;
 const resultBody = document.getElementById('result-body') as HTMLElement;
+const reconnectDialog = document.getElementById('reconnect-dialog') as HTMLDialogElement;
+const reconnectDescEl = document.getElementById('reconnect-desc') as HTMLElement;
+const reconnectCountdownEl = document.getElementById('reconnect-countdown') as HTMLElement;
 
 const friendStatusMsg = document.getElementById('friend-status-msg') as HTMLElement;
 const btnRoomCreate = document.getElementById('btn-room-create') as HTMLButtonElement;
@@ -247,6 +252,8 @@ let pendingMissFeedback: SwingFeedbackPayload | null = null;
 let lastPitchCode = '4SFB';
 let lastPitchSpeedKmh = 70;
 let lastPitchBreakCm = 0;
+let launchedPitchUid = 0;
+let currentAtBatPitches: AtBatPitchEntry[] = [];
 
 type PresentationStep =
   | { kind: 'wait_camera_rest'; maxSec: number; elapsedSec: number }
@@ -289,6 +296,14 @@ function showOnZoneFeedback(
       ? t('gradeGood')
       : t('gradeMiss');
   lastCallLabel = locCall.subtitle ? `${callTxt} ${locCall.subtitle}` : callTxt;
+  const prevHistory = currentAtBatPitches.filter((p) => p.uid !== launchedPitchUid);
+  if (!currentAtBatPitches.some((p) => p.uid === launchedPitchUid)) {
+    currentAtBatPitches.push({
+      uid: launchedPitchUid,
+      plateX: payload.plateX,
+      plateY: payload.plateY,
+    });
+  }
   onZoneFeedback = {
     kind: payload.kind,
     elapsedSec: 0,
@@ -300,6 +315,7 @@ function showOnZoneFeedback(
     callLabel: callTxt,
     callColor: payload.callColor,
     resultDetail: locCall.subtitle || undefined,
+    atBatHistory: prevHistory,
     dtTiming: payload.dtTiming,
     timingLabel: timingTxt,
     timingColor: payload.timingColor,
@@ -596,6 +612,9 @@ function applyLocaleToDom(): void {
   btnSwingType.textContent = powerSwing ? t('btnPower') : t('btnNormal');
   btnSound.textContent = sfx.isMuted() ? t('btnMute') : t('btnSfx');
   btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
+  topOnlineText.textContent = onlineClient.connected
+    ? `${t('livePrefix')} ${lastOnlineCount}`
+    : t('netOfflineMode');
   updateStandbyToggleBtn();
   updateNickGreeting();
   pitchSelectedNameEl.textContent = getLocalizedPitchName(selectedPitch);
@@ -1050,8 +1069,10 @@ const keysPressed = new Set<string>();
 // --- Helpers ---
 function getCurrentRole(): Role {
   if (onTitleScreen || spectating) return 'spectate';
+  // Roles follow the DISPLAYED half-inning so pitcher/batter controls, strike-zone previews and docks
+  // only swap after the inning-change transition finishes (visualHalf catches up to match.half).
   if (isOnline && onlineSide) {
-    const pitchingSide: OnlineSide = match.half === 'top' ? 'home' : 'away';
+    const pitchingSide: OnlineSide = visualHalf === 'top' ? 'home' : 'away';
     return onlineSide === pitchingSide ? 'pitcher' : 'batter';
   }
   if (match.mode === 'practice_pitch') return 'pitcher';
@@ -1059,7 +1080,7 @@ function getCurrentRole(): Role {
   if (match.mode === 'hotseat2p') {
     return phase === 'windup' || phase === 'pitch_flight' ? 'batter' : 'pitcher';
   }
-  const pitchingSide: OnlineSide = match.half === 'top' ? 'home' : 'away';
+  const pitchingSide: OnlineSide = visualHalf === 'top' ? 'home' : 'away';
   return cpuPlayerSide === pitchingSide ? 'pitcher' : 'batter';
 }
 
@@ -1392,10 +1413,39 @@ function formatScorebugTeamName(raw: string): string {
   return stripped || raw;
 }
 
+interface FrozenHudSnapshot {
+  bases: boolean[];
+  balls: number;
+  strikes: number;
+  outs: number;
+  batterName: string;
+  pitcherName: string;
+}
+
+/** Last scoreboard state rendered while the live match was still on the displayed half-inning. */
+let lastLiveHud: FrozenHudSnapshot | null = null;
+
+/**
+ * True while the live match has already advanced to the next half-inning (3rd out) but the
+ * inning-change transition has not finished sweeping across yet. Scoreboard, jerseys, roles and
+ * controls stay frozen on the finishing half-inning until (visualInning, visualHalf) catch up.
+ */
+function isHudFrozen(): boolean {
+  return !onTitleScreen && !match.derby.active && (match.inning !== visualInning || match.half !== visualHalf);
+}
+
 function updateHudAndDocks(): void {
   appViewport.classList.toggle('in-game', !onTitleScreen);
-  awayNameEl.textContent = formatScorebugTeamName(match.away.name);
-  homeNameEl.textContent = formatScorebugTeamName(match.home.name);
+  const awayDisp = formatScorebugTeamName(match.away.name);
+  const homeDisp = formatScorebugTeamName(match.home.name);
+  if (awayNameEl.textContent !== awayDisp) {
+    awayNameEl.textContent = awayDisp;
+    fitNameLabel(awayNameEl, awayDisp, 7, 10);
+  }
+  if (homeNameEl.textContent !== homeDisp) {
+    homeNameEl.textContent = homeDisp;
+    fitNameLabel(homeNameEl, homeDisp, 7, 10);
+  }
   awayScoreEl.textContent = String(match.away.totalRuns);
   homeScoreEl.textContent = String(match.home.totalRuns);
   sbInningEl.textContent = `${visualHalf === 'top' ? '▲' : '▼'}${visualInning}`;
@@ -1403,8 +1453,23 @@ function updateHudAndDocks(): void {
   const batter = getCurrentBatter(match);
   const fielding = getFieldingTeam(match);
   const pitcherSlot = fielding.lineup.find((p) => p.position === 'P') ?? fielding.lineup[0];
-  sbBatterEl.textContent = batter.name;
-  sbPitcherEl.textContent = pitcherSlot?.name ?? '--';
+  const liveHud: FrozenHudSnapshot = {
+    bases: match.bases.map((b) => b !== null),
+    balls: match.balls,
+    strikes: match.strikes,
+    outs: match.outs,
+    batterName: batter.name,
+    pitcherName: pitcherSlot?.name ?? '--',
+  };
+  let hud = liveHud;
+  if (isHudFrozen() && lastLiveHud) {
+    // Hold the finishing half-inning on screen (3rd out lit) until the inning-change sweep completes
+    hud = { ...lastLiveHud, outs: 3 };
+  } else {
+    lastLiveHud = liveHud;
+  }
+  sbBatterEl.textContent = hud.batterName;
+  sbPitcherEl.textContent = hud.pitcherName;
 
   // Online / Friend / Spectate scoreboard shows live spectator count (eye icon + ": N")
   const showSpecCount = isOnline && !onTitleScreen;
@@ -1424,14 +1489,14 @@ function updateHudAndDocks(): void {
   }
 
   for (let i = 0; i < 3; i++) {
-    document.getElementById(`base-${i + 1}`)?.classList.toggle('on', match.bases[i] !== null);
+    document.getElementById(`base-${i + 1}`)?.classList.toggle('on', hud.bases[i]);
   }
   for (let i = 1; i <= 3; i++) {
-    document.getElementById(`b${i}`)?.classList.toggle('on', match.balls >= i);
+    document.getElementById(`b${i}`)?.classList.toggle('on', hud.balls >= i);
   }
   for (let i = 1; i <= 2; i++) {
-    document.getElementById(`s${i}`)?.classList.toggle('on', match.strikes >= i);
-    document.getElementById(`o${i}`)?.classList.toggle('on', match.outs >= i);
+    document.getElementById(`s${i}`)?.classList.toggle('on', hud.strikes >= i);
+    document.getElementById(`o${i}`)?.classList.toggle('on', hud.outs >= i);
   }
   const absSide = isOnline && onlineSide ? onlineSide : cpuPlayerSide;
   const absLeft = match.absChallenges[absSide];
@@ -1554,6 +1619,7 @@ function startMode(mode: GameMode, suppressStandbyNotice = false): void {
   capVisible = false;
   capTrail = [];
   hitFx = null;
+  currentAtBatPitches = [];
   clearPresentationQueue();
   catcherReturn.active = false;
   transitionDirector.clear();
@@ -1649,6 +1715,11 @@ function launchPitch(
   const spec = PITCH_SPECS[pitchId];
   lastPitchCode = spec.code;
   lastPitchSpeedKmh = spdKmh;
+  // Reset at-bat pitch history whenever a new plate appearance begins (0-0 count)
+  if ((match.balls === 0 && match.strikes === 0) || match.derby.active) {
+    currentAtBatPitches = [];
+  }
+  launchedPitchUid += 1;
   clearPresentationQueue();
   transitionDirector.clear();
   catcherReturn.active = false;
@@ -1735,6 +1806,51 @@ function cancelSpringCharge(): void {
   if (springMeter.stage !== 'charging') return;
   if (phase === 'pitch_meter') phase = 'idle';
   resetSpringMeter();
+}
+
+// --- CPU / practice / hotseat manual pause during a live pitch ---
+// Menu / Rules / Settings freeze the game instantly. If that pause interrupted a windup or a cap
+// already in flight, resuming would ambush the batter, so the pitch is cleanly voided instead
+// (no ball / strike recorded) and the at-bat restarts from idle.
+let pauseWasActive = false;
+let pauseInterruptedPitch = false;
+
+function cancelInterruptedPitch(): void {
+  phase = 'idle';
+  activePitch = null;
+  cpuSwingPlan = null;
+  queuedOnlinePitchResult = null;
+  pendingMissFeedback = null;
+  capVisible = false;
+  capTrail = [];
+  pitcherFrame = 0;
+  windupTime = 0;
+  pitchFlightTime = 0;
+  batterAnim = 'ready';
+  batterAnimTime = 0;
+  batterSwungThisPitch = false;
+  swingChecked = false;
+  pendingPitchTelemetry = '';
+  lastPitchTelemetry = t('telReady');
+  cpuAutoPitchTimer = 0.85;
+  resetSpringMeter();
+  resetPitchClock();
+  emoteCtrl.showSystem(t('callPitchReset'), t('callPitchResetDetail'), '#38bdf8', 2200);
+  updateHudAndDocks();
+}
+
+function syncManualPauseInterrupt(): void {
+  const paused = isGamePaused();
+  if (paused && !pauseWasActive) {
+    pauseInterruptedPitch = phase === 'windup' || phase === 'pitch_flight';
+    cancelSpringCharge();
+  } else if (!paused && pauseWasActive) {
+    if (pauseInterruptedPitch && (phase === 'windup' || phase === 'pitch_flight')) {
+      cancelInterruptedPitch();
+    }
+    pauseInterruptedPitch = false;
+  }
+  pauseWasActive = paused;
 }
 
 function sampleUniformDisk2D(maxRadiusM: number): { errX: number; errY: number } {
@@ -2230,7 +2346,7 @@ function finishBattedPlay(): void {
 
   if (outcome === 'HR') {
     outTitle = 'HOME RUN!';
-    outColor = '#f4c41c';
+    outColor = '#d946ef';
     outDetail = `${activeBatted.maxDistanceM.toFixed(1)}m`;
     sfx.playHomeRunFanfare();
     presentationQueue.push({
@@ -2246,12 +2362,12 @@ function finishBattedPlay(): void {
     verdictSfx = 'ball';
   } else if (outcome === '2B') {
     outTitle = 'DOUBLE!';
-    outColor = '#4ade80';
+    outColor = '#38bdf8';
     outDetail = isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : 'OFF WALL · 2B';
     verdictSfx = 'ball';
   } else if (outcome === '1B') {
     outTitle = 'SINGLE!';
-    outColor = '#a3e635';
+    outColor = '#38bdf8';
     outDetail = isBobbleHit ? 'FIELDER BOBBLE · SAFE!' : isBlockedSingle ? 'OF CUTOFF · HELD TO 1B' : '';
     verdictSfx = 'ball';
   } else if (outcome === 'FOUL') {
@@ -2261,7 +2377,9 @@ function finishBattedPlay(): void {
   } else {
     outTitle = 'OUT!';
     outColor = '#f43f5e';
-    outDetail = battedCaughtInAir ? 'OUTFIELD CATCH!' : 'INFIELD OUT!';
+    const catchPt = activeCatchInfo?.catchPos ?? activeCatchInfo?.pos ?? null;
+    const isFoulFlyCatch = Boolean(battedCaughtInAir && catchPt && !isFair(catchPt[0], catchPt[2]));
+    outDetail = isFoulFlyCatch ? 'FOUL OUT' : battedCaughtInAir ? 'OUTFIELD CATCH!' : 'INFIELD OUT!';
     verdictSfx = 'out';
   }
 
@@ -2918,21 +3036,25 @@ onlineClient.onNetUpdate((m) => {
   if (!m.connected) {
     topOnlinePill.dataset.quality = 'offline';
     topOnlinePill.title = t('netLocal');
+    topOnlineText.textContent = t('netOfflineMode');
   } else if (m.serverLoad === 'red') {
     topOnlinePill.dataset.quality = 'busy';
     topOnlinePill.title = `${t('netBusy')} (${m.serverLagMs}ms) · RTT ${m.rttMs}ms`;
+    topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
   } else if (m.serverLoad === 'yellow') {
     topOnlinePill.dataset.quality = 'fair';
     topOnlinePill.title = `RTT ${m.rttMs}ms · Load YELLOW`;
+    topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
   } else {
     topOnlinePill.dataset.quality = m.quality;
     topOnlinePill.title = `RTT ${m.rttMs}ms · Jitter ${m.jitterMs}ms`;
+    topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
   }
 
   // If queuing and connection drops/becomes unstable OR server reaches red overload -> auto-match CPU!
   if (onTitleScreen && onlineWaitingQueue) {
     if (!m.connected || m.quality === 'poor') {
-      autoFallbackToCpu('UNSTABLE NET', 'AUTO-MATCHED VS CPU');
+      autoFallbackToCpu('SERVER OFFLINE', 'AUTO-MATCHED VS CPU');
     } else if (m.serverLoad === 'red') {
       autoFallbackToCpu('SERVER BUSY', 'AUTO-MATCHED VS CPU');
     }
@@ -2945,6 +3067,20 @@ btnHubPlay.addEventListener('click', async () => {
   standbyOptedOut = false;
   standbyPriorityMode = true;
   updateStandbyToggleBtn();
+
+  // If browser or server is offline, do a fast 1.2s probe and immediately enter CPU mode (no 40s wait!)
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    autoFallbackToCpu('SERVER OFFLINE', 'AUTO-MATCHED VS CPU');
+    return;
+  }
+  if (!onlineClient.connected) {
+    try {
+      await onlineClient.connect(getOnlinePlayerName(), 1200);
+    } catch {
+      autoFallbackToCpu('SERVER OFFLINE', 'AUTO-MATCHED VS CPU');
+      return;
+    }
+  }
 
   // Pre-check server green-zone load & network stability before queuing
   if (onlineClient.connected && onlineClient.isServerBusy) {
@@ -2963,7 +3099,7 @@ btnHubPlay.addEventListener('click', async () => {
   queueStatusText.textContent = `${t('queueFinding')} 0:00...`;
   updateHudAndDocks();
   try {
-    await onlineClient.connect(getOnlinePlayerName(), 4500);
+    await onlineClient.connect(getOnlinePlayerName(), 1500);
     if (onlineClient.isServerBusy) {
       autoFallbackToCpu('SERVER BUSY', 'AUTO-MATCHED VS CPU');
       return;
@@ -2974,7 +3110,7 @@ btnHubPlay.addEventListener('click', async () => {
     }
     onlineClient.queue(onlineModeChoice, getOnlinePlayerName());
   } catch {
-    autoFallbackToCpu('UNSTABLE NET', 'AUTO-MATCHED VS CPU');
+    autoFallbackToCpu('SERVER OFFLINE', 'AUTO-MATCHED VS CPU');
   }
 });
 
@@ -3000,7 +3136,7 @@ btnHubFriend.addEventListener('click', async () => {
   friendStatusMsg.textContent = t('friendConnecting');
   if (!friendDialog.open) friendDialog.showModal();
   try {
-    await onlineClient.connect(getOnlinePlayerName());
+    await onlineClient.connect(getOnlinePlayerName(), 1500);
     friendStatusMsg.textContent = t('friendConnected');
   } catch {
     friendStatusMsg.textContent = t('friendUnreachable');
@@ -3020,7 +3156,7 @@ btnHubWatch.addEventListener('click', async () => {
   setWatchMessage(t('watchLoading'));
   if (!watchDialog.open) watchDialog.showModal();
   try {
-    await onlineClient.connect(getOnlinePlayerName());
+    await onlineClient.connect(getOnlinePlayerName(), 1500);
     onlineClient.listRooms();
   } catch {
     setWatchMessage(t('friendUnreachable'));
@@ -3029,7 +3165,7 @@ btnHubWatch.addEventListener('click', async () => {
 
 btnWatchRefresh.addEventListener('click', async () => {
   try {
-    await onlineClient.connect(getOnlinePlayerName());
+    await onlineClient.connect(getOnlinePlayerName(), 1500);
     onlineClient.listRooms();
   } catch {
     setWatchMessage(t('friendUnreachable'));
@@ -3189,6 +3325,7 @@ function enterOnlineMatch(
   capVisible = false;
   capTrail = [];
   hitFx = null;
+  currentAtBatPitches = [];
   clearPresentationQueue();
   catcherReturn.active = false;
   transitionDirector.clear();
@@ -3250,6 +3387,7 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   capVisible = false;
   capTrail = [];
   hitFx = null;
+  currentAtBatPitches = [];
   clearPresentationQueue();
   catcherReturn.active = false;
   transitionDirector.clear();
@@ -3548,11 +3686,13 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'match_start': {
+      closeReconnectPrompt();
       saveSession({ code: msg.code, token: msg.token });
       enterOnlineMatch(msg);
       break;
     }
     case 'state_sync': {
+      closeReconnectPrompt();
       enterOnlineMatch(msg);
       if (msg.activePitch) {
         const p = msg.activePitch;
@@ -3582,6 +3722,14 @@ onlineClient.onMessage((msg) => {
       const p: PitchLaunchMsg = msg;
       onlinePitchSeq = p.pitchSeq;
       onlineTurnState = 'awaiting_swing';
+      if (visualInning !== match.inning || visualHalf !== match.half) {
+        // Opponent finished their inning-change transition first and already pitched: catch up immediately
+        presentationQueue = presentationQueue.filter((s) => s.kind !== 'inning_change');
+        transitionDirector.clear();
+        visualInning = match.inning;
+        visualHalf = match.half;
+        updateHudAndDocks();
+      }
       batterHandedness = p.batterSide === 'L' ? 'left' : 'right';
       btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
       launchPitch(p.pitchId, p.speedKmh, p.targetX, p.targetY, p.errorX, p.errorY, p.seed);
@@ -3771,6 +3919,35 @@ onlineClient.onMessage((msg) => {
       }
       break;
     }
+    case 'session_status': {
+      if (!msg.active) {
+        closeReconnectPrompt();
+        // Only clear saved session if we aren't actively connected to this match in the current tab
+        if (!isOnline || onTitleScreen) {
+          saveSession(null);
+        }
+        break;
+      }
+      const sess = loadSession();
+      if (!sess || sess.code !== msg.code) {
+        closeReconnectPrompt();
+        break;
+      }
+      if (msg.waiting) {
+        // Waiting friend room before game start: silently resume hosting the room code
+        closeReconnectPrompt();
+        onlineClient.reconnect(sess.code, sess.token);
+        break;
+      }
+      openReconnectPrompt({
+        code: sess.code,
+        token: sess.token,
+        roomKind: msg.roomKind,
+        opponentName: msg.opponentName,
+        remainingSec: msg.remainingSec,
+      });
+      break;
+    }
     case 'notice': {
       if (msg.kind === 'draining') {
         setServerUpdateCountdown(msg.updateAtMs, msg.countdownSec ?? 600);
@@ -3877,6 +4054,9 @@ setEmoteSfx.addEventListener('change', () => {
 btnMuteEmotes.addEventListener('click', () => {
   emoteCtrl.mutedOpponent = !emoteCtrl.mutedOpponent;
   btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
+  topOnlineText.textContent = onlineClient.connected
+    ? `${t('livePrefix')} ${lastOnlineCount}`
+    : t('netOfflineMode');
   updateStandbyToggleBtn();
 });
 btnStandbyToggle.addEventListener('click', () => {
@@ -3987,6 +4167,7 @@ function step(now: number): void {
     !onTitleScreen && (phase === 'idle' || phase === 'pitch_meter' || phase === 'windup') ? 1 : 0;
   strikeZoneAlpha += (targetSzAlpha - strikeZoneAlpha) * Math.min(1, rawDt * 14);
 
+  syncManualPauseInterrupt();
   const paused = isGamePaused();
 
   if (!paused) {
@@ -4858,10 +5039,102 @@ void loadSprites().then((loaded) => {
   sprites = loaded;
 });
 
-// --- Auto-resume active online session on socket drop / app switch / bfcache ---
+// --- Auto-resume / Reconnect Confirmation Modal on socket drop / app switch / boot ---
 let resumeTimer: number | null = null;
 let resumeAttempt = 0;
 let resumeInFlight = false;
+let reconnectPromptState: {
+  code: string;
+  token: string;
+  roomKind: 'live' | 'friend';
+  opponentName: string;
+  expiresAtMs: number;
+} | null = null;
+let reconnectTicker: number | null = null;
+
+function closeReconnectPrompt(): void {
+  if (reconnectTicker !== null) {
+    window.clearInterval(reconnectTicker);
+    reconnectTicker = null;
+  }
+  reconnectPromptState = null;
+  if (reconnectDialog.open) {
+    reconnectDialog.returnValue = 'programmatic';
+    reconnectDialog.close('programmatic');
+  }
+}
+
+function updateReconnectPromptUi(): void {
+  if (!reconnectPromptState) return;
+  const remSec = Math.max(0, Math.ceil((reconnectPromptState.expiresAtMs - Date.now()) / 1000));
+  reconnectCountdownEl.textContent = `${remSec}s`;
+  const baseDesc =
+    reconnectPromptState.roomKind === 'friend' ? t('reconnectFriendDesc') : t('reconnectLiveDesc');
+  const details: string[] = [];
+  if (reconnectPromptState.roomKind === 'friend') {
+    details.push(`${t('reconnectRoomPrefix')} ${reconnectPromptState.code}`);
+  }
+  if (reconnectPromptState.opponentName) {
+    details.push(`${t('reconnectOpponentPrefix')} ${reconnectPromptState.opponentName}`);
+  }
+  reconnectDescEl.textContent = details.length > 0 ? `${baseDesc} (${details.join(' · ')})` : baseDesc;
+  if (remSec <= 0) {
+    closeReconnectPrompt();
+    saveSession(null);
+    if (isOnline && !onTitleScreen) {
+      returnToTitle();
+    }
+  }
+}
+
+function openReconnectPrompt(info: {
+  code: string;
+  token: string;
+  roomKind: 'live' | 'friend';
+  opponentName: string;
+  remainingSec: number;
+}): void {
+  reconnectPromptState = {
+    code: info.code,
+    token: info.token,
+    roomKind: info.roomKind,
+    opponentName: info.opponentName,
+    expiresAtMs: Date.now() + Math.max(1, info.remainingSec) * 1000,
+  };
+  updateReconnectPromptUi();
+  if (reconnectTicker !== null) {
+    window.clearInterval(reconnectTicker);
+  }
+  reconnectTicker = window.setInterval(updateReconnectPromptUi, 250);
+  if (!reconnectDialog.open) {
+    reconnectDialog.showModal();
+  }
+}
+
+reconnectDialog.addEventListener('close', () => {
+  const val = reconnectDialog.returnValue;
+  reconnectDialog.returnValue = '';
+  if (val === 'programmatic') return;
+  const snap = reconnectPromptState;
+  if (reconnectTicker !== null) {
+    window.clearInterval(reconnectTicker);
+    reconnectTicker = null;
+  }
+  reconnectPromptState = null;
+  if (!snap) return;
+  if (val === 'rejoin') {
+    onlineClient.reconnect(snap.code, snap.token);
+  } else {
+    // Declining or dismissing the prompt forfeits the disconnected match immediately
+    saveSession(null);
+    if (onlineClient.connected) {
+      onlineClient.forfeitSession(snap.code, snap.token);
+    }
+    if (isOnline && !onTitleScreen) {
+      returnToTitle();
+    }
+  }
+});
 
 function clearResumeTimer(): void {
   if (resumeTimer !== null) {
@@ -4878,7 +5151,13 @@ function resumeSession(): void {
     return;
   }
   if (document.visibilityState !== 'visible') return;
-  if (onlineClient.connected || resumeInFlight) return;
+  if (resumeInFlight) return;
+  if (onlineClient.connected) {
+    if (!reconnectDialog.open) {
+      onlineClient.checkSession(session.code, session.token);
+    }
+    return;
+  }
 
   clearResumeTimer();
   resumeInFlight = true;
@@ -4887,7 +5166,7 @@ function resumeSession(): void {
     .then(() => {
       const latest = loadSession();
       if (latest) {
-        onlineClient.reconnect(latest.code, latest.token);
+        onlineClient.checkSession(latest.code, latest.token);
       }
       resumeAttempt = 0;
     })
@@ -4911,8 +5190,12 @@ function resumeSession(): void {
 
 onlineClient.onStatus((connected) => {
   if (!connected) {
+    topOnlinePill.dataset.quality = 'offline';
+    topOnlinePill.title = t('netLocal');
+    topOnlineText.textContent = t('netOfflineMode');
     resumeSession();
   } else {
+    topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
     clearResumeTimer();
     resumeAttempt = 0;
   }
@@ -4972,7 +5255,7 @@ if (urlCode && (!prevSession || prevSession.code !== urlCode)) {
     .connect(getOnlinePlayerName())
     .then(() => {
       if (prevSession) {
-        onlineClient.reconnect(prevSession.code, prevSession.token);
+        onlineClient.checkSession(prevSession.code, prevSession.token);
       }
     })
     .catch(() => {
@@ -4988,4 +5271,9 @@ window.setInterval(() => {
 }, 30_000);
 
 applyLocaleToDom();
+if ('serviceWorker' in navigator && !IS_DEV_MODE) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
 requestAnimationFrame(step);

@@ -44,6 +44,12 @@ export interface AbsReplayState {
   durationSec: number;
 }
 
+export interface AtBatPitchEntry {
+  uid: number;
+  plateX: number;
+  plateY: number;
+}
+
 export interface OnZoneFeedbackState {
   kind: 'take' | 'swing';
   elapsedSec: number;
@@ -55,6 +61,8 @@ export interface OnZoneFeedbackState {
   callLabel: string;
   callColor: string;
   resultDetail?: string;
+  /** All earlier pitches thrown in the current at-bat (rendered as smaller solid gray dots) */
+  atBatHistory?: AtBatPitchEntry[];
   // Swung-only fields
   dtTiming?: number;
   timingLabel?: string;
@@ -420,10 +428,9 @@ export function drawStrikeZoneAndOverlay(
             activeU: null,
             showIdleCenterCurve: false,
             showActiveCurve: false,
-            showLandingCurve: true,
+            showLandingCurve: false,
             showLandingEndpoints: false,
             surfaceAlphaScale: fullAlpha,
-            subSteps: 2,
             timeSec: isSpringLive ? undefined : state.timeSec,
           },
         );
@@ -834,13 +841,29 @@ function drawPitchLocationSubPanel(
     const halfW = PLATE_WIDTH * 0.5;
     const mapX = (fx: number) => zx + ((fx + halfW) / PLATE_WIDTH) * zw;
     const mapY = (fy: number) => zy + (1 - (fy - STRIKE_ZONE_LO) / (STRIKE_ZONE_HI - STRIKE_ZONE_LO)) * zh;
-    // Scale ball circle 1:1 to CONTACT_BALL_RADIUS_M so any visual overlap with the "(" ")" barrel
-    // matches Minkowski contact physics (d_edge <= CONTACT_BALL_RADIUS_M) to the pixel!
     const pxPerMX = zw / PLATE_WIDTH;
     const pxPerMY = zh / (STRIKE_ZONE_HI - STRIKE_ZONE_LO);
     const dotR = Math.max(3.2 * u, CONTACT_BALL_RADIUS_M * ((pxPerMX + pxPerMY) * 0.5));
 
-    // Batter cylindrical barrel PCI parentheses (  •  ) scaled 1:1 to strike zone (NEVER clamped onto ball!)
+    // 1. Previous pitches in the current at-bat: smaller solid gray dot at each pitch's plate crossing point
+    if (fb.atBatHistory && fb.atBatHistory.length > 0) {
+      const prevR = Math.max(2.3 * dpr, dotR * 0.62);
+      for (const prev of fb.atBatHistory) {
+        const px = mapX(prev.plateX);
+        const py = mapY(prev.plateY);
+        ctx.save();
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.82)';
+        ctx.beginPath();
+        ctx.arc(px, py, prevR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+        ctx.lineWidth = Math.max(1.0 * dpr, 1.15 * u);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 2. Batter cylindrical barrel PCI parentheses (  •  ) scaled 1:1 to strike zone (if swung)
     if (showPci && typeof fb.batX === 'number' && typeof fb.batY === 'number') {
       const bx = mapX(fb.batX);
       const by = mapY(fb.batY);
@@ -863,9 +886,7 @@ function drawPitchLocationSubPanel(
       );
     }
 
-    // Actual bottle cap crossing dot — true unclamped coordinates inside the clipped plot box!
-    // If an extreme pitch bounces completely outside the plot bounds, draw a crisp edge arrow instead of
-    // faking overlap with the strike zone or PCI.
+    // 3. Current pitch crossing dot ◎ — 1:1 outer circumference (CONTACT_BALL_RADIUS_M) + translucent white fill + center dot
     const rawCx = mapX(fb.plateX);
     const rawCy = mapY(fb.plateY);
     const minPlotX = ox + 5 * u;
@@ -880,6 +901,7 @@ function drawPitchLocationSubPanel(
         ? fb.absRevealElapsed / 0.32
         : null;
     const popScale = revealT !== null ? 1.45 - 0.45 * revealT : 1;
+    const ballCol = fb.callColor || '#38bdf8';
 
     if (revealT !== null) {
       // Crisp in-place flip/scan flash when revealing real pitch location after ABS window ends
@@ -892,14 +914,12 @@ function drawPitchLocationSubPanel(
       ctx.stroke();
     }
 
-    // Crisp ◎ ball marker: exact 1:1 outer circumference (CONTACT_BALL_RADIUS_M) + translucent white interior + clear center dot
     const scaledOuterR = dotR * popScale;
     const ballStrokeW = Math.max(1.2 * dpr, scaledOuterR * 0.27);
     const drawR = Math.max(1.5, scaledOuterR - ballStrokeW * 0.5);
     const centerDotR = Math.max(1.1 * dpr, scaledOuterR * 0.26);
-    const ballCol = fb.callColor || '#38bdf8';
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.76)';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.78)';
     ctx.beginPath();
     ctx.arc(cx, cy, drawR, 0, Math.PI * 2);
     ctx.fill();

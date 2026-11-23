@@ -7,11 +7,21 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { ServerMonitor, type ServerSnapshotInput } from './monitor';
 import { MONITOR_HTML, MONITOR_JS } from './monitorUi';
+import {
+  ANALYTICS_HTML,
+  ANALYTICS_JS,
+  buildAnalyticsReport,
+  MAX_RETAINED_MATCHES,
+  MAX_RETAINED_PITCHES,
+  trimJsonlFileIfNeeded,
+} from './analyticsUi';
 import { PhysicsPool, type ServerPitchSummary } from './physicsPool';
 import { checkCatcherCatch } from '../src/ai/cpu';
 import {
   encodeServerMsgV2,
   normalizeClientMsg,
+  round2,
+  round3,
   type ServerLoadStatus,
 } from '../src/net/protocol';
 import { simToField } from '../src/physics/batted';
@@ -59,6 +69,7 @@ const MIME_TYPES: Record<string, string> = {
   '.mp3': 'audio/mpeg',
   '.ogg': 'audio/ogg',
   '.txt': 'text/plain; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -111,6 +122,7 @@ interface RoomPlayer {
   ws: WebSocket | null;
   connected: boolean;
   disconnectTimer: NodeJS.Timeout | null;
+  disconnectDeadlineAt: number | null;
 }
 
 interface ActivePitchData {
@@ -128,10 +140,12 @@ interface ActivePitchData {
 
 interface Room {
   code: string;
+  matchId: string;
   mode: OnlineMode;
   isMatchmaking: boolean;
   mercyRule: boolean;
   createdAt: number;
+  startedAtMs: number;
   lastActivityAt: number;
   match: MatchState;
   pitchSeq: number;
@@ -154,6 +168,7 @@ interface Room {
     away: RoomPlayer | null;
   };
   spectators: Set<ClientMeta>;
+  spectatorsPeak: number;
   recorded: boolean;
 }
 
@@ -161,6 +176,7 @@ export interface ServerOptions {
   port?: number;
   staticDir?: string;
   matchLogPath?: string;
+  pitchLogPath?: string;
   pingIntervalMs?: number;
   deadSocketTimeoutMs?: number;
   graceMs?: number;
@@ -271,11 +287,21 @@ function getMatchLogPath(override?: string): string {
   return path.resolve(process.cwd(), target);
 }
 
+function getPitchLogPath(override?: string): string {
+  const target = override || process.env.PITCH_LOG || 'data/pitches.jsonl';
+  return path.resolve(process.cwd(), target);
+}
+
 const ensuredMatchLogDirs = new Set<string>();
 let matchLogWriteChain: Promise<void> = Promise.resolve();
 
-function appendMatchLog(record: unknown, override?: string): void {
-  const logPath = getMatchLogPath(override);
+function appendJsonlFile(
+  logPath: string,
+  record: unknown,
+  label: string,
+  maxLines: number,
+  byteThreshold: number,
+): void {
   const dir = path.dirname(logPath);
   const line = JSON.stringify(record) + '\n';
   matchLogWriteChain = matchLogWriteChain
@@ -285,10 +311,23 @@ function appendMatchLog(record: unknown, override?: string): void {
         ensuredMatchLogDirs.add(dir);
       }
       await fs.promises.appendFile(logPath, line, 'utf8');
+      await trimJsonlFileIfNeeded(logPath, maxLines, byteThreshold);
     })
     .catch((err) => {
-      console.error('[match-log] write failed:', err);
+      console.error(`[${label}] write failed:`, err);
     });
+}
+
+function appendMatchLog(record: unknown, override?: string): void {
+  appendJsonlFile(getMatchLogPath(override), record, 'match-log', MAX_RETAINED_MATCHES, 2_500_000);
+}
+
+function appendPitchLog(record: unknown, override?: string): void {
+  appendJsonlFile(getPitchLogPath(override), record, 'pitch-log', MAX_RETAINED_PITCHES, 20_000_000);
+}
+
+function generateMatchId(code: string): string {
+  return `${Date.now().toString(36)}-${code}`;
 }
 
 function buildMatchState(mode: OnlineMode, homeName: string, awayName: string, mercyRule = true): MatchState {
@@ -803,6 +842,16 @@ export function startServer(
       const solvedSeq = room.pitchSeq;
       room.pitchSeq += 1;
       room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
+      recordPitchAnalytics(room, {
+        event: 'pitch_clock',
+        pitchSeq: solvedSeq,
+        inning: room.match.inning,
+        half: room.match.half,
+        pitcherSide: pitchingSide,
+        pitcherName: room.players[pitchingSide]?.name ?? pitchingSide,
+        violationCount,
+        outcome: res.walked ? 'WALK' : 'BALL',
+      });
       sendToRoom(room, {
         type: 'pitch_result',
         pitchSeq: solvedSeq,
@@ -921,23 +970,57 @@ export function startServer(
     if (reason === 'completed') monitor.matchesCompleted += 1;
     else if (reason === 'resign' || reason === 'pitch_clock_forfeit') monitor.matchesResigned += 1;
     else if (reason === 'disconnect_timeout') monitor.matchesDisconnectTimeout += 1;
+    const durationSec = room.startedAtMs > 0 ? Math.max(0, Math.round((Date.now() - room.startedAtMs) / 1000)) : 0;
     appendMatchLog(
       {
         ts: new Date().toISOString(),
+        matchId: room.matchId,
         code: room.code,
+        roomKind: room.isMatchmaking ? 'live' : 'friend',
         mode: room.mode,
+        durationSec,
         reason,
+        endReason: room.match.endReason ?? null,
         winner: room.match.winner,
+        awayName: room.players.away?.name ?? room.match.away.name,
+        homeName: room.players.home.name,
         awayRuns: room.match.away.totalRuns,
         homeRuns: room.match.home.totalRuns,
+        awayHits: room.match.away.hits,
+        homeHits: room.match.home.hits,
+        awayWalks: room.match.away.walks,
+        homeWalks: room.match.home.walks,
+        awayStrikeouts: room.match.away.strikeouts,
+        homeStrikeouts: room.match.home.strikeouts,
+        awayPitches: room.match.away.pitchesThrown,
+        homePitches: room.match.home.pitchesThrown,
+        awayRunsByInning: room.match.away.runsByInning,
+        homeRunsByInning: room.match.home.runsByInning,
         innings: room.match.inning,
         pitches: room.match.stats.totalPitches,
         homeRunsCount: room.match.stats.homeRuns,
+        absUsedAway: Math.max(0, 2 - room.match.absChallenges.away),
+        absUsedHome: Math.max(0, 2 - room.match.absChallenges.home),
+        spectatorsPeak: room.spectatorsPeak,
       },
       opts.matchLogPath,
     );
     // Allow 3s for final pitch_result / match_over delivery before draining server exits
     scheduleDrainCompleteCheck(3000);
+  }
+
+  function recordPitchAnalytics(room: Room, data: Record<string, unknown>) {
+    appendPitchLog(
+      {
+        ts: new Date().toISOString(),
+        matchId: room.matchId,
+        code: room.code,
+        roomKind: room.isMatchmaking ? 'live' : 'friend',
+        mode: room.mode,
+        ...data,
+      },
+      opts.pitchLogPath,
+    );
   }
 
   function removeFromStandby(clientId: string) {
@@ -1083,6 +1166,9 @@ export function startServer(
   }
 
   function broadcastSpectatorCount(room: Room) {
+    if (room.spectators.size > room.spectatorsPeak) {
+      room.spectatorsPeak = room.spectators.size;
+    }
     sendToRoom(room, {
       type: 'spectator_count',
       count: room.spectators.size,
@@ -1122,6 +1208,16 @@ export function startServer(
 
     const prevInning = room.match.inning;
     const prevHalf = room.match.half;
+    const prevBalls = room.match.balls;
+    const prevStrikes = room.match.strikes;
+    const prevOuts = room.match.outs;
+    const prevBasesMask =
+      (room.match.bases[0] !== null ? 1 : 0) |
+      (room.match.bases[1] !== null ? 2 : 0) |
+      (room.match.bases[2] !== null ? 4 : 0);
+    const pitcherSide = getPitchingSide(room.match);
+    const batterSideRole = getBattingSide(room.match);
+    const activeSnap = room.activePitch;
 
     let outcomeStr: string;
     let callout: { title: string; subtitle: string; color: string; ttl: number };
@@ -1238,9 +1334,44 @@ export function startServer(
     }
 
     const inningChanged = room.match.inning !== prevInning || room.match.half !== prevHalf;
-    const solvedSeq = room.activePitch.pitchSeq;
-    const spec = PITCH_SPECS[room.activePitch.pitchId];
-    const telemetry = `${spec.code} ${Math.round(room.activePitch.speedKmh)} km/h · BRK ${room.activePitch.breakCm}cm`;
+    const solvedSeq = activeSnap.pitchSeq;
+    const spec = PITCH_SPECS[activeSnap.pitchId];
+    const telemetry = `${spec.code} ${Math.round(activeSnap.speedKmh)} km/h · BRK ${activeSnap.breakCm}cm`;
+
+    recordPitchAnalytics(room, {
+      event: 'pitch',
+      pitchSeq: solvedSeq,
+      inning: prevInning,
+      half: prevHalf,
+      ballsBefore: prevBalls,
+      strikesBefore: prevStrikes,
+      outsBefore: prevOuts,
+      basesMaskBefore: prevBasesMask,
+      pitcherSide,
+      batterSide: batterSideRole,
+      pitcherName: room.players[pitcherSide]?.name ?? pitcherSide,
+      batterName: room.players[batterSideRole]?.name ?? batterSideRole,
+      pitchId: activeSnap.pitchId,
+      speedKmh: round2(activeSnap.speedKmh),
+      targetX: round3(activeSnap.targetX),
+      targetY: round3(activeSnap.targetY),
+      errorX: round3(activeSnap.errorX),
+      errorY: round3(activeSnap.errorY),
+      plateX: round3(plateField[0]),
+      plateY: round3(plateField[1]),
+      breakCm: activeSnap.breakCm,
+      swung,
+      powerSwing: swingData?.swingMode === 'power',
+      dtTiming: missResolution ? round3(missResolution.dtTiming) : null,
+      batX: swingData ? round3(swingData.batX) : null,
+      batY: swingData ? round3(swingData.batY) : null,
+      contact: false,
+      outcome: outcomeStr,
+      caughtByCatcher,
+      inningChanged,
+      awayRunsAfter: room.match.away.totalRuns,
+      homeRunsAfter: room.match.home.totalRuns,
+    });
 
     room.pitchSeq += 1;
     room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
@@ -1368,6 +1499,16 @@ export function startServer(
     const plateField = simToField(traj.plateCrossPos);
     const prevInning = room.match.inning;
     const prevHalf = room.match.half;
+    const prevBalls = room.match.balls;
+    const prevStrikes = room.match.strikes;
+    const prevOuts = room.match.outs;
+    const prevBasesMask =
+      (room.match.bases[0] !== null ? 1 : 0) |
+      (room.match.bases[1] !== null ? 2 : 0) |
+      (room.match.bases[2] !== null ? 4 : 0);
+    const pitcherSide = getPitchingSide(room.match);
+    const batterSideRole = getBattingSide(room.match);
+    const activeSnap = room.activePitch;
 
     room.match.lastChallenge = null;
     let outcome: ReturnType<typeof judgeBattedCap>;
@@ -1395,33 +1536,80 @@ export function startServer(
     const isBlockedSingle = Boolean(resolution.catchInfo.blocked) && outcome === '1B';
     let callout: { title: string; subtitle: string; color: string; ttl: number };
     if (outcome === 'HR') {
-      callout = { title: 'HOME RUN!', subtitle: `${resolution.distanceM.toFixed(1)}m`, color: '#ffd23f', ttl: 2.1 };
+      callout = { title: 'HOME RUN!', subtitle: `${resolution.distanceM.toFixed(1)}m`, color: '#d946ef', ttl: 2.1 };
     } else if (outcome === '3B') {
       callout = { title: 'TRIPLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE' : `${resolution.distanceM.toFixed(1)}m`, color: '#38bdf8', ttl: 1.6 };
     } else if (outcome === '2B') {
-      callout = { title: 'DOUBLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE' : `${resolution.distanceM.toFixed(1)}m`, color: '#4ade80', ttl: 1.5 };
+      callout = { title: 'DOUBLE!', subtitle: isBobbleHit ? 'FIELDER BOBBLE' : `${resolution.distanceM.toFixed(1)}m`, color: '#38bdf8', ttl: 1.5 };
     } else if (outcome === '1B') {
       callout = {
         title: 'SINGLE!',
         subtitle: isBlockedSingle ? 'OUTFIELD BLOCK' : isBobbleHit ? 'FIELDER BOBBLE' : `${resolution.distanceM.toFixed(1)}m`,
-        color: '#a3e635',
+        color: '#38bdf8',
         ttl: 1.4,
       };
     } else if (outcome === 'FOUL') {
-      callout = { title: 'FOUL', subtitle: '', color: '#cbd5e1', ttl: 1.1 };
+      callout = { title: 'FOUL', subtitle: '', color: '#fb923c', ttl: 1.1 };
     } else {
+      const isFoulFlyCatch = Boolean(resolution.catchInfo.caught && resolution.detail.includes('FOUL OUT'));
       callout = {
         title: 'OUT!',
-        subtitle: resolution.catchInfo.caught ? 'OUTFIELD CATCH' : 'INFIELD OUT',
+        subtitle: isFoulFlyCatch
+          ? 'FOUL OUT'
+          : resolution.catchInfo.caught
+            ? 'OUTFIELD CATCH'
+            : 'INFIELD OUT',
         color: '#ef4444',
         ttl: 1.5,
       };
     }
 
     const inningChanged = room.match.inning !== prevInning || room.match.half !== prevHalf;
-    const solvedSeq = room.activePitch.pitchSeq;
-    const spec = PITCH_SPECS[room.activePitch.pitchId];
-    const telemetry = `${spec.code} ${Math.round(room.activePitch.speedKmh)} km/h · BRK ${room.activePitch.breakCm}cm`;
+    const solvedSeq = activeSnap.pitchSeq;
+    const spec = PITCH_SPECS[activeSnap.pitchId];
+    const telemetry = `${spec.code} ${Math.round(activeSnap.speedKmh)} km/h · BRK ${activeSnap.breakCm}cm`;
+
+    recordPitchAnalytics(room, {
+      event: 'pitch',
+      pitchSeq: solvedSeq,
+      inning: prevInning,
+      half: prevHalf,
+      ballsBefore: prevBalls,
+      strikesBefore: prevStrikes,
+      outsBefore: prevOuts,
+      basesMaskBefore: prevBasesMask,
+      pitcherSide,
+      batterSide: batterSideRole,
+      pitcherName: room.players[pitcherSide]?.name ?? pitcherSide,
+      batterName: room.players[batterSideRole]?.name ?? batterSideRole,
+      pitchId: activeSnap.pitchId,
+      speedKmh: round2(activeSnap.speedKmh),
+      targetX: round3(activeSnap.targetX),
+      targetY: round3(activeSnap.targetY),
+      errorX: round3(activeSnap.errorX),
+      errorY: round3(activeSnap.errorY),
+      plateX: round3(plateField[0]),
+      plateY: round3(plateField[1]),
+      breakCm: activeSnap.breakCm,
+      swung: true,
+      powerSwing: swingData.swingMode === 'power',
+      dtTiming: round3(resolution.dtTiming),
+      batX: round3(swingData.batX),
+      batY: round3(swingData.batY),
+      contact: true,
+      quality: resolution.quality,
+      exitSpeedKmh: Math.round(resolution.exitSpeedKmh),
+      launchAngleDeg: Math.round(resolution.launchAngleDeg ?? 0),
+      distanceM: round2(resolution.distanceM),
+      outcome,
+      isFoulFlyOut: Boolean(resolution.catchInfo.caught && resolution.detail.includes('FOUL OUT')),
+      caughtBy: resolution.catchInfo.caught ? resolution.catchInfo.fielderId : null,
+      bobbledBy: resolution.catchInfo.bobbled ? resolution.catchInfo.fielderId : null,
+      blockedBy: resolution.catchInfo.blocked ? resolution.catchInfo.fielderId : null,
+      inningChanged,
+      awayRunsAfter: room.match.away.totalRuns,
+      homeRunsAfter: room.match.home.totalRuns,
+    });
 
     room.pitchSeq += 1;
     room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
@@ -1484,7 +1672,9 @@ export function startServer(
     const away = room.players.away;
     if (!away) return;
 
-    room.lastActivityAt = Date.now();
+    const now = Date.now();
+    if (!room.startedAtMs) room.startedAtMs = now;
+    room.lastActivityAt = now;
     monitor.matchesStarted += 1;
     const names = { home: home.name, away: away.name };
     for (const side of ['home', 'away'] as const) {
@@ -1516,13 +1706,16 @@ export function startServer(
     const homeClient = homeFirst ? c1 : c2;
     const awayClient = homeFirst ? c2 : c1;
 
+    const now = Date.now();
     const room: Room = {
       code,
+      matchId: generateMatchId(code),
       mode,
       isMatchmaking: true,
       mercyRule: true,
-      createdAt: Date.now(),
-      lastActivityAt: Date.now(),
+      createdAt: now,
+      startedAtMs: now,
+      lastActivityAt: now,
       match: buildMatchState(mode, homeClient.name, awayClient.name),
       pitchSeq: 1,
       solvingSeq: null,
@@ -1547,6 +1740,7 @@ export function startServer(
           ws: homeClient.ws,
           connected: true,
           disconnectTimer: null,
+          disconnectDeadlineAt: null,
         },
         away: {
           token: crypto.randomUUID(),
@@ -1555,9 +1749,11 @@ export function startServer(
           ws: awayClient.ws,
           connected: true,
           disconnectTimer: null,
+          disconnectDeadlineAt: null,
         },
       },
       spectators: new Set(),
+      spectatorsPeak: 0,
       recorded: false,
     };
     rooms.set(code, room);
@@ -1666,7 +1862,7 @@ export function startServer(
 
   // --- HTTP Server (Static + /health + Security Headers) ---
   const CSP_POLICY =
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'self'; frame-ancestors 'none'";
+    "default-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss: https://fonts.googleapis.com https://fonts.gstatic.com; base-uri 'self'; frame-ancestors 'none'";
 
   const server = http.createServer((req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1699,7 +1895,10 @@ export function startServer(
       ? parsedUrl.pathname.slice('/capbaseball'.length)
       : parsedUrl.pathname;
 
-    if (isGetOrHead && (normalizedPath === '/monitor/' || normalizedPath === '/pitch-lab/')) {
+    if (
+      isGetOrHead &&
+      (normalizedPath === '/monitor/' || normalizedPath === '/analytics/' || normalizedPath === '/pitch-lab/')
+    ) {
       const target = parsedUrl.pathname.slice(0, -1) + parsedUrl.search;
       monitor.recordHttp(301, 0);
       res.writeHead(301, { Location: target });
@@ -1786,6 +1985,64 @@ export function startServer(
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       });
       res.end(req.method === 'HEAD' ? undefined : MONITOR_JS);
+      return;
+    }
+
+    if (isGetOrHead && normalizedPath === '/analytics') {
+      const html = ANALYTICS_HTML.replace(
+        'src="./analytics.js"',
+        `src="./analytics.js?v=${encodeURIComponent(version ?? 'dev')}"`,
+      );
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(html, 'utf8');
+      monitor.recordHttp(200, bytes);
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end(req.method === 'HEAD' ? undefined : html);
+      return;
+    }
+
+    if (isGetOrHead && normalizedPath === '/analytics.js') {
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(ANALYTICS_JS, 'utf8');
+      monitor.recordHttp(200, bytes);
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end(req.method === 'HEAD' ? undefined : ANALYTICS_JS);
+      return;
+    }
+
+    if (isGetOrHead && normalizedPath === '/analytics.json') {
+      if (monitorToken) {
+        const provided =
+          parsedUrl.searchParams.get('token') ||
+          String(req.headers['x-monitor-token'] || '') ||
+          String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        if (provided !== monitorToken) {
+          const body = JSON.stringify({ error: 'unauthorized' });
+          monitor.recordHttp(401, req.method === 'HEAD' ? 0 : Buffer.byteLength(body, 'utf8'));
+          res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(req.method === 'HEAD' ? undefined : body);
+          return;
+        }
+      }
+      const monReport = monitor.buildReport(buildMonitorSnapshot());
+      const report = buildAnalyticsReport(
+        getMatchLogPath(opts.matchLogPath),
+        getPitchLogPath(opts.pitchLogPath),
+        monReport.gameplay,
+      );
+      const payload = JSON.stringify(report);
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(payload, 'utf8');
+      monitor.recordHttp(200, bytes);
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(req.method === 'HEAD' ? undefined : payload);
       return;
     }
 
@@ -2138,13 +2395,16 @@ export function startServer(
           const code = generateRoomCode(rooms);
           const token = crypto.randomUUID();
 
+          const now = Date.now();
           const room: Room = {
             code,
+            matchId: generateMatchId(code),
             mode,
             isMatchmaking: false,
             mercyRule,
-            createdAt: Date.now(),
-            lastActivityAt: Date.now(),
+            createdAt: now,
+            startedAtMs: 0,
+            lastActivityAt: now,
             match: buildMatchState(mode, client.name, 'Opponent', mercyRule),
             pitchSeq: 1,
             solvingSeq: null,
@@ -2169,10 +2429,12 @@ export function startServer(
                 ws,
                 connected: true,
                 disconnectTimer: null,
+                disconnectDeadlineAt: null,
               },
               away: null,
             },
             spectators: new Set(),
+            spectatorsPeak: 0,
             recorded: false,
           };
           rooms.set(code, room);
@@ -2225,6 +2487,7 @@ export function startServer(
             ws,
             connected: true,
             disconnectTimer: null,
+            disconnectDeadlineAt: null,
           };
           const hostPlayer = room.players.home;
           const swapSides = randomizeFriendSides && crypto.randomInt(0, 2) === 1;
@@ -2259,6 +2522,7 @@ export function startServer(
           if (hostPlayer.disconnectTimer) {
             // Host went offline while waiting; the match has started, so fall back to the normal grace.
             clearTimeout(hostPlayer.disconnectTimer);
+            hostPlayer.disconnectDeadlineAt = Date.now() + graceMs;
             hostPlayer.disconnectTimer = setTimeout(() => expireSeat(code, hostSide), graceMs);
             sendJson(ws, { type: 'opponent_disconnected', graceSec: Math.round(graceMs / 1000) });
           }
@@ -2300,6 +2564,7 @@ export function startServer(
             clearTimeout(player.disconnectTimer);
             player.disconnectTimer = null;
           }
+          player.disconnectDeadlineAt = null;
           if (player.ws && player.ws !== ws) {
             const oldClient = player.clientId ? clients.get(player.clientId) : null;
             if (oldClient) {
@@ -2348,6 +2613,97 @@ export function startServer(
           break;
         }
 
+        case 'session_check': {
+          const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
+          const token = typeof msg.token === 'string' ? msg.token : '';
+          const room = rooms.get(code);
+          if (!room || !token || room.turnState === 'game_over') {
+            sendJson(ws, { type: 'session_status', active: false });
+            break;
+          }
+          let matchedSide: Side | null = null;
+          if (room.players.home.token === token) matchedSide = 'home';
+          else if (room.players.away?.token === token) matchedSide = 'away';
+          if (!matchedSide) {
+            sendJson(ws, { type: 'session_status', active: false });
+            break;
+          }
+          const seat = room.players[matchedSide]!;
+          // Only prompt reconnect when the seat is currently offline (prevents a 2nd local tab from hijacking an active tab)
+          const seatOnline = seat.connected && seat.ws !== null && seat.ws.readyState === WebSocket.OPEN;
+          if (seatOnline) {
+            sendJson(ws, { type: 'session_status', active: false });
+            break;
+          }
+          const oppSide: Side = matchedSide === 'home' ? 'away' : 'home';
+          const opp = room.players[oppSide];
+          const remMs = seat.disconnectDeadlineAt ? Math.max(0, seat.disconnectDeadlineAt - Date.now()) : graceMs;
+          sendJson(ws, {
+            type: 'session_status',
+            active: true,
+            code,
+            roomKind: room.isMatchmaking ? 'live' : 'friend',
+            opponentName: opp?.name ?? '',
+            remainingSec: Math.ceil(remMs / 1000),
+            waiting: !room.players.away,
+          });
+          break;
+        }
+
+        case 'session_forfeit': {
+          const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
+          const token = typeof msg.token === 'string' ? msg.token : '';
+          const room = rooms.get(code);
+          if (!room || !token || room.turnState === 'game_over') {
+            sendJson(ws, { type: 'session_status', active: false });
+            break;
+          }
+          let matchedSide: Side | null = null;
+          if (room.players.home.token === token) matchedSide = 'home';
+          else if (room.players.away?.token === token) matchedSide = 'away';
+          if (!matchedSide) {
+            sendJson(ws, { type: 'session_status', active: false });
+            break;
+          }
+          const seat = room.players[matchedSide]!;
+          if (seat.disconnectTimer) {
+            clearTimeout(seat.disconnectTimer);
+            seat.disconnectTimer = null;
+          }
+          seat.disconnectDeadlineAt = null;
+          if (!room.players.away) {
+            cleanupRoom(code);
+            scheduleStatsBroadcast();
+            sendJson(ws, { type: 'session_status', active: false });
+            break;
+          }
+          clearPitchClock(room);
+          clearRoomPauses(room);
+          room.absWindowUntil = 0;
+          if (room.swingTimer) {
+            clearTimeout(room.swingTimer);
+            room.swingTimer = null;
+          }
+          const winner: Side = matchedSide === 'home' ? 'away' : 'home';
+          room.match.isGameOver = true;
+          room.match.winner = winner;
+          room.match.endReason = 'resign';
+          room.match.lastEvent = `${seat.name} forfeited`;
+          room.turnState = 'game_over';
+          room.activePitch = null;
+          recordMatchEnd(room, 'resign');
+          sendToRoom(room, {
+            type: 'match_over',
+            winner,
+            reason: 'resign',
+            match: room.match,
+          });
+          cleanupRoom(code);
+          scheduleStatsBroadcast();
+          sendJson(ws, { type: 'session_status', active: false });
+          break;
+        }
+
         case 'set_batter_side': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
@@ -2385,6 +2741,15 @@ export function startServer(
           const solvedSeq = room.pitchSeq;
           room.pitchSeq += 1;
           room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
+          recordPitchAnalytics(room, {
+            event: 'ibb',
+            pitchSeq: solvedSeq,
+            inning: room.match.inning,
+            half: room.match.half,
+            pitcherSide: client.side,
+            pitcherName: room.players[client.side]?.name ?? client.side,
+            outcome: 'IBB',
+          });
 
           sendToRoom(room, {
             type: 'pitch_result',
@@ -2705,6 +3070,20 @@ export function startServer(
           room.absWindowUntil = 0;
 
           room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
+          recordPitchAnalytics(room, {
+            event: 'abs_challenge',
+            pitchSeq: room.pitchSeq,
+            inning: room.match.inning,
+            half: room.match.half,
+            challengerSide: res.challengerSide,
+            challengerName: room.players[res.challengerSide]?.name ?? res.challengerSide,
+            overturned: res.overturned,
+            trueCall: res.trueCall,
+            umpireCall: res.umpireCall,
+            marginCm: round2(res.marginCm),
+            plateX: round3(res.plateX),
+            plateY: round3(res.plateY),
+          });
           sendToRoom(room, {
             type: 'abs_result',
             overturned: res.overturned,
@@ -2868,9 +3247,11 @@ export function startServer(
                   graceSec: Math.round(graceMs / 1000),
                 });
               }
+              const waitDurationMs = room.players.away ? graceMs : waitingGraceMs;
+              player.disconnectDeadlineAt = Date.now() + waitDurationMs;
               player.disconnectTimer = setTimeout(
                 () => expireSeat(code, side),
-                room.players.away ? graceMs : waitingGraceMs,
+                waitDurationMs,
               );
             }
           }

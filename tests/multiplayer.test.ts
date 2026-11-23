@@ -1630,4 +1630,132 @@ describe('Online Multiplayer Server Integration', () => {
       await rsSrv.close();
     }
   });
+
+  it('32. Dual-layer analytics logs matches.jsonl and pitches.jsonl for both LIVE and FRIEND matches, and supports session_check + session_forfeit', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-analytics-'));
+    const matchLogPath = path.join(tmpDir, 'matches.jsonl');
+    const pitchLogPath = path.join(tmpDir, 'pitches.jsonl');
+    const anSrv = await startServer(0, {
+      pitchClockScale: 0,
+      absWindowMs: 0,
+      graceMs: 8000,
+      matchLogPath,
+      pitchLogPath,
+      randomizeFriendSides: false,
+    });
+    const host = await connectClient(anSrv.port, 'HostAn');
+    const guest = await connectClient(anSrv.port, 'GuestAn');
+    const probe = await connectClient(anSrv.port, 'ProbeAn');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'HostAn' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      const code = String(created.code);
+      const hostToken = String(created.token);
+
+      guest.send({ type: 'join', code, name: 'GuestAn' });
+      const joined = await guest.nextMsg((m) => m.type === 'room_joined');
+      const guestToken = String(joined.token);
+      await host.nextMsg((m) => m.type === 'match_start');
+      await guest.nextMsg((m) => m.type === 'match_start');
+
+      // While guest is still connected, session_check returns active: false (no 2nd-tab hijack)
+      probe.send({ type: 'session_check', code, token: guestToken });
+      const stOnline = await probe.nextMsg((m) => m.type === 'session_status');
+      expect(stOnline.active).toBe(false);
+
+      // Throw 1 pitch + take -> logs to pitches.jsonl
+      host.send({
+        type: 'pitch_submit',
+        pitchSeq: 1,
+        pitchId: 'cutter',
+        speedKmh: 70,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      await host.nextMsg((m) => m.type === 'pitch_launch');
+      await guest.nextMsg((m) => m.type === 'pitch_launch');
+      guest.send({ type: 'no_swing', pitchSeq: 1 });
+      await host.nextMsg((m) => m.type === 'pitch_result');
+      await guest.nextMsg((m) => m.type === 'pitch_result');
+
+      // Guest disconnects -> session_check now returns active: true with roomKind: 'friend' and remainingSec > 0
+      await guest.close();
+      await host.nextMsg((m) => m.type === 'opponent_disconnected');
+
+      probe.send({ type: 'session_check', code, token: guestToken });
+      const stOffline = await probe.nextMsg((m) => m.type === 'session_status');
+      expect(stOffline.active).toBe(true);
+      expect(stOffline.code).toBe(code);
+      expect(stOffline.roomKind).toBe('friend');
+      expect(stOffline.opponentName).toBe('HostAn');
+      expect(Number(stOffline.remainingSec)).toBeGreaterThan(0);
+
+      // Guest chooses forfeit from reconnect dialog -> session_forfeit ends match immediately as 'resign'
+      probe.send({ type: 'session_forfeit', code, token: guestToken });
+      const [stAfter, overHost] = await Promise.all([
+        probe.nextMsg((m) => m.type === 'session_status'),
+        host.nextMsg((m) => m.type === 'match_over'),
+      ]);
+      expect(stAfter.active).toBe(false);
+      expect(overHost.reason).toBe('resign');
+      expect(overHost.winner).toBe('home');
+
+      // Verify both JSONL files recorded the friend match and its pitch telemetry
+      const pitchLines = fs.readFileSync(pitchLogPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      const matchLines = fs.readFileSync(matchLogPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      expect(pitchLines.length).toBe(1);
+      expect(pitchLines[0].event).toBe('pitch');
+      expect(pitchLines[0].roomKind).toBe('friend');
+      expect(pitchLines[0].pitchId).toBe('cutter');
+      expect(pitchLines[0].code).toBe(code);
+      expect(matchLines.length).toBe(1);
+      expect(matchLines[0].roomKind).toBe('friend');
+      expect(matchLines[0].matchId).toBe(pitchLines[0].matchId);
+      expect(matchLines[0].reason).toBe('resign');
+      expect(matchLines[0].winner).toBe('home');
+      expect(matchLines[0].awayName).toBe('GuestAn');
+      expect(matchLines[0].homeName).toBe('HostAn');
+
+      // Verify /analytics HTML, external JS, and /analytics.json fixed-window tail report
+      const fetchPath = (p: string) =>
+        new Promise<{ status: number; body: string }>((resolve, reject) => {
+          http
+            .get(`http://127.0.0.1:${anSrv.port}${p}`, (res) => {
+              let body = '';
+              res.setEncoding('utf8');
+              res.on('data', (c) => (body += c));
+              res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+            })
+            .on('error', reject);
+        });
+
+      const htmlRes = await fetchPath('/capbaseball/analytics');
+      expect(htmlRes.status).toBe(200);
+      expect(htmlRes.body).toContain('線上對戰數據分析面板');
+      expect(htmlRes.body).toContain('./analytics.js');
+
+      const jsRes = await fetchPath('/capbaseball/analytics.js');
+      expect(jsRes.status).toBe(200);
+      expect(jsRes.body).toContain('./analytics.json');
+
+      const jsonRes = await fetchPath('/capbaseball/analytics.json');
+      expect(jsonRes.status).toBe(200);
+      const report = JSON.parse(jsonRes.body);
+      expect(report.window.maxMatches).toBe(100);
+      expect(report.window.maxPitches).toBe(2000);
+      expect(report.window.retainedMaxMatches).toBe(5000);
+      expect(report.window.retainedMaxPitches).toBe(50000);
+      expect(report.matchesSummary.total).toBe(1);
+      expect(report.matchesSummary.friend).toBe(1);
+      expect(report.battingSummary.totalPitches).toBe(1);
+      expect(report.recentMatches[0].code).toBe(code);
+      void hostToken;
+    } finally {
+      await Promise.all([host.close(), guest.close(), probe.close()]);
+      await anSrv.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

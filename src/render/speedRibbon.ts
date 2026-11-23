@@ -300,7 +300,6 @@ export function drawSpeedRibbon3D<P extends Point3>(
   const ptCount = curves[0].points.length;
   if (ptCount < 2) return;
 
-  const subSteps = Math.max(1, opts?.subSteps ?? 2);
   const alphaScale = opts?.surfaceAlphaScale ?? 1.0;
   const activeAlphaScale = opts?.activeAlphaScale ?? 1.0;
   const showLanding = opts?.showLandingCurve !== false;
@@ -336,103 +335,13 @@ export function drawSpeedRibbon3D<P extends Point3>(
   };
 
   if (!(soloActive && activeU !== null) && alphaScale > 0.015) {
-    // Project all sample curves once
-    const projectedGrid: ProjectedPoint[][] = curves.map((c) => c.points.map((p) => project(p)));
-
-    // 1. Silky Catmull-Rom translucent speed-gradient ribbon strips (smooth curved silhouettes, ~10 fills total)
-    for (let k = 0; k < curves.length - 1; k++) {
-      const u0 = curves[k].u;
-      const u1 = curves[k + 1].u;
-      const g0 = projectedGrid[k];
-      const g1 = projectedGrid[k + 1];
-
-      let firstValid = -1;
-      let lastValid = -1;
-      for (let j = 0; j < ptCount; j++) {
-        if (g0[j].ok && g1[j].ok) {
-          if (firstValid === -1) firstValid = j;
-          lastValid = j;
-        }
-      }
-      if (firstValid === -1 || lastValid <= firstValid) continue;
-
-      for (let s = 0; s < subSteps; s++) {
-        const fA = s / subSteps;
-        const fB = (s + 1) / subSteps;
-        const fMid = (fA + fB) * 0.5;
-        const midU = u0 + (u1 - u0) * fMid;
-
-        const topXs: number[] = [];
-        const topYs: number[] = [];
-        const botXs: number[] = [];
-        const botYs: number[] = [];
-        for (let j = firstValid; j <= lastValid; j++) {
-          const a = g0[j];
-          const b = g1[j];
-          if (!a.ok || !b.ok) continue;
-          topXs.push(a.sx + (b.sx - a.sx) * fA);
-          topYs.push(a.sy + (b.sy - a.sy) * fA);
-        }
-        for (let j = lastValid; j >= firstValid; j--) {
-          const a = g0[j];
-          const b = g1[j];
-          if (!a.ok || !b.ok) continue;
-          botXs.push(a.sx + (b.sx - a.sx) * fB);
-          botYs.push(a.sy + (b.sy - a.sy) * fB);
-        }
-        if (topXs.length < 2 || botXs.length < 2) continue;
-
-        const xStart = (topXs[0] + botXs[botXs.length - 1]) * 0.5;
-        const yStart = (topYs[0] + botYs[botYs.length - 1]) * 0.5;
-        const xEnd = (topXs[topXs.length - 1] + botXs[0]) * 0.5;
-        const yEnd = (topYs[topYs.length - 1] + botYs[0]) * 0.5;
-
-        if (Math.hypot(xEnd - xStart, yEnd - yStart) > 2) {
-          const grad = ctx.createLinearGradient(xStart, yStart, xEnd, yEnd);
-          grad.addColorStop(0, springColorRgba(midU, 0.055 * alphaScale));
-          grad.addColorStop(0.55, springColorRgba(midU, 0.145 * alphaScale));
-          grad.addColorStop(1, springColorRgba(midU, 0.21 * alphaScale));
-          ctx.fillStyle = grad;
-        } else {
-          ctx.fillStyle = springColorRgba(midU, 0.14 * alphaScale);
-        }
-
-        ctx.beginPath();
-        traceSmoothPolyline(ctx, topXs, topYs, true);
-        traceSmoothPolyline(ctx, botXs, botYs, false);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-
-    // 2a. Delicate Manim ParametricSurface iso-time cross-mesh (4 ultra-lightweight splines across speed curves)
-    const meshFracs = [0.28, 0.52, 0.74, 0.90];
-    const meshColor = `rgba(224, 242, 254, ${(0.17 * alphaScale).toFixed(3)})`;
-    for (const frac of meshFracs) {
-      const j = Math.max(1, Math.min(ptCount - 2, Math.round(frac * (ptCount - 1))));
-      const mx: number[] = [];
-      const my: number[] = [];
-      for (let k = 0; k < curves.length; k++) {
-        const pr = projectedGrid[k][j];
-        if (!pr.ok) continue;
-        mx.push(pr.sx);
-        my.push(pr.sy);
-      }
-      if (mx.length >= 2) {
-        drawSmoothStroke(mx, my, meshColor, 0.75 * dpr);
-      }
-    }
-
-    // 2b. Inner iso-speed filaments (including BEST gold) stay delicate & silky smooth
-    for (let k = 1; k < curves.length - 1; k++) {
-      const { xs, ys } = extractValidCoords(projectedGrid[k]);
-      drawSmoothStroke(xs, ys, springColorRgba(curves[k].u, 0.22 * alphaScale), 0.85 * dpr);
-    }
-
-    // 2c. Bold Manim Dual-Layer Glow Boundary Splines: Blue lower bound (0) & Coral-Red upper bound (last)
+    // Only project and draw the two extreme 3D trajectories: most SOFT (0) and most HARD (last).
+    // Intermediate 3D curves and ribbon surface fill are omitted for maximum visual clarity,
+    // while the 2D hit-plane probability cloud union boundary is drawn separately by drawTyphoonCone.
     for (const edgeIdx of [0, curves.length - 1]) {
       const u = curves[edgeIdx].u;
-      const { xs, ys } = extractValidCoords(projectedGrid[edgeIdx]);
+      const projectedEdge = curves[edgeIdx].points.map((p) => project(p));
+      const { xs, ys } = extractValidCoords(projectedEdge);
       // Pass 1: Soft luminous Manim bloom halo (pure GPU vector stroke, zero shadowBlur)
       drawSmoothStroke(xs, ys, springColorRgba(u, Math.min(1, 0.28 * alphaScale)), 5.4 * dpr);
       // Pass 2: Rich Manim primary stroke
@@ -448,7 +357,7 @@ export function drawSpeedRibbon3D<P extends Point3>(
       }
     }
 
-    // 3. Hit-plane smooth luminous landing spine connecting SOFT -> BEST -> OVER endpoints
+    // Optional Hit-plane landing spine connecting SOFT -> BEST -> HARD endpoints
     if (showLanding) {
       const landingPts = curves.map((c) => project(c.landing));
       const { xs: lxs, ys: lys } = extractValidCoords(landingPts);
