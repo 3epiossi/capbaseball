@@ -11,7 +11,7 @@ import type { GameMode, MatchEndReason, MatchState, PlayerSlot } from '../rules/
 
 export type ServerLoadStatus = 'green' | 'yellow' | 'red';
 
-export const PITCH_IDS_ORDER: readonly PitchId[] = ['straight', 'cutter', 'fork', 'changeup'];
+export const PITCH_IDS_ORDER: readonly PitchId[] = ['straight', 'cutter', 'fork', 'changeup', 'knuckle'];
 const LOAD_ORDER: readonly ServerLoadStatus[] = ['green', 'yellow', 'red'];
 
 export function round2(n: number): number {

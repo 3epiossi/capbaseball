@@ -252,12 +252,12 @@ function buildActiveSpec(): PitchSpec {
     clAlphaPerRad: aero.clAlphaPerRad,
     magnusCoeff: aero.magnusCoeff,
     envelope: {
-      minFlightZ: 0.05,
-      maxFlightZ: 3.5,
-      maxAbsFlightY: 2.5,
-      minElevationDeg: -12,
-      maxElevationDeg: 24,
-      maxAbsAzimuthDeg: 18,
+      minFlightZ: 0.02,
+      maxFlightZ: 6.0,
+      maxAbsFlightY: 4.5,
+      minElevationDeg: -30,
+      maxElevationDeg: 45,
+      maxAbsAzimuthDeg: 45,
     },
   };
 }
@@ -372,8 +372,8 @@ function buildLabSpeedRibbon(): SpeedRibbonData<V3> {
   const spec = buildActiveSpec();
   const rel: V3 = [state.releasePos[0], state.releasePos[1], state.releasePos[2]];
   const preset = PITCH_SPECS[state.presetId];
-  const minS = Math.min(preset.speedRangeKmh[0], Math.max(25, state.speedKmh - 10));
-  const maxS = Math.max(preset.speedRangeKmh[1] + 3, Math.min(110, state.speedKmh + 8));
+  const minS = Math.min(preset.speedRangeKmh[0], Math.max(15, state.speedKmh - 10));
+  const maxS = Math.max(preset.speedRangeKmh[1] + 3, Math.min(130, state.speedKmh + 8));
   const sampleCount = 16;
   const curvesRev: SpeedRibbonCurve<V3>[] = [];
   let prevAz: number | undefined;

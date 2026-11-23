@@ -108,7 +108,7 @@ interface PitchRecord {
   code?: string;
   roomKind?: 'live' | 'friend';
   event?: 'pitch' | 'ibb' | 'pitch_clock' | 'abs_challenge';
-  pitchId?: 'straight' | 'cutter' | 'fork' | 'changeup';
+  pitchId?: 'straight' | 'cutter' | 'fork' | 'changeup' | 'knuckle';
   speedKmh?: number;
   breakCm?: number;
   trueCall?: 'strike' | 'ball';
@@ -189,6 +189,7 @@ export function buildAnalyticsReport(
     cutter: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
     fork: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
     changeup: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
+    knuckle: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
   };
 
   let totalThrownPitches = 0;
@@ -286,7 +287,7 @@ export function buildAnalyticsReport(
   const pct = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 1000) / 10 : 0);
   const avg = (sum: number, den: number) => (den > 0 ? Math.round((sum / den) * 10) / 10 : 0);
 
-  const pitchRepertoire = (['straight', 'cutter', 'fork', 'changeup'] as const).map((id) => {
+  const pitchRepertoire = (['straight', 'cutter', 'fork', 'changeup', 'knuckle'] as const).map((id) => {
     const s = pitchStats[id];
     return {
       pitchId: id,
@@ -579,6 +580,7 @@ export const ANALYTICS_JS = `(() => {
     cutter: '卡特 (CUT)',
     fork: '指叉 (FORK)',
     changeup: '變速 (CH)',
+    knuckle: '蝴蝶 (KNU)',
   };
 
   const REASON_NAMES = {

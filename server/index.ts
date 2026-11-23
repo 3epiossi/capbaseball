@@ -16,7 +16,7 @@ import {
   trimJsonlFileIfNeeded,
 } from './analyticsUi';
 import { PhysicsPool, type ServerPitchSummary } from './physicsPool';
-import { checkCatcherCatch } from '../src/ai/cpu';
+import { evaluateCatcherCatch } from '../src/ai/cpu';
 import {
   encodeServerMsgV2,
   normalizeClientMsg,
@@ -1197,14 +1197,22 @@ export function startServer(
     } | null = null,
   ) {
     if (!room.activePitch) return;
-    const traj = room.activePitch.trajectory;
+    const activeSnap = room.activePitch;
+    const traj = activeSnap.trajectory;
     const plateField = simToField(traj.plateCrossPos);
-    const caughtByCatcher = checkCatcherCatch(
+    const effectiveReachesPassLine = traj.reachesPassLine || plateField[1] < 0.14;
+    const catchRes = evaluateCatcherCatch(
       plateField[0],
       plateField[1],
-      traj.reachesPassLine,
-      room.activePitch.seed,
+      effectiveReachesPassLine,
+      {
+        pitchId: activeSnap.pitchId,
+        speedKmh: activeSnap.speedKmh,
+        breakCm: activeSnap.breakCm,
+        seed: activeSnap.seed,
+      },
     );
+    const caughtByCatcher = catchRes.caught;
 
     const prevInning = room.match.inning;
     const prevHalf = room.match.half;
@@ -1217,7 +1225,6 @@ export function startServer(
       (room.match.bases[2] !== null ? 4 : 0);
     const pitcherSide = getPitchingSide(room.match);
     const batterSideRole = getBattingSide(room.match);
-    const activeSnap = room.activePitch;
 
     let outcomeStr: string;
     let callout: { title: string; subtitle: string; color: string; ttl: number };
@@ -1245,7 +1252,7 @@ export function startServer(
         swung: false,
         contacted: false,
         caughtByCatcher,
-        reachesPassLine: traj.reachesPassLine,
+        reachesPassLine: effectiveReachesPassLine,
         currentStrikes: room.match.strikes,
         runnersOnBase: room.match.bases.some((b) => b !== null),
         forceCall: umpireEval.umpireCall,
@@ -1257,7 +1264,7 @@ export function startServer(
         swung: false,
         contacted: false,
         caughtByCatcher,
-        reachesPassLine: traj.reachesPassLine,
+        reachesPassLine: effectiveReachesPassLine,
         forceCall: umpireEval.umpireCall,
       });
 
@@ -1270,14 +1277,17 @@ export function startServer(
         marginM: umpireEval.marginM,
         preSnapshot: preSnap,
         caughtByCatcher,
-        reachesPassLine: traj.reachesPassLine,
+        reachesPassLine: effectiveReachesPassLine,
       });
 
       outcomeStr = res.call;
       if (res.call === 'UNCAUGHT_THIRD_STRIKE') {
         callout = { title: 'UNCAUGHT 3RD', subtitle: 'DROPPED 3RD · BATTER TO 1B', color: '#f97316', ttl: 1.7 };
       } else if (res.isWildPitch) {
-        callout = { title: 'WILD PITCH', subtitle: 'WILD PITCH · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 };
+        const isPb = catchRes.kind === 'passed_ball';
+        callout = isPb
+          ? { title: 'PASSED BALL', subtitle: 'PASSED BALL · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 }
+          : { title: 'WILD PITCH', subtitle: 'WILD PITCH · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 };
       } else if (res.isStrike) {
         const isK = room.match.strikes === 0 && room.match.lastEvent.includes('strikes out');
         callout = {
@@ -1303,7 +1313,7 @@ export function startServer(
         swung: true,
         contacted: false,
         caughtByCatcher,
-        reachesPassLine: traj.reachesPassLine,
+        reachesPassLine: effectiveReachesPassLine,
         currentStrikes: room.match.strikes,
         runnersOnBase: room.match.bases.some((b) => b !== null),
       });
@@ -1314,14 +1324,17 @@ export function startServer(
         swung: true,
         contacted: false,
         caughtByCatcher,
-        reachesPassLine: traj.reachesPassLine,
+        reachesPassLine: effectiveReachesPassLine,
       });
 
       outcomeStr = res.call;
       if (res.call === 'UNCAUGHT_THIRD_STRIKE') {
         callout = { title: 'UNCAUGHT 3RD', subtitle: 'DROPPED 3RD · BATTER TO 1B', color: '#f97316', ttl: 1.7 };
       } else if (res.isWildPitch) {
-        callout = { title: 'WILD PITCH', subtitle: 'WILD PITCH · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 };
+        const isPb = catchRes.kind === 'passed_ball';
+        callout = isPb
+          ? { title: 'PASSED BALL', subtitle: 'PASSED BALL · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 }
+          : { title: 'WILD PITCH', subtitle: 'WILD PITCH · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 };
       } else {
         const isK = room.match.strikes === 0 && room.match.lastEvent.includes('strikes out');
         callout = {

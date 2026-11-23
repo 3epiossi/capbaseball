@@ -6,7 +6,7 @@ import {
   type OutfielderInit,
 } from '../src/physics/contact';
 import { solvePitchTrajectory } from '../src/physics/pitches';
-import { createOutfielders, updateOutfielders } from '../src/ai/cpu';
+import { createOutfielders, evaluateCatcherCatch, updateOutfielders } from '../src/ai/cpu';
 import {
   FENCE_DIST,
   PLATE_WIDTH,
@@ -647,5 +647,66 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     expect(mOff.isGameOver).toBe(false);
     expect(mOff.mercyTriggered).toBe(false);
     expect(mOff.inning).toBe(3);
+  });
+
+  it('distinguishes wild pitches vs passed balls (knuckleball flutter, high velocity, dirt bounce)', () => {
+    // 1. Clean comfort-box 68 km/h fastball -> always caught
+    const clean = evaluateCatcherCatch(0, 0.72, true, {
+      pitchId: 'straight',
+      speedKmh: 68,
+      breakCm: 55,
+      seed: 101,
+    });
+    expect(clean.caught).toBe(true);
+    expect(clean.kind).toBe('caught');
+
+    // 2. Far outside diving block box or dirt bounce (< 0.14m) -> wild_pitch
+    const wildHigh = evaluateCatcherCatch(0.75, 0.8, true, {
+      pitchId: 'straight',
+      speedKmh: 70,
+      seed: 101,
+    });
+    expect(wildHigh.caught).toBe(false);
+    expect(wildHigh.kind).toBe('wild_pitch');
+
+    const dirtSkip = evaluateCatcherCatch(0.05, 0.10, true, {
+      pitchId: 'fork',
+      speedKmh: 65,
+      seed: 101,
+    });
+    expect(dirtSkip.caught).toBe(false);
+    expect(dirtSkip.kind).toBe('wild_pitch');
+
+    // 3. Knuckleball inside comfort box triggers deterministic passed_ball ~7-11% of the time
+    let knuPassed = 0;
+    for (let s = 1; s <= 200; s++) {
+      const r = evaluateCatcherCatch(0.12, 0.72, true, {
+        pitchId: 'knuckle',
+        speedKmh: 50,
+        seed: s * 3571,
+      });
+      if (!r.caught) {
+        expect(r.kind).toBe('passed_ball');
+        knuPassed++;
+      }
+    }
+    expect(knuPassed).toBeGreaterThanOrEqual(5);
+    expect(knuPassed).toBeLessThanOrEqual(35);
+
+    // 4. Blazing 76 km/h fastball on edge of comfort box triggers occasional passed_ball
+    let velPassed = 0;
+    for (let s = 1; s <= 200; s++) {
+      const r = evaluateCatcherCatch(0.36, 0.95, true, {
+        pitchId: 'straight',
+        speedKmh: 76,
+        seed: s * 4099,
+      });
+      if (!r.caught) {
+        expect(r.kind).toBe('passed_ball');
+        velPassed++;
+      }
+    }
+    expect(velPassed).toBeGreaterThanOrEqual(4);
+    expect(velPassed).toBeLessThanOrEqual(40);
   });
 });

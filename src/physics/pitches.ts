@@ -16,7 +16,7 @@ import {
   type V3,
 } from './vector';
 
-export type PitchId = 'straight' | 'cutter' | 'fork' | 'changeup';
+export type PitchId = 'straight' | 'cutter' | 'fork' | 'changeup' | 'knuckle';
 
 export type BaseAttitude = 'flat' | 'edge_on';
 export type RotationSense = 'clockwise' | 'counterclockwise';
@@ -53,7 +53,13 @@ export interface PitchSpec {
   wake?: {
     force_coefficient: number;
     moment_coefficient: number;
+    lateral_scale?: number;
+    vertical_scale?: number;
+    reduced_frequencies?: number[];
+    weights?: number[];
   };
+  /** Inherent aerodynamic wake flutter radius (m) shown as minimum scatter floor on aim preview */
+  wakeScatterRadiusM?: number;
   envelope: PitchEnvelope;
   description: string;
 }
@@ -161,9 +167,44 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     },
     description: 'Face-on high-drag off-speed fade and drop.',
   },
+  knuckle: {
+    id: 'knuckle',
+    code: 'KNU',
+    nameEn: 'Knuckleball',
+    baseAttitude: 'flat',
+    bankRightDeg: 0,
+    noseUpDeg: 80,
+    yawLeftDeg: 0,
+    rpm: 30,
+    spinAxis: 'cap',
+    rotationSense: 'counterclockwise',
+    speedRangeKmh: [54, 66],
+    defaultSpeedKmh: 60,
+    clAlphaPerRad: 0.45,
+    magnusCoeff: 0.02,
+    cdProjected: 0.26,
+    wake: {
+      force_coefficient: 0.125,
+      moment_coefficient: 0.0006,
+      lateral_scale: 1.85,
+      vertical_scale: 0.65,
+      reduced_frequencies: [0.0085, 0.0155, 0.026],
+      weights: [0.9, 1.0, 0.65],
+    },
+    wakeScatterRadiusM: 0.24,
+    envelope: {
+      minFlightZ: 0.08,
+      maxFlightZ: 2.45,
+      maxAbsFlightY: 1.35,
+      minElevationDeg: -4.0,
+      maxElevationDeg: 24.0,
+      maxAbsAzimuthDeg: 14.0,
+    },
+    description: 'High-angle 80-deg cap knuckleball with air-wall deceleration and wide lateral S-curve flutter.',
+  },
 };
 
-export const PITCH_IDS: PitchId[] = ['straight', 'cutter', 'fork', 'changeup'];
+export const PITCH_IDS: PitchId[] = ['straight', 'cutter', 'fork', 'changeup', 'knuckle'];
 
 export const DEFAULT_RELEASE_POS: V3 = [0.35, -0.22, 1.18];
 export const HIT_PLANE_X = 9.0;
@@ -279,6 +320,10 @@ export function buildPitchRawConfig(
             wake: {
               force_coefficient: spec.wake.force_coefficient,
               moment_coefficient: spec.wake.moment_coefficient,
+              ...(spec.wake.lateral_scale !== undefined ? { lateral_scale: spec.wake.lateral_scale } : {}),
+              ...(spec.wake.vertical_scale !== undefined ? { vertical_scale: spec.wake.vertical_scale } : {}),
+              ...(spec.wake.reduced_frequencies ? { reduced_frequencies: spec.wake.reduced_frequencies } : {}),
+              ...(spec.wake.weights ? { weights: spec.wake.weights } : {}),
               seed: options?.seed ?? 1,
             },
           }

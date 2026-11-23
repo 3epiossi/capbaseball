@@ -16,6 +16,10 @@ export interface WakeParams {
   force_coefficient: number;
   /** C_mw（RMS、投影面積 × 外径基準）。0 = モーメントなし */
   moment_coefficient: number;
+  /** 横方向（左右 e1）の揺らぎ倍率。既定 1.0 */
+  lateral_scale: number;
+  /** 縦方向（上下 e2）の揺らぎ倍率。既定 1.0 */
+  vertical_scale: number;
   seed: number;
   /** k = f D / |u| */
   reduced_frequencies: number[];
@@ -27,6 +31,8 @@ export interface WakeParams {
 export const WAKE_DEFAULTS: WakeParams = {
   force_coefficient: 0,
   moment_coefficient: 0,
+  lateral_scale: 1.0,
+  vertical_scale: 1.0,
   seed: 1,
   reduced_frequencies: [0.006, 0.011, 0.02],
   weights: [1.0, 0.8, 0.5],
@@ -39,6 +45,9 @@ export function validateWakeParams(p: WakeParams): void {
   const nonNegative = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
   if (!nonNegative(p.force_coefficient) || !nonNegative(p.moment_coefficient)) {
     throw new ConfigError('wake.force_coefficient / moment_coefficient must be finite numbers >= 0');
+  }
+  if (!nonNegative(p.lateral_scale) || !nonNegative(p.vertical_scale)) {
+    throw new ConfigError('wake.lateral_scale / vertical_scale must be finite numbers >= 0');
   }
   if (!Number.isInteger(p.seed) || p.seed < 0 || p.seed > 0xffffffff) throw new ConfigError('wake.seed must be an integer in [0, 2^32)');
   if (!Array.isArray(p.reduced_frequencies) || !Array.isArray(p.weights) || p.reduced_frequencies.length === 0 || p.reduced_frequencies.length !== p.weights.length) {
@@ -104,7 +113,10 @@ export function makeWakeEvaluator(p: WakeParams) {
     const [e1, e2] = wakeBasis(uHat);
     const base = qDyn * projectedArea * gain;
     return {
-      force: scale(add(scale(e1, s[0]), scale(e2, s[1])), base * p.force_coefficient),
+      force: scale(
+        add(scale(e1, s[0] * p.lateral_scale), scale(e2, s[1] * p.vertical_scale)),
+        base * p.force_coefficient,
+      ),
       momentWorld: scale(add(scale(e1, s[2]), scale(e2, s[3])), base * cap.diameterM * p.moment_coefficient),
       phaseRate: (2 * Math.PI * speed) / cap.diameterM,
       spinAttenuation: gain,

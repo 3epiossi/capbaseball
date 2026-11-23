@@ -23,7 +23,7 @@
 | [wake.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/wake.ts) | 實驗性非定常尾流橫力與力矩模型（`makeWakeEvaluator`），以多頻帶正弦疊加產生抖動並隨轉速衰減。 |
 | [dynamics.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/dynamics.ts) | 組裝 13 維剛體狀態微分函式 `makeDerivative`（啟用 `wake` 時擴充為 14 維，含尾流相位 `Φ`）。 |
 | [simulate.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/simulate.ts) | 固定步長 RK4 積分器、三次 Hermite 內插、Brent 法事件定位（觸地 `ground`、捕手面 `catcher_plane`）與等頻取樣。 |
-| [pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) | 定義 4 種球種規格 `PITCH_SPECS`、各球種飛行包絡線 `PitchEnvelope` 與 Chord-Newton 瞄準求解器 `solvePitchTrajectory`。 |
+| [pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) | 定義 5 種球種規格 `PITCH_SPECS`（含 80° 蝴蝶球尾流）、各球種飛行包絡線 `PitchEnvelope` 與 Chord-Newton 瞄準求解器 `solvePitchTrajectory`。 |
 | [batted.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/batted.ts) | 座標轉換與 `Field3D` 擊球彈道模擬 `simulateBattedCap`（空氣阻力、地面反彈／滑行、13 m 圍牆與體育館邊界碰撞）。 |
 | [contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts) | 揮棒接觸品質與擊球初速計算 `evaluateSwingResolution`、外野飛球接殺模擬 `simulateDeterministicCatch` 與外野滾地攔截模擬 `simulateOutfieldGroundBlock`。 |
 
@@ -31,9 +31,9 @@
 
 ## 核心資料流／演算法
 
-### 1. 4 種球種規格（`pitches.ts`）
+### 1. 5 種球種規格（`pitches.ts`）
 
-`PITCH_SPECS` 定義了 `straight`、`cutter`、`fork` 與 `changeup` 四種球路：
+`PITCH_SPECS` 定義了 `straight`、`cutter`、`fork`、`changeup` 與 `knuckle` 五種球路：
 
 | `PitchId` | 代碼 | 初始姿態（`baseAttitude`） | 轉速（`rpm`） | 球速範圍（km/h） | 氣動特性 |
 |---|---|---|---|---|---|
@@ -41,6 +41,7 @@
 | `cutter` | `CUT` | `flat`（右傾 `-30°`、仰角 `5°`、偏航 `5°`） | `1300`（`cap` 軸順時針） | `64–75`（預設 `70`） | `clAlphaPerRad = 0.9`、`magnusCoeff = 0.04`，斜向橫移微升卡特球 |
 | `fork` | `FORK` | `edge_on` | `500`（`world_y` 逆時針） | `58–70`（預設 `65`） | `clAlphaPerRad = 0.08`、`magnusCoeff = 0.25`，6 點鐘急墜 |
 | `changeup` | `CH` | `edge_on`（右傾 `-90°`、仰角 `75°`） | `0` | `44–56`（預設 `50`） | `cdProjected = 0.16`、`clAlphaPerRad = 0.25`，適度下墜慢速變速球 |
+| `knuckle` | `KNU` | `flat`（仰角 `80°`） | `30`（`cap` 軸逆時針） | `54–66`（預設 `60`） | `cdProjected = 0.26`、`wake`（`fc=0.125`, `mc=0.0006`, `lateral_scale=1.85`, `vertical_scale=0.65`），進壘急煞與 S 型左右蛇行飄移 |
 
 ### 2. Chord-Newton 投球瞄準求解器（`solvePitchTrajectory`）
 

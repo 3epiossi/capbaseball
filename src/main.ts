@@ -1,9 +1,9 @@
 import {
-  checkCatcherCatch,
   chooseCpuPitch,
   createCatcherFielder,
   createOutfielders,
   createPitcherFielder,
+  evaluateCatcherCatch,
   evaluateCpuSwing,
   resetOutfielders,
   updateOutfielders,
@@ -588,6 +588,7 @@ function getLocalizedPitchName(pitchId: PitchId): string {
     cutter: 'pitchCutter',
     fork: 'pitchFork',
     changeup: 'pitchChangeup',
+    knuckle: 'pitchKnuckle',
   };
   return t(map[pitchId]);
 }
@@ -2053,7 +2054,15 @@ function finishPitchWithoutContact(): void {
     pendingPitchTelemetry = '';
   }
   const plateField = simToField(activePitch.plateCrossPos);
-  const caughtByCatcher = checkCatcherCatch(plateField[0], plateField[1], activePitch.reachesPassLine);
+  const catchSeed = Math.floor(Math.random() * 0xffffffff) >>> 0;
+  const effectiveReachesPassLine = activePitch.reachesPassLine || plateField[1] < 0.14;
+  const catchRes = evaluateCatcherCatch(plateField[0], plateField[1], effectiveReachesPassLine, {
+    pitchId: activePitch.pitchId,
+    speedKmh: lastPitchSpeedKmh,
+    breakCm: lastPitchBreakCm,
+    seed: catchSeed,
+  });
+  const caughtByCatcher = catchRes.caught;
 
   const prevInning = match.inning;
   const prevHalf = match.half;
@@ -2071,7 +2080,7 @@ function finishPitchWithoutContact(): void {
       swung: false,
       contacted: false,
       caughtByCatcher,
-      reachesPassLine: activePitch.reachesPassLine,
+      reachesPassLine: effectiveReachesPassLine,
       currentStrikes: match.strikes,
       runnersOnBase: match.bases.some((b) => b !== null),
       forceCall: umpireEval.umpireCall,
@@ -2083,7 +2092,7 @@ function finishPitchWithoutContact(): void {
       swung: false,
       contacted: false,
       caughtByCatcher,
-      reachesPassLine: activePitch.reachesPassLine,
+      reachesPassLine: effectiveReachesPassLine,
       forceCall: umpireEval.umpireCall,
     });
 
@@ -2096,7 +2105,7 @@ function finishPitchWithoutContact(): void {
       marginM: umpireEval.marginM,
       preSnapshot: preSnap,
       caughtByCatcher,
-      reachesPassLine: activePitch.reachesPassLine,
+      reachesPassLine: effectiveReachesPassLine,
     });
 
     let callLbl = res.isStrike ? 'STRIKE' : 'BALL';
@@ -2109,9 +2118,10 @@ function finishPitchWithoutContact(): void {
       callDetail = 'DROPPED 3RD · BATTER TO 1B';
       sfx.playUmpireTone('out');
     } else if (res.isWildPitch) {
-      callLbl = 'WILD PITCH';
+      const isPb = catchRes.kind === 'passed_ball';
+      callLbl = isPb ? 'PASSED BALL' : 'WILD PITCH';
       callCol = '#f97316';
-      callDetail = 'WILD PITCH · RUNNERS ADVANCE';
+      callDetail = isPb ? 'PASSED BALL · RUNNERS ADVANCE' : 'WILD PITCH · RUNNERS ADVANCE';
       sfx.playUmpireTone('ball');
     } else if (res.isStrike) {
       const isK = match.strikes === 0 && match.lastEvent.includes('strikes out');
@@ -2161,7 +2171,7 @@ function finishPitchWithoutContact(): void {
       swung: true,
       contacted: false,
       caughtByCatcher,
-      reachesPassLine: activePitch.reachesPassLine,
+      reachesPassLine: effectiveReachesPassLine,
       currentStrikes: match.strikes,
       runnersOnBase: match.bases.some((b) => b !== null),
     });
@@ -2172,7 +2182,7 @@ function finishPitchWithoutContact(): void {
       swung: true,
       contacted: false,
       caughtByCatcher,
-      reachesPassLine: activePitch.reachesPassLine,
+      reachesPassLine: effectiveReachesPassLine,
     });
 
     if (caughtByCatcher) {
@@ -2189,9 +2199,10 @@ function finishPitchWithoutContact(): void {
       missDetail = 'DROPPED 3RD · BATTER TO 1B';
       sfx.playUmpireTone('out');
     } else if (res.isWildPitch) {
-      missLbl = 'WILD PITCH';
+      const isPb = catchRes.kind === 'passed_ball';
+      missLbl = isPb ? 'PASSED BALL' : 'WILD PITCH';
       missCol = '#f97316';
-      missDetail = 'WILD PITCH · RUNNERS ADVANCE';
+      missDetail = isPb ? 'PASSED BALL · RUNNERS ADVANCE' : 'WILD PITCH · RUNNERS ADVANCE';
       sfx.playUmpireTone('ball');
     } else {
       const isK = match.strikes === 0 && match.lastEvent.includes('strikes out');
@@ -2755,7 +2766,7 @@ window.addEventListener('keydown', (e) => {
     }
   } else if (e.code === 'KeyC') {
     triggerAbsChallenge();
-  } else if (e.code >= 'Digit1' && e.code <= 'Digit4' && getCurrentRole() === 'pitcher') {
+  } else if (e.code >= 'Digit1' && e.code <= 'Digit5' && getCurrentRole() === 'pitcher') {
     const idx = Number(e.code.replace('Digit', '')) - 1;
     if (PITCH_IDS[idx]) selectPitch(PITCH_IDS[idx]);
   }
@@ -4893,8 +4904,11 @@ function step(now: number): void {
     activeSpringU = springMeter.pos;
     releaseCollapse = 1;
   }
+  const baseScatterM = PITCH_SPECS[selectedPitch].wakeScatterRadiusM ?? 0;
   const activeScatterM =
-    activeSpringU !== null ? evaluateSpring(activeSpringU, selectedPitch).maxScatterM : null;
+    activeSpringU !== null
+      ? Math.hypot(evaluateSpring(activeSpringU, selectedPitch).maxScatterM, baseScatterM)
+      : null;
   const bestIndicateProgress =
     springMeter.bestIndicateTime >= 0 && springMeter.bestIndicateTime < 0.28
       ? springMeter.bestIndicateTime / 0.28
@@ -4915,6 +4929,7 @@ function step(now: number): void {
     previewRibbon,
     activeSpringU,
     activeScatterM,
+    baseScatterM,
     releaseCollapse,
     bestIndicateProgress,
     timeSec,

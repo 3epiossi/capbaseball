@@ -26,8 +26,8 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
   const TARGET_Y = 0.0;
   const TARGET_Z = 0.72; // middle of strike zone [0.42, 1.02]
 
-  it('runs all 4 signature pitch types cleanly without NaN and solves within 0.025m', () => {
-    expect(PITCH_IDS).toEqual(['straight', 'cutter', 'fork', 'changeup']);
+  it('runs all 5 signature pitch types cleanly without NaN and solves nominal target accurately', () => {
+    expect(PITCH_IDS).toEqual(['straight', 'cutter', 'fork', 'changeup', 'knuckle']);
     for (const id of PITCH_IDS) {
       const spec = PITCH_SPECS[id];
       const res = solvePitchTrajectory(id, spec.defaultSpeedKmh, TARGET_Y, TARGET_Z, {
@@ -39,14 +39,24 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
         expect(f.y.every(Number.isFinite)).toBe(true);
       }
 
-      const err = Math.hypot(
-        res.hitPlanePos[1] - TARGET_Y,
-        res.hitPlanePos[2] - TARGET_Z,
-      );
-      expect(
-        err,
-        `${id} hit=${res.hitPlanePos.map((n) => n.toFixed(3)).join(',')} az=${res.launchAzimuthDeg.toFixed(2)} el=${res.launchElevationDeg.toFixed(2)} reason=${res.simResult.terminationReason}`,
-      ).toBeLessThan(0.025);
+      if (!spec.wake) {
+        const err = Math.hypot(
+          res.hitPlanePos[1] - TARGET_Y,
+          res.hitPlanePos[2] - TARGET_Z,
+        );
+        expect(
+          err,
+          `${id} hit=${res.hitPlanePos.map((n) => n.toFixed(3)).join(',')} az=${res.launchAzimuthDeg.toFixed(2)} el=${res.launchElevationDeg.toFixed(2)} reason=${res.simResult.terminationReason}`,
+        ).toBeLessThan(0.025);
+      } else {
+        // Preview mode disables wake turbulence so the aim crosshair stays locked to the nominal target
+        const nom = solvePitchTrajectory(id, spec.defaultSpeedKmh, TARGET_Y, TARGET_Z, {
+          previewMode: true,
+          seed: 12345,
+        });
+        const nomErr = Math.hypot(nom.hitPlanePos[1] - TARGET_Y, nom.hitPlanePos[2] - TARGET_Z);
+        expect(nomErr).toBeLessThan(0.03);
+      }
 
       // sampleAt interpolator works smoothly
       const mid = res.sampleAt(res.hitPlaneTimeSec * 0.5);
@@ -54,6 +64,38 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
       expect(mid.y[0]).toBeGreaterThan(0.35);
       expect(mid.y[0]).toBeLessThan(9.0);
     }
+  }, 15_000);
+
+  it('produces deterministic yet unpredictable unsteady wake flutter for knuckleball across seeds', () => {
+    const spd = PITCH_SPECS.knuckle.defaultSpeedKmh;
+    const runA = solvePitchTrajectory('knuckle', spd, TARGET_Y, TARGET_Z, { seed: 424242 });
+    const runB = solvePitchTrajectory('knuckle', spd, TARGET_Y, TARGET_Z, { seed: 424242 });
+    expect(runA.hitPlanePos).toEqual(runB.hitPlanePos);
+    expect(runA.plateCrossPos).toEqual(runB.plateCrossPos);
+
+    let errSum = 0;
+    let dxSum = 0;
+    let dySum = 0;
+    const offsets: number[] = [];
+    for (let s = 1; s <= 12; s++) {
+      const r = solvePitchTrajectory('knuckle', spd, TARGET_Y, TARGET_Z, { seed: s * 7919 });
+      for (const f of r.frames) {
+        expect(f.y.every(Number.isFinite)).toBe(true);
+      }
+      const dx = Math.abs(r.hitPlanePos[1] - TARGET_Y);
+      const dy = Math.abs(r.hitPlanePos[2] - TARGET_Z);
+      dxSum += dx;
+      dySum += dy;
+      errSum += Math.hypot(dx, dy);
+      offsets.push(r.hitPlanePos[1]);
+    }
+    const avgFlutterM = errSum / 12;
+    expect(avgFlutterM).toBeGreaterThan(0.14);
+    expect(avgFlutterM).toBeLessThan(0.45);
+    // Lateral S-curve flutter should be noticeably wider than vertical flutter
+    expect(dxSum).toBeGreaterThan(dySum * 1.4);
+    // Distinct seeds should spread across different landing points
+    expect(Math.max(...offsets) - Math.min(...offsets)).toBeGreaterThan(0.25);
   }, 15_000);
 
   it('exhibits exact clock-face induced break directions for straight, cutter, fork, and changeup', () => {

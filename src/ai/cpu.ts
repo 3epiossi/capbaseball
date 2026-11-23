@@ -109,30 +109,99 @@ export function evaluateCpuSwing(
   };
 }
 
+export interface CatcherCatchContext {
+  pitchId?: PitchId;
+  speedKmh?: number;
+  breakCm?: number;
+  seed?: number;
+}
+
+export interface CatcherCatchOutcome {
+  caught: boolean;
+  kind: 'caught' | 'wild_pitch' | 'passed_ball';
+}
+
+function deterministicCatchUnit(seed?: number): number {
+  if (seed === undefined) return Math.random();
+  let a = (seed ^ 0x9e3779b9) >>> 0 || 1;
+  a = (a + 0x6d2b79f5) >>> 0;
+  let t = Math.imul(a ^ (a >>> 15), a | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/**
+ * Evaluates catcher reception of a non-contacted pitch:
+ * - Wild Pitch: pitch misses outside catcher comfort reach (|x| > 0.42m or y < 0.18m or y > 1.35m)
+ *   and eludes diving block (harder to block at higher velocity).
+ * - Passed Ball: pitch is inside comfort reach, but unpredictable knuckleball flutter, sharp low
+ *   vertical drop, or blazing velocity (>= 72 km/h) near edges slips past the catcher.
+ */
+export function evaluateCatcherCatch(
+  plateX: number,
+  plateY: number,
+  reachesPassLine: boolean,
+  ctx?: CatcherCatchContext | number,
+): CatcherCatchOutcome {
+  const opts: CatcherCatchContext = typeof ctx === 'number' ? { seed: ctx } : (ctx ?? {});
+  const isDirtSkip = plateY < 0.14;
+  if (!reachesPassLine && !isDirtSkip) {
+    return { caught: true, kind: 'caught' };
+  }
+
+  const dx = Math.abs(plateX);
+  const spd = opts.speedKmh ?? 65;
+  const brk = opts.breakCm ?? 0;
+  const r = deterministicCatchUnit(opts.seed);
+
+  // 1. Inside catcher comfort box (|x| <= 0.42m, y in [0.18m, 1.35m])
+  const inComfort = dx <= 0.42 && plateY >= 0.18 && plateY <= 1.35;
+  if (inComfort) {
+    let pbProb = 0;
+    const nearEdge = dx > 0.24 || plateY < 0.34 || plateY > 1.12;
+
+    // Knuckleball late unsteady wake flutter can fool even a ready catcher
+    if (opts.pitchId === 'knuckle') {
+      pbProb += nearEdge ? 0.105 : 0.072;
+    }
+    // Blazing fastball / cutter velocity reduces catcher reaction margin near edges
+    if (spd >= 72) {
+      const spdFactor = Math.min(1, (spd - 72) / 6); // 72 -> 78+ km/h
+      pbProb += nearEdge ? 0.035 + 0.055 * spdFactor : 0.012 + 0.022 * spdFactor;
+    }
+    // Sharp low vertical drop (e.g. diving forkball near dirt)
+    if ((opts.pitchId === 'fork' || brk >= 75) && plateY < 0.34) {
+      pbProb += 0.048;
+    }
+
+    if (pbProb > 0 && r < Math.min(0.18, pbProb)) {
+      return { caught: false, kind: 'passed_ball' };
+    }
+    return { caught: true, kind: 'caught' };
+  }
+
+  // 2. Outer diving block zone (|x| <= 0.62m, y in [0.06m, 1.56m]) -> Wild Pitch if missed
+  if (dx <= 0.62 && plateY >= 0.06 && plateY <= 1.56) {
+    const speedPenalty = spd >= 70 ? Math.min(0.24, ((spd - 70) / 8) * 0.24) : 0;
+    const knucklePenalty = opts.pitchId === 'knuckle' ? 0.12 : 0;
+    const blockProb = Math.max(0.12, 0.46 - speedPenalty - knucklePenalty);
+    if (r < blockProb) {
+      return { caught: true, kind: 'caught' };
+    }
+    return { caught: false, kind: 'wild_pitch' };
+  }
+
+  // 3. Completely wild outside diving reach (or heavy dirt bounce < 0.06m) -> Wild Pitch
+  return { caught: false, kind: 'wild_pitch' };
+}
+
 export function checkCatcherCatch(
   plateX: number,
   plateY: number,
   reachesPassLine: boolean,
-  seed?: number,
+  ctx?: CatcherCatchContext | number,
 ): boolean {
-  if (!reachesPassLine) return true;
-  // Catcher can comfortably catch within ~0.58m horizontally and [0.12m, 1.48m] vertically
-  const dx = Math.abs(plateX);
-  const inReach = dx <= 0.58 && plateY >= 0.10 && plateY <= 1.48;
-  if (inReach) return true;
-  // Borderline wild pitch: small chance of diving stop
-  if (dx <= 0.78 && plateY >= 0.05 && plateY <= 1.68) {
-    if (seed !== undefined) {
-      let a = (seed ^ 0x9e3779b9) >>> 0 || 1;
-      a = (a + 0x6d2b79f5) >>> 0;
-      let t = Math.imul(a ^ (a >>> 15), a | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      const r = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      return r < 0.35;
-    }
-    return Math.random() < 0.35;
-  }
-  return false;
+  return evaluateCatcherCatch(plateX, plateY, reachesPassLine, ctx).caught;
 }
 
 export interface OutfielderActor {

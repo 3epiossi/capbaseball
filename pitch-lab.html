@@ -28,6 +28,7 @@
             <button type="button" class="preset-btn" data-preset="cutter">卡特</button>
             <button type="button" class="preset-btn" data-preset="fork">指叉</button>
             <button type="button" class="preset-btn" data-preset="changeup">變速</button>
+            <button type="button" class="preset-btn" data-preset="knuckle">蝴蝶</button>
           </div>
         </section>
 
@@ -53,7 +54,7 @@
               <span>球速 <code>speedKmh</code></span>
               <strong id="val-speed">70 km/h</strong>
             </label>
-            <input id="in-speed" type="range" min="35" max="85" step="1" value="70" />
+            <input id="in-speed" type="range" min="20" max="120" step="1" value="70" />
           </div>
 
           <div class="ctrl-row-2">
@@ -86,32 +87,32 @@
                 <span>轉速 <code>rpm</code></span>
                 <strong id="val-rpm">2000</strong>
               </label>
-              <input id="in-rpm" type="range" min="0" max="3500" step="50" value="2000" />
+              <input id="in-rpm" type="range" min="0" max="6000" step="50" value="2000" />
             </div>
           </div>
 
           <div class="ctrl-group">
             <label for="in-bank">
-              <span>左右傾角 <code>bankRightDeg</code>（位移方向）</span>
+              <span>↺ 側傾滾轉（捕手視角＋逆時針傾）</span>
               <strong id="val-bank">0°</strong>
             </label>
-            <input id="in-bank" type="range" min="-90" max="90" step="1" value="0" />
+            <input id="in-bank" type="range" min="-180" max="180" step="1" value="0" />
           </div>
 
           <div class="ctrl-group">
             <label for="in-nose">
-              <span>俯仰攻角 <code>noseUpDeg</code>（浮力／阻力）</span>
+              <span>↗ 抬頭仰角（＋機頭上抬 · 浮力/阻力）</span>
               <strong id="val-nose">5.5°</strong>
             </label>
-            <input id="in-nose" type="range" min="-45" max="85" step="0.5" value="5.5" />
+            <input id="in-nose" type="range" min="-90" max="90" step="0.5" value="5.5" />
           </div>
 
           <div class="ctrl-group">
             <label for="in-yaw">
-              <span>偏航角 <code>yawLeftDeg</code>（橫向微偏）</span>
+              <span>↻ 水平轉向（捕手視角＋正面轉右）</span>
               <strong id="val-yaw">0°</strong>
             </label>
-            <input id="in-yaw" type="range" min="-45" max="45" step="0.5" value="0" />
+            <input id="in-yaw" type="range" min="-90" max="90" step="0.5" value="0" />
           </div>
 
           <hr class="sep" />
@@ -128,11 +129,11 @@
             <div class="ctrl-row-2">
               <div class="ctrl-group">
                 <label for="in-tx"><span>目標 X</span><strong id="val-tx">0.00m</strong></label>
-                <input id="in-tx" type="range" min="-0.40" max="0.40" step="0.01" value="0" />
+                <input id="in-tx" type="range" min="-1.00" max="1.00" step="0.01" value="0" />
               </div>
               <div class="ctrl-group">
                 <label for="in-ty"><span>目標高 Y</span><strong id="val-ty">0.72m</strong></label>
-                <input id="in-ty" type="range" min="0.25" max="1.25" step="0.01" value="0.72" />
+                <input id="in-ty" type="range" min="0.05" max="2.00" step="0.01" value="0.72" />
               </div>
             </div>
           </div>
@@ -141,11 +142,11 @@
             <div class="ctrl-row-2">
               <div class="ctrl-group">
                 <label for="in-az"><span>方位 <code>az</code></span><strong id="val-az">0.0°</strong></label>
-                <input id="in-az" type="range" min="-15" max="15" step="0.1" value="0" />
+                <input id="in-az" type="range" min="-45" max="45" step="0.1" value="0" />
               </div>
               <div class="ctrl-group">
                 <label for="in-el"><span>仰角 <code>el</code></span><strong id="val-el">0.0°</strong></label>
-                <input id="in-el" type="range" min="-10" max="22" step="0.1" value="0" />
+                <input id="in-el" type="range" min="-30" max="45" step="0.1" value="0" />
               </div>
             </div>
           </div>
@@ -155,15 +156,15 @@
             <div class="ctrl-row-3">
               <div class="ctrl-group">
                 <label for="in-rx"><span>前伸</span><strong id="val-rx">0.35m</strong></label>
-                <input id="in-rx" type="range" min="0.0" max="0.8" step="0.02" value="0.35" />
+                <input id="in-rx" type="range" min="-0.5" max="1.5" step="0.02" value="0.35" />
               </div>
               <div class="ctrl-group">
                 <label for="in-ry"><span>左右</span><strong id="val-ry">-0.22m</strong></label>
-                <input id="in-ry" type="range" min="-0.6" max="0.6" step="0.02" value="-0.22" />
+                <input id="in-ry" type="range" min="-1.2" max="1.2" step="0.02" value="-0.22" />
               </div>
               <div class="ctrl-group">
                 <label for="in-rz"><span>高度</span><strong id="val-rz">1.18m</strong></label>
-                <input id="in-rz" type="range" min="0.75" max="1.65" step="0.02" value="1.18" />
+                <input id="in-rz" type="range" min="0.30" max="2.20" step="0.02" value="1.18" />
               </div>
             </div>
           </details>
@@ -172,10 +173,10 @@
         <section class="dock-section guide-box">
           <h2>調球方向速查</h2>
           <ul>
-            <li><strong>位移時鐘方向</strong>：調 <code>bankRightDeg</code></li>
-            <li><strong>上飄／下墜幅度</strong>：平放調 <code>noseUpDeg</code>；立放配 <code>world_y</code> + <code>rpm</code></li>
-            <li><strong>變速減速感</strong>：降 <code>speedKmh</code> 並調大 <code>noseUpDeg</code> 增加迎風面積</li>
-            <li><strong>抗翻滾穩定</strong>：調高 <code>rpm</code>（`1200–2500`）</li>
+            <li><strong>↺ 側傾滾轉（位移方向）</strong>：捕手視角正值＝逆時針傾（右低左高）</li>
+            <li><strong>↗ 抬頭仰角（上飄／下墜）</strong>：正值＝機頭上抬；立放配 <code>world_y</code> + <code>rpm</code></li>
+            <li><strong>↻ 水平轉向（變速減速感）</strong>：降 <code>speedKmh</code> 並調大「抬頭仰角」或轉向增阻力</li>
+            <li><strong>抗翻滾穩定</strong>：調高 <code>rpm</code>（<code>1200–3500</code>）</li>
           </ul>
         </section>
       </aside>

@@ -86,6 +86,7 @@ export const DICT = {
     pitchCutter: 'CUTTER',
     pitchFork: 'FORK',
     pitchChangeup: 'CHANGEUP',
+    pitchKnuckle: 'KNUCKLEBALL',
     springTitle: 'SPRING',
     springCharging: 'HOLD · COMPRESSING',
     springRebounding: 'REBOUNDING...',
@@ -243,6 +244,8 @@ export const DICT = {
     callDropped3rd: 'DROPPED 3RD · BATTER TO 1B',
     callWildPitch: 'WILD PITCH',
     callWildPitchSub: 'WILD PITCH · RUNNERS ADVANCE',
+    callPassedBall: 'PASSED BALL',
+    callPassedBallSub: 'PASSED BALL · RUNNERS ADVANCE',
     callTooEarly: 'TOO EARLY',
     callTooLate: 'TOO LATE',
     callOffTarget: 'OFF TARGET',
@@ -303,6 +306,7 @@ export const DICT = {
     pitchShortCutter: 'CUT',
     pitchShortFork: 'FORK',
     pitchShortChangeup: 'CH',
+    pitchShortKnuckle: 'KNU',
     brkShort: 'BRK',
     evShort: 'EV',
     laShort: 'LA',
@@ -402,6 +406,7 @@ export const DICT = {
     pitchCutter: '卡特球',
     pitchFork: '指叉球',
     pitchChangeup: '變速球',
+    pitchKnuckle: '蝴蝶球',
     springTitle: '彈簧蓄力',
     springCharging: '按住壓縮中',
     springRebounding: '回彈判定中...',
@@ -559,6 +564,8 @@ export const DICT = {
     callDropped3rd: '捕手漏接 · 上 1B',
     callWildPitch: '暴投',
     callWildPitchSub: '暴投 · 壘上跑者推進',
+    callPassedBall: '捕逸',
+    callPassedBallSub: '捕逸 · 壘上跑者推進',
     callTooEarly: '太早揮棒',
     callTooLate: '太晚揮棒',
     callOffTarget: '未擊中球心',
@@ -619,6 +626,7 @@ export const DICT = {
     pitchShortCutter: '卡特',
     pitchShortFork: '指叉',
     pitchShortChangeup: '變速',
+    pitchShortKnuckle: '蝴蝶',
     brkShort: '變化',
     evShort: '初速',
     laShort: '仰角',
@@ -718,6 +726,7 @@ export const DICT = {
     pitchCutter: 'カットボール',
     pitchFork: 'フォーク',
     pitchChangeup: 'チェンジアップ',
+    pitchKnuckle: 'ナックル',
     springTitle: 'スプリング',
     springCharging: '長押しで圧縮中',
     springRebounding: '反発計測中...',
@@ -875,6 +884,8 @@ export const DICT = {
     callDropped3rd: '捕手後逸 · 1B 出塁',
     callWildPitch: '暴投',
     callWildPitchSub: '暴投 · ランナー進塁',
+    callPassedBall: 'パスボール',
+    callPassedBallSub: 'パスボール · ランナー進塁',
     callTooEarly: '早すぎ',
     callTooLate: '遅すぎ',
     callOffTarget: '空振り',
@@ -935,6 +946,7 @@ export const DICT = {
     pitchShortCutter: 'カット',
     pitchShortFork: 'フォーク',
     pitchShortChangeup: 'チェンジ',
+    pitchShortKnuckle: 'ナックル',
     brkShort: '変化',
     evShort: '初速',
     laShort: '角度',
@@ -1023,6 +1035,7 @@ export function getPitchShortLabel(locale: Locale, codeOrId: string): string {
   if (key === 'CUTTER' || key === 'CUT') return t('pitchShortCutter');
   if (key === 'FORK' || key === 'FRK') return t('pitchShortFork');
   if (key === 'CHANGEUP' || key === 'CH' || key === 'CHG') return t('pitchShortChangeup');
+  if (key === 'KNUCKLE' || key === 'KNU' || key === 'KN') return t('pitchShortKnuckle');
   return codeOrId;
 }
 
@@ -1030,7 +1043,7 @@ export function localizeTelemetry(locale: Locale, raw: string): string {
   if (locale === 'en' || !raw) return raw;
   const t = createTranslator(locale);
   let out = raw;
-  out = out.replace(/\b(4SFB|STR|CUT|FORK|FRK|CHG|CH)\b/g, (m) => getPitchShortLabel(locale, m));
+  out = out.replace(/\b(4SFB|STR|CUT|FORK|FRK|CHG|CH|KNU|KN)\b/g, (m) => getPitchShortLabel(locale, m));
   out = out.replace(/\bBRK\b/g, t('brkShort'));
   out = out.replace(/\bEV\b/g, t('evShort'));
   out = out.replace(/\bLA\b/g, t('laShort'));
@@ -1092,6 +1105,7 @@ export function localizeServerCallout(
     'WALK (BB)': 'callWalk',
     'UNCAUGHT 3RD': 'callUncaught3rd',
     'WILD PITCH': 'callWildPitch',
+    'PASSED BALL': 'callPassedBall',
     'TOO EARLY': 'callTooEarly',
     'TOO LATE': 'callTooLate',
     'OFF TARGET': 'callOffTarget',
@@ -1123,6 +1137,7 @@ export function localizeServerCallout(
     'BASE ON BALLS': 'callBaseOnBalls',
     'DROPPED 3RD · BATTER TO 1B': 'callDropped3rd',
     'WILD PITCH · RUNNERS ADVANCE': 'callWildPitchSub',
+    'PASSED BALL · RUNNERS ADVANCE': 'callPassedBallSub',
     'FOUL BALL': 'callFoulBall',
     'OUTFIELD CATCH!': 'callCatch',
     'INFIELD OUT!': 'callInfieldOut',

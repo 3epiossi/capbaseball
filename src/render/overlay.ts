@@ -99,6 +99,8 @@ export interface OverlayState {
   previewRibbon?: SpeedRibbonData<FieldV3> | null;
   activeSpringU?: number | null;
   activeScatterM?: number | null;
+  /** Inherent base scatter floor in meters (e.g. Knuckleball unsteady wake flutter radius) */
+  baseScatterM?: number;
   /** Smooth 0..1 collapse progress after spring release for Manim Morph transition */
   releaseCollapse?: number;
   /** Optional 0..1 golden Indicate ripple wave progress when entering/locking BEST */
@@ -380,6 +382,11 @@ export function drawStrikeZoneAndOverlay(
     const soloAlpha = isSpringLive ? Math.max(0.25, morphEase) : 0;
 
     // 2a. Full 3B1B Typhoon Cone + 3D Speed Ribbon + Manim Geometric Nodes (fades out smoothly during 0.18s release morph)
+    const baseScatterM = state.baseScatterM ?? 0;
+    const combinedScatterM = (u: number): number => {
+      const s = springMaxScatterM(u);
+      return baseScatterM > 0 ? Math.hypot(s, baseScatterM) : s;
+    };
     if (fullAlpha > 0.015) {
       if (curves && state.previewRibbon) {
         const coneStops = [
@@ -396,7 +403,7 @@ export function drawStrikeZoneAndOverlay(
             sx: pr.sx,
             sy: pr.sy,
             scale: pr.scale,
-            maxScatterM: springMaxScatterM(u),
+            maxScatterM: combinedScatterM(u),
           });
         }
         if (coneSamples.length >= 2) {
@@ -406,9 +413,9 @@ export function drawStrikeZoneAndOverlay(
         drawTyphoonCone(
           ctx,
           [
-            { u: 0, sx: slowP.sx, sy: slowP.sy, scale: slowP.scale, maxScatterM: springMaxScatterM(0) },
-            { u: SPRING_BEST_CENTER, sx: (slowP.sx + fastP.sx) * 0.5, sy: (slowP.sy + fastP.sy) * 0.5, scale: fastP.scale, maxScatterM: 0 },
-            { u: 1, sx: fastP.sx, sy: fastP.sy, scale: fastP.scale, maxScatterM: springMaxScatterM(1) },
+            { u: 0, sx: slowP.sx, sy: slowP.sy, scale: slowP.scale, maxScatterM: combinedScatterM(0) },
+            { u: SPRING_BEST_CENTER, sx: (slowP.sx + fastP.sx) * 0.5, sy: (slowP.sy + fastP.sy) * 0.5, scale: fastP.scale, maxScatterM: combinedScatterM(SPRING_BEST_CENTER) },
+            { u: 1, sx: fastP.sx, sy: fastP.sy, scale: fastP.scale, maxScatterM: combinedScatterM(1) },
           ],
           dpr,
           fullAlpha,
