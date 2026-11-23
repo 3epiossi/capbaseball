@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.3.2`（語意化三段式版本號），Pi 現行部署版本 `20261123-035944`
+- **目前里程碑**：`v2.3.3`（語意化三段式版本號），Pi 現行部署版本 `20261123-105513`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 49 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 50 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -225,3 +225,8 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - 將 CPU 候補收到線上邀約時的提示由角落浮卡改為畫面正中央的深色遮罩對話視窗（`.match-offer-backdrop`，與展開折疊選單同款背景變暗效果），配合暫停中的 CPU 對局與投球時鐘讓玩家專注選擇；超過 20 秒未操作前後端雙重執行視同拒絕、關閉視窗恢復 CPU 對戰，並強制移出候補名單轉邀下一位。
 - **v2.3.2 優雅換版改統一 10 分鐘強制倒數＋清空即提前切換（2026-11-23）**：
   - [server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 與 [deploy/capbaseball.service](file:///Users/chang/Documents/raspberry%20pi/capbaseball/deploy/capbaseball.service) 將兩階段 60 秒預告簡化為單一 **`DRAIN_SECONDS=600`**（`TimeoutStopSec=630`）倒數機制：收到 `SIGTERM` 立即封鎖所有新線上對局（含配對、好友建房／加入、再戰與候補）並廣播 10 分鐘強制更新倒數；若場上已無進行中雙人房（或最後一場提前打完並過 3 秒結算緩衝）則**立刻提前更新**，滿 10 分鐘則準時強制切換。
+- **v2.3.3 全新 8 句三語快捷對話＋`/monitor` 11 桶玩家頁面即時分布（2026-11-23）**：
+  - **8 句快捷對話全面更新**：[src/ui/emotes.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/emotes.ts) 與 [src/i18n/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/i18n/index.ts) 更新 8 組三語固定對話（`壓力馬斯內！`／`やりますねぇ！`、`不會不會～`／`いえいえ～`、`好啊！來吧！`／`いいよ！こいよ！`、`一轉攻勢！`／`一転攻勢！`、`有一點碰到囉～`／`ちょっと当たってるよ～`、`嗯？`／`ん？`、`很不妙啊！`／`まずいですよ！`、`已經結束力！`／`もう終わりだぁ！`）。
+  - **`/monitor` 與 `/metrics` 玩家所在頁面即時分布（Zero PII）**：
+    - 精簡 v2 協定 [src/net/protocol.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/protocol.ts) 新增 `{ t: 'ac', a }` 頁面回報封包，由 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 與 3D 投球實驗室 [src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 同步上報本地頁面狀態（`title`、`cpu_match`、`practice_bat`、`practice_pitch`、`pitch_lab`）。
+    - [server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 結合伺服器權威狀態與白名單驗證，於 `/metrics` 輸出 `connections.activities` 11 個互斥頁面計數（`online_live`、`online_friend`、`online_queue`、`friend_wait`、`spectating`、`cpu_standby`、`cpu_match`、`practice_bat`、`practice_pitch`、`pitch_lab`、`title`，加總恆等於 `activeClients`），並於 [server/monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts) 以純 DOM 色彩進度條即時呈現（測試擴充至 **50/50** 全部通過）。

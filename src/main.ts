@@ -29,6 +29,7 @@ import {
   OnlineClient,
   loadSession,
   saveSession,
+  type ClientPageActivity,
   type LiveRoomInfo,
   type OnlineMode,
   type OnlineSide,
@@ -652,6 +653,20 @@ let onlineTurnState: TurnState = 'awaiting_pitch';
 let onlineWaitingQueue = false;
 let queueElapsedSec = 0;
 let visualHalf: 'top' | 'bottom' = 'top';
+let lastReportedActivity: ClientPageActivity | null = null;
+
+function syncClientActivity(force = false): void {
+  if (!onlineClient.connected) return;
+  let act: ClientPageActivity = 'title';
+  if (!onTitleScreen && !isOnline) {
+    if (match.mode === 'practice_bat') act = 'practice_bat';
+    else if (match.mode === 'practice_pitch') act = 'practice_pitch';
+    else act = 'cpu_match';
+  }
+  if (!force && act === lastReportedActivity) return;
+  lastReportedActivity = act;
+  onlineClient.reportActivity(act);
+}
 let serverUpdateAtMs: number | null = null;
 let lastPreUpdateRenderedSec = -999;
 
@@ -1454,6 +1469,7 @@ function startMode(mode: GameMode): void {
   if (mode !== 'practice_bat' && mode !== 'practice_pitch') {
     transitionDirector.playMatchStart(match.away.name, match.home.name);
   }
+  syncClientActivity();
   if (getCurrentRole() === 'batter') {
     cpuAutoPitchTimer = 0.75;
   }
@@ -1501,6 +1517,7 @@ function returnToTitle(): void {
   cam.resetImmediate();
   updateHudAndDocks();
   updateSafeCameraFraming(true);
+  syncClientActivity();
 }
 
 function launchPitch(
@@ -3321,6 +3338,7 @@ onlineClient.onMessage((msg) => {
       if (typeof msg.updateAtMs === 'number' && msg.updateAtMs > 0) {
         setServerUpdateCountdown(msg.updateAtMs);
       }
+      syncClientActivity(true);
       break;
     }
     case 'stats': {

@@ -1422,4 +1422,78 @@ describe('Online Multiplayer Server Integration', () => {
       await sbSrv.close();
     }
   });
+
+  it('29. /metrics connections.activities breaks down all connected player pages accurately with zero PII', async () => {
+    const actSrv = await startServer(0, { pitchClockScale: 0, maxConnPerIp: 20 });
+    const cTitle = await connectClient(actSrv.port, 'ActTitle');
+    const cCpu = await connectClient(actSrv.port, 'ActCpu');
+    const cBat = await connectClient(actSrv.port, 'ActBat');
+    const cLab = await connectClient(actSrv.port, 'ActLab');
+    const cStandby = await connectClient(actSrv.port, 'ActStandby');
+    const cFHost = await connectClient(actSrv.port, 'ActFHost');
+    const cFGuest = await connectClient(actSrv.port, 'ActFGuest');
+    const cSpec = await connectClient(actSrv.port, 'ActSpec');
+
+    const fetchMetrics = () =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        http
+          .get(`http://127.0.0.1:${actSrv.port}/capbaseball/metrics`, (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => (body += c));
+            res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+          })
+          .on('error', reject);
+      });
+
+    try {
+      // Send page activities (including an invalid value on cTitle which should be ignored and remain 'title')
+      cTitle.send({ t: 'ac', a: 'invalid_page_hack' });
+      cCpu.send({ t: 'ac', a: 'cpu_match' });
+      cBat.send({ t: 'ac', a: 'practice_bat' });
+      cLab.send({ t: 'ac', a: 'pitch_lab' });
+      cStandby.send({ type: 'standby_join', mode: 'quick3' });
+
+      // Friend match + spectator
+      cFHost.send({ type: 'create', mode: 'quick3', name: 'ActFHost' });
+      const created = await cFHost.nextMsg((m) => m.type === 'room_created');
+      cFGuest.send({ type: 'join', code: created.code, name: 'ActFGuest' });
+      await cFHost.nextMsg((m) => m.type === 'match_start');
+      await cFGuest.nextMsg((m) => m.type === 'match_start');
+      cSpec.send({ type: 'watch', code: created.code });
+      await cSpec.nextMsg((m) => m.type === 'spectate_sync');
+
+      await new Promise((r) => setTimeout(r, 40));
+
+      const res = await fetchMetrics();
+      expect(res.status).toBe(200);
+      expect(res.body).not.toContain('ActTitle');
+      expect(res.body).not.toContain('invalid_page_hack');
+
+      const report = JSON.parse(res.body);
+      const act = report.connections.activities as Record<string, number>;
+      expect(report.connections.activeClients).toBe(8);
+      expect(act.title).toBe(1);
+      expect(act.cpu_match).toBe(1);
+      expect(act.practice_bat).toBe(1);
+      expect(act.pitch_lab).toBe(1);
+      expect(act.cpu_standby).toBe(1);
+      expect(act.online_friend).toBe(2);
+      expect(act.spectating).toBe(1);
+      const sum = Object.values(act).reduce((a, b) => a + b, 0);
+      expect(sum).toBe(report.connections.activeClients);
+    } finally {
+      await Promise.all([
+        cTitle.close(),
+        cCpu.close(),
+        cBat.close(),
+        cLab.close(),
+        cStandby.close(),
+        cFHost.close(),
+        cFGuest.close(),
+        cSpec.close(),
+      ]);
+      await actSrv.close();
+    }
+  });
 });

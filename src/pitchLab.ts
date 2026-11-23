@@ -1174,3 +1174,30 @@ function tick(nowMs: number): void {
 
 recomputeAndRender();
 requestAnimationFrame(tick);
+
+// Lightweight read-only WebSocket presence so /monitor shows live 3D Pitch Lab usage (zero PII)
+(() => {
+  try {
+    const p = window.location.pathname;
+    const base = p === '/capbaseball' || p.startsWith('/capbaseball/') ? '/capbaseball' : '';
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${window.location.host}${base}/ws`);
+    ws.addEventListener('open', () => {
+      try {
+        ws.send(JSON.stringify({ t: 'hi', n: 'LAB', v: 2 }));
+        ws.send(JSON.stringify({ t: 'ac', a: 'pitch_lab' }));
+      } catch {
+        // ignore
+      }
+    });
+    window.addEventListener('beforeunload', () => {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+    });
+  } catch {
+    // ignore offline/static preview errors
+  }
+})();

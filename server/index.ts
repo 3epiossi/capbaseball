@@ -95,6 +95,7 @@ interface ClientMeta {
   watchingCode: string | null;
   queuedMode: OnlineMode | null;
   standbyMode: OnlineMode | null;
+  pageActivity: 'title' | 'cpu_match' | 'practice_bat' | 'practice_pitch' | 'pitch_lab';
   lastPingSentAt: number;
   lastPongAt: number;
   lastEmoteAt: number;
@@ -296,6 +297,7 @@ function buildMatchState(mode: OnlineMode, homeName: string, awayName: string, m
 }
 
 const VALID_EMOTE_IDS = new Set<string>(ALL_EMOTE_IDS);
+const VALID_PAGE_ACTIVITIES = new Set<string>(['title', 'cpu_match', 'practice_bat', 'practice_pitch', 'pitch_lab']);
 
 export function startServer(
   port = Number(process.env.PORT) || 8788,
@@ -582,6 +584,44 @@ export function startServer(
     for (const cnt of ipConnCounts.values()) {
       if (cnt > maxConnsSingleIp) maxConnsSingleIp = cnt;
     }
+
+    const offeredStandbyIds = new Set<string>();
+    for (const o of pendingOffers.values()) offeredStandbyIds.add(o.standbyClientId);
+
+    const activities: Record<string, number> = {
+      online_live: 0,
+      online_friend: 0,
+      online_queue: 0,
+      friend_wait: 0,
+      spectating: 0,
+      cpu_standby: 0,
+      cpu_match: 0,
+      practice_bat: 0,
+      practice_pitch: 0,
+      pitch_lab: 0,
+      title: 0,
+    };
+    for (const c of clients.values()) {
+      if (c.roomCode) {
+        const rm = rooms.get(c.roomCode);
+        if (rm && rm.players.away) {
+          activities[rm.isMatchmaking ? 'online_live' : 'online_friend'] += 1;
+        } else if (rm) {
+          activities.friend_wait += 1;
+        } else {
+          activities[c.pageActivity] += 1;
+        }
+      } else if (c.watchingCode) {
+        activities.spectating += 1;
+      } else if (c.queuedMode) {
+        activities.online_queue += 1;
+      } else if (c.standbyMode || offeredStandbyIds.has(c.id)) {
+        activities.cpu_standby += 1;
+      } else {
+        activities[c.pageActivity] = (activities[c.pageActivity] ?? 0) + 1;
+      }
+    }
+
     return {
       uptimeSec: Math.floor((now - startedAt) / 1000),
       version,
@@ -598,6 +638,7 @@ export function startServer(
       staticCacheMb: Math.round((staticCacheBytes / (1024 * 1024)) * 10) / 10,
       physicsWorkerMode: physicsPool.mode,
       physicsWorkerCount: physicsPool.workerCount,
+      activities,
       roomsHealth: {
         startedRooms,
         waitingRooms,
@@ -1820,6 +1861,7 @@ export function startServer(
       watchingCode: null,
       queuedMode: null,
       standbyMode: null,
+      pageActivity: 'title',
       lastPingSentAt: nowOnConnect,
       lastPongAt: nowOnConnect,
       lastEmoteAt: 0,
@@ -1946,6 +1988,14 @@ export function startServer(
         case 'standby_leave': {
           removeFromStandby(clientId);
           cancelOffersForClient(clientId, 'declined', false);
+          break;
+        }
+
+        case 'activity': {
+          const page = typeof msg.page === 'string' ? msg.page : '';
+          if (VALID_PAGE_ACTIVITIES.has(page)) {
+            client.pageActivity = page as ClientMeta['pageActivity'];
+          }
           break;
         }
 

@@ -11,6 +11,12 @@ import {
 export type OnlineMode = 'quick3' | 'official6';
 export type OnlineSide = 'home' | 'away';
 export type RoomKind = 'live' | 'friend';
+export type ClientPageActivity =
+  | 'title'
+  | 'cpu_match'
+  | 'practice_bat'
+  | 'practice_pitch'
+  | 'pitch_lab';
 export type TurnState = 'awaiting_pitch' | 'awaiting_swing' | 'game_over';
 export type NetQuality = 'good' | 'fair' | 'poor' | 'offline';
 
@@ -628,5 +634,9 @@ export class OnlineClient {
 
   replyMatchOffer(offerId: string, accept: boolean): void {
     this.sendRaw({ t: 'or', id: offerId, a: accept ? 1 : 0 });
+  }
+
+  reportActivity(page: ClientPageActivity): void {
+    this.sendRaw({ t: 'ac', a: page });
   }
 }

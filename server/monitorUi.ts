@@ -94,6 +94,13 @@ export const MONITOR_HTML = `<!doctype html>
     .alert-row { padding: 4px 0; border-bottom: 1px solid #19243b; }
     .alert-crit { color: #fda4af; }
     .alert-warn { color: var(--gold); }
+    .act-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 14px; }
+    .act-row { display: flex; flex-direction: column; gap: 3px; }
+    .act-head { display: flex; justify-content: space-between; font-size: 12px; }
+    .act-lbl { color: #cbd5e1; }
+    .act-cnt { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .act-track { height: 6px; background: #0d162c; border-radius: 3px; overflow: hidden; }
+    .act-fill { height: 100%; border-radius: 3px; transition: width 0.25s ease; }
     .muted { color: var(--muted); }
   </style>
 </head>
@@ -160,6 +167,11 @@ export const MONITOR_HTML = `<!doctype html>
       <div class="kv"><span>In-Match DC / Reconn OK / Fail</span><strong id="g-reconn">-</strong></div>
       <div class="kv"><span>Clamped Inputs / NaN Physics</span><strong id="g-integrity">-</strong></div>
     </div>
+  </section>
+
+  <section class="card" style="margin-bottom: 12px;">
+    <h2>Live Player Pages &amp; Activity Breakdown (玩家所在頁面即時分布)</h2>
+    <div id="activity-grid" class="act-grid muted">Loading...</div>
   </section>
 
   <section class="charts">
@@ -270,6 +282,51 @@ export const MONITOR_JS = `(() => {
       setText('c-rooms', c.roomsActive + ' (' + c.matchmakingRooms + ' / ' + c.friendRooms + ')');
       setText('c-ips', c.uniqueIps + ' / ' + c.maxConnsSingleIp);
       setText('c-churn', c.acceptedTotal + ' / ' + c.closedTotal);
+
+      const actEl = $('activity-grid');
+      if (actEl) {
+        const acts = c.activities || {};
+        const total = Math.max(1, c.activeClients || 0);
+        const defs = [
+          ['online_live', '線上配對對戰 (LIVE)', '#fb7185'],
+          ['online_friend', '好友房對戰 (FRIEND)', '#38bdf8'],
+          ['online_queue', '線上配對排隊中', '#facc15'],
+          ['friend_wait', '好友房等待加入', '#60a5fa'],
+          ['spectating', '即時觀戰中', '#c084fc'],
+          ['cpu_standby', 'CPU 對戰 (線上候補中)', '#fb923c'],
+          ['cpu_match', 'CPU 三局對戰', '#4ade80'],
+          ['practice_bat', '打擊練習', '#34d399'],
+          ['practice_pitch', '投球練習', '#2dd4bf'],
+          ['pitch_lab', '3D 投球實驗室', '#f4c41c'],
+          ['title', '主畫面大廳', '#94a3b8'],
+        ];
+        actEl.replaceChildren();
+        for (const [key, label, color] of defs) {
+          const n = Number(acts[key] || 0);
+          const pct = c.activeClients > 0 ? Math.round((n / total) * 100) : 0;
+          const row = document.createElement('div');
+          row.className = 'act-row';
+          const head = document.createElement('div');
+          head.className = 'act-head';
+          const lbl = document.createElement('span');
+          lbl.className = 'act-lbl';
+          lbl.textContent = label;
+          const cnt = document.createElement('span');
+          cnt.className = 'act-cnt';
+          cnt.style.color = n > 0 ? color : '#64748b';
+          cnt.textContent = n + ' (' + pct + '%)';
+          head.append(lbl, cnt);
+          const track = document.createElement('div');
+          track.className = 'act-track';
+          const fill = document.createElement('div');
+          fill.className = 'act-fill';
+          fill.style.background = color;
+          fill.style.width = (n > 0 ? Math.max(4, pct) : 0) + '%';
+          track.appendChild(fill);
+          row.append(head, track);
+          actEl.appendChild(row);
+        }
+      }
 
       const r = d.rates;
       const tr = d.traffic;

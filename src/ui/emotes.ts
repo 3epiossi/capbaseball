@@ -1,12 +1,12 @@
 export type EmoteId =
   | 'nice'
   | 'gg'
-  | 'hr'
   | 'fire'
   | 'clap'
+  | 'hr'
+  | 'wow'
   | 'sweat'
-  | 'k'
-  | 'wow';
+  | 'k';
 
 export interface QuickChatDef {
   id: EmoteId;
@@ -17,12 +17,12 @@ export interface QuickChatDef {
 export const EMOTE_CATALOG: readonly QuickChatDef[] = [
   { id: 'nice', fallbackLabel: 'Not bad at all!', accent: '#4ade80' },
   { id: 'gg', fallbackLabel: 'Not at all!', accent: '#a78bfa' },
-  { id: 'hr', fallbackLabel: 'A new era begins!', accent: '#ffd23f' },
   { id: 'fire', fallbackLabel: 'Alright! Bring it!', accent: '#f97316' },
   { id: 'clap', fallbackLabel: 'Tables turned!', accent: '#facc15' },
-  { id: 'sweat', fallbackLabel: 'This is bad!', accent: '#60a5fa' },
-  { id: 'k', fallbackLabel: 'Three times, three!', accent: '#f43f5e' },
+  { id: 'hr', fallbackLabel: 'Barely grazed it~', accent: '#ffd23f' },
   { id: 'wow', fallbackLabel: 'Hmm?', accent: '#38bdf8' },
+  { id: 'sweat', fallbackLabel: 'This is bad!', accent: '#60a5fa' },
+  { id: 'k', fallbackLabel: "It's all over!", accent: '#f43f5e' },
 ];
 
 export const ALL_EMOTE_IDS: readonly EmoteId[] = EMOTE_CATALOG.map((e) => e.id);

@@ -82,6 +82,7 @@ export interface ServerSnapshotInput {
   physicsWorkerMode?: string;
   physicsWorkerCount?: number;
   roomsHealth?: RoomHealthSnapshot;
+  activities?: Record<string, number>;
 }
 
 export class ServerMonitor {
@@ -499,6 +500,7 @@ export class ServerMonitor {
         maxConnsSingleIp: snap.maxConnsSingleIp,
         acceptedTotal: this.connAcceptedTotal,
         closedTotal: this.connClosedTotal,
+        activities: snap.activities ?? {},
       },
       rejections: {
         ipLimit: this.rejectedIpLimit,

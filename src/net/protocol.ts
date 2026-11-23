@@ -371,6 +371,8 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
       return { type: 'offer_shown', offerId: raw.id };
     case 'or':
       return { type: 'offer_reply', offerId: raw.id, accept: raw.a === 1 || raw.a === true };
+    case 'ac':
+      return { type: 'activity', page: raw.a };
     default:
       return raw;
   }
