@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.3.3`（語意化三段式版本號），Pi 現行部署版本 `20261123-105513`
+- **目前里程碑**：`v2.3.4`（語意化三段式版本號），Pi 現行部署版本 `20261123-115047`
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 50 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 51 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -230,3 +230,13 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **`/monitor` 與 `/metrics` 玩家所在頁面即時分布（Zero PII）**：
     - 精簡 v2 協定 [src/net/protocol.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/protocol.ts) 新增 `{ t: 'ac', a }` 頁面回報封包，由 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 與 3D 投球實驗室 [src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 同步上報本地頁面狀態（`title`、`cpu_match`、`practice_bat`、`practice_pitch`、`pitch_lab`）。
     - [server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 結合伺服器權威狀態與白名單驗證，於 `/metrics` 輸出 `connections.activities` 11 個互斥頁面計數（`online_live`、`online_friend`、`online_queue`、`friend_wait`、`spectating`、`cpu_standby`、`cpu_match`、`practice_bat`、`practice_pitch`、`pitch_lab`、`title`，加總恆等於 `activeClients`），並於 [server/monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts) 以純 DOM 色彩進度條即時呈現（測試擴充至 **50/50** 全部通過）。
+- **v2.3.4 全單人模式自動線上候補、連續 3 次超時裁定勝與 `/monitor.js` 破快取（2026-11-23）**：
+  - **全員預設線上候補＋40 秒配對等待＋優先順序**：
+    - 玩家進入任一單人模式（CPU 三局、打擊練習、投球練習）預設自動登錄線上候補名單（首次顯示輕量提示，並於 `☰` 選單提供「接收線上邀約：開／關」即時切換）。
+    - 線上對戰配對等待上限由 `20` 秒調整為 **`40` 秒**（單次邀約維持 `20` 秒），[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 新增 `enqueueStandby` 優先順序佇列，優先邀約從「線上對戰」轉進 CPU 的玩家，再邀約主動進 CPU／練習的玩家。
+    - 在遊戲中明確點「拒絕」或 20 秒未回應逾時後，整趟瀏覽器分頁 Session 記憶已關閉候補（回主畫面切換其他單人模式不再打擾），直到主動按「線上對戰」或在 `☰` 選單重新開啟。
+  - **線上連續 3 次投球逾時直接裁定勝**：
+    - [server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 新增每隊獨立 `consecutiveClockViolations`：第 1、2 次逾時判自動壞球並顯示 `1/3`、`2/3` 警告；第 3 次連續逾時立即裁定掛機投手反則敗北、打擊方獲勝（`endReason: 'pitch_clock'`、v2 `er = 4`，結算畫面與 Box Score 顯示三語裁定標籤）。只要實際投出一球或執行敬遠即重置為 `0`，不誤傷正常玩家。
+  - **修復 Cloudflare 快取舊版 `/monitor.js` 與拆出候補人數徽章**：
+    - **排查紀錄**：`v2.3.3` 上線後 `/monitor` 的即時分布區塊一度停在 `Loading...`，實測發現 Cloudflare 對僅設 `Cache-Control: no-cache` 的 `.js` 檔會套用預設 4 小時快取（`max-age=14400`），導致瀏覽器載入新版 HTML 卻執行舊版 `monitor.js`。
+    - **解法**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 將 `/monitor` 與 `/monitor.js` 標頭改為 `Cache-Control: no-store, no-cache, must-revalidate` 並自動附加 `src="./monitor.js?v=<build>"`；同時將頁面分布調整為 10 條真實所在頁面進度條，並於標題右側獨立顯示 **`線上候補名單：X 人`**（`connections.standbyCount`，測試擴充至 **51/51** 全部通過）。

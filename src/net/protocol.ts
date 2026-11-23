@@ -65,8 +65,8 @@ export interface CompactMatch {
   /** mercy rule off flag (omitted when enabled) & triggered flag */
   mr?: 0;
   mt?: 1;
-  /** match end reason code: 1=mercy, 2=disconnect, 3=resign */
-  er?: 1 | 2 | 3;
+  /** match end reason code: 1=mercy, 2=disconnect, 3=resign, 4=pitch_clock */
+  er?: 1 | 2 | 3 | 4;
   /** optional challengeable call [pitchSeq, eligibleSide(0=away,1=home), challenged(0|1)] */
   lc?: [number, number, number];
 }
@@ -135,6 +135,7 @@ export function packMatch(m: MatchState): CompactMatch {
   if (m.endReason === 'mercy') cm.er = 1;
   else if (m.endReason === 'disconnect') cm.er = 2;
   else if (m.endReason === 'resign') cm.er = 3;
+  else if (m.endReason === 'pitch_clock') cm.er = 4;
   if (m.winner) {
     cm.w = m.winner === 'home' ? 'h' : m.winner === 'away' ? 'a' : 't';
   }
@@ -203,9 +204,11 @@ export function unpackMatch(cm: CompactMatch): MatchState {
           ? 'disconnect'
           : cm.er === 3
             ? 'resign'
-            : cm.mt === 1
-              ? 'mercy'
-              : undefined
+            : cm.er === 4
+              ? 'pitch_clock'
+              : cm.mt === 1
+                ? 'mercy'
+                : undefined
     ) as MatchEndReason | undefined,
     lastEvent: '',
     stats: {
@@ -364,7 +367,7 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
     case 'mp':
       return { type: 'menu_pause', paused: raw.p === 1 || raw.p === true };
     case 'sj':
-      return { type: 'standby_join', mode: raw.m === 1 ? 'official6' : 'quick3' };
+      return { type: 'standby_join', mode: raw.m === 1 ? 'official6' : 'quick3', priority: raw.p === 1 };
     case 'sl':
       return { type: 'standby_leave' };
     case 'os':

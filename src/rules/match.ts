@@ -89,7 +89,7 @@ export interface DerbyState {
   homeHR: number;
 }
 
-export type MatchEndReason = 'normal' | 'mercy' | 'disconnect' | 'resign';
+export type MatchEndReason = 'normal' | 'mercy' | 'disconnect' | 'resign' | 'pitch_clock';
 
 export interface MatchState {
   mode: GameMode;

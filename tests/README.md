@@ -2,7 +2,7 @@
 
 ## 模組總覽
 
-`tests` 目錄使用 Vitest 驗證物理引擎、2025-02 瓶蓋棒球規則引擎以及多人連線伺服器整合行為。全套測試共包含 3 個測試檔案、合計 50 項自動化測試（可透過 `npm test` 執行）。
+`tests` 目錄使用 Vitest 驗證物理引擎、2025-02 瓶蓋棒球規則引擎以及多人連線伺服器整合行為。全套測試共包含 3 個測試檔案、合計 51 項自動化測試（可透過 `npm test` 執行）。
 
 ---
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | [physics.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/physics.test.ts) | 9 | 驗證 6-DOF 投球積分無 `NaN`、4 種球路瞄準誤差 `< 0.025` m、時鐘方向變化量、各球種飛行包絡線、外野與內野 4 人守備攔截、四元數／法向量朝向、座標系轉換與擊球反彈／過牆行為。 |
 | [rules.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/rules.test.ts) | 11 | 驗證球場幾何、5.06／5.07 安打與全壘打判決、不死三振與暴投、扣倒制（Mercy Rule）、投球時鐘違規、延長賽滿壘無人出局突破僵局與禁止再見敬遠、高飛球與滾地守備、擦棒界外球與 ABS 邊緣誤判／挑戰。 |
-| [multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) | 30 | 啟動真實 `startServer(0)` 測試親友房／快配對戰、CPU 候補邀約轉邀與 `LIVE`/`FRIEND` 觀戰清單、揮空真值回傳、敬遠與不揮棒、冪等序號防護、斷線重連、即時觀戰（含觀眾快捷對話與 3 秒冷卻）、ABS 挑戰同步、v2 精簡封包大小、480 公開＋20 好友房保留席、3 秒快捷對話防洗頻、雙方同時建房死鎖解鎖、線上選單暫停凍結時鐘與自動恢復、ABS 視窗防搶投、`/metrics` 11 桶玩家頁面即時分布（零 PII）與安全防護。 |
+| [multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) | 31 | 啟動真實 `startServer(0)` 測試親友房／快配對戰、優先權 CPU／練習候補邀約轉邀與 `LIVE`/`FRIEND` 觀戰清單、揮空真值回傳、連續 3 次投球逾時裁定敗北（實際投球重置計數）、敬遠與不揮棒、冪等序號防護、斷線重連、即時觀戰（含觀眾快捷對話與 3 秒冷卻）、ABS 挑戰同步、v2 精簡封包大小、480 公開＋20 好友房保留席、3 秒快捷對話防洗頻、雙方同時建房死鎖解鎖、線上選單暫停凍結時鐘與自動恢復、ABS 視窗防搶投、`/monitor.js` `no-store` 破快取、`/metrics` 10 桶真實頁面分布與 `standbyCount`（零 PII）與安全防護。 |
 
 ---
 
@@ -60,4 +60,4 @@
 ## 與其他模組的相依關係
 
 - **測試目標模組**：直接匯入並測試 `src/physics/*`、`src/rules/*`、`src/ai/cpu.ts`、`src/net/protocol.ts` 與 `server/index.ts`。
-- **被 `scripts/deploy.sh` 呼叫**：部署腳本在建置與上傳遠端前會先執行 `npm test`，確保全部 50 項測試通過後才進行打包與換版。
+- **被 `scripts/deploy.sh` 呼叫**：部署腳本在建置與上傳遠端前會先執行 `npm test`，確保全部 51 項測試通過後才進行打包與換版。

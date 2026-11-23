@@ -94,6 +94,9 @@ export const MONITOR_HTML = `<!doctype html>
     .alert-row { padding: 4px 0; border-bottom: 1px solid #19243b; }
     .alert-crit { color: #fda4af; }
     .alert-warn { color: var(--gold); }
+    .act-title-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .act-title-bar h2 { margin: 0; }
+    .standby-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(251, 146, 60, 0.14); border: 1px solid rgba(251, 146, 60, 0.55); color: #fdba74; font-variant-numeric: tabular-nums; }
     .act-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 14px; }
     .act-row { display: flex; flex-direction: column; gap: 3px; }
     .act-head { display: flex; justify-content: space-between; font-size: 12px; }
@@ -170,7 +173,10 @@ export const MONITOR_HTML = `<!doctype html>
   </section>
 
   <section class="card" style="margin-bottom: 12px;">
-    <h2>Live Player Pages &amp; Activity Breakdown (玩家所在頁面即時分布)</h2>
+    <div class="act-title-bar">
+      <h2>Live Player Pages &amp; Activity Breakdown (玩家所在頁面即時分布)</h2>
+      <span id="standby-pill" class="standby-pill">線上候補名單：0 人</span>
+    </div>
     <div id="activity-grid" class="act-grid muted">Loading...</div>
   </section>
 
@@ -283,6 +289,12 @@ export const MONITOR_JS = `(() => {
       setText('c-ips', c.uniqueIps + ' / ' + c.maxConnsSingleIp);
       setText('c-churn', c.acceptedTotal + ' / ' + c.closedTotal);
 
+      const standbyPill = $('standby-pill');
+      if (standbyPill) {
+        const sbCount = Number(c.standbyCount || 0);
+        standbyPill.textContent = '線上候補名單：' + sbCount + ' 人';
+      }
+
       const actEl = $('activity-grid');
       if (actEl) {
         const acts = c.activities || {};
@@ -293,13 +305,13 @@ export const MONITOR_JS = `(() => {
           ['online_queue', '線上配對排隊中', '#facc15'],
           ['friend_wait', '好友房等待加入', '#60a5fa'],
           ['spectating', '即時觀戰中', '#c084fc'],
-          ['cpu_standby', 'CPU 對戰 (線上候補中)', '#fb923c'],
           ['cpu_match', 'CPU 三局對戰', '#4ade80'],
           ['practice_bat', '打擊練習', '#34d399'],
           ['practice_pitch', '投球練習', '#2dd4bf'],
           ['pitch_lab', '3D 投球實驗室', '#f4c41c'],
           ['title', '主畫面大廳', '#94a3b8'],
         ];
+        actEl.classList.remove('muted');
         actEl.replaceChildren();
         for (const [key, label, color] of defs) {
           const n = Number(acts[key] || 0);

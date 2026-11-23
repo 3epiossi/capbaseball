@@ -881,12 +881,14 @@ describe('Online Multiplayer Server Integration', () => {
       expect(htmlRes.status).toBe(200);
       expect(htmlRes.headers['content-type']).toContain('text/html');
       expect(htmlRes.headers['content-security-policy']).toContain("script-src 'self'");
-      expect(htmlRes.body).toContain('src="./monitor.js"');
+      expect(htmlRes.headers['cache-control']).toContain('no-store');
+      expect(htmlRes.body).toMatch(/src="\.\/monitor\.js\?v=[^"]+"/);
       expect(htmlRes.body).not.toMatch(/<script(?![^>]*src=)/i);
 
-      const jsRes = await reqHttp('/capbaseball/monitor.js');
+      const jsRes = await reqHttp('/capbaseball/monitor.js?v=test');
       expect(jsRes.status).toBe(200);
       expect(jsRes.headers['content-type']).toContain('javascript');
+      expect(jsRes.headers['cache-control']).toContain('no-store');
       expect(jsRes.body).toContain('./metrics');
 
       const slashRes = await reqHttp('/capbaseball/monitor/');
@@ -1375,12 +1377,12 @@ describe('Online Multiplayer Server Integration', () => {
     const fGuest = await connectClient(sbSrv.port, 'FriendA');
     const lister = await connectClient(sbSrv.port, 'Lister');
     try {
-      // Standby1 & Standby2 enter CPU standby queue
-      sb1.send({ type: 'standby_join', mode: 'quick3' });
-      sb2.send({ type: 'standby_join', mode: 'quick3' });
+      // Standby2 joins passively first (e.g. practice), then Standby1 joins with priority (from online matchmaking fallback)
+      sb2.send({ t: 'sj', m: 0 });
+      sb1.send({ t: 'sj', m: 0, p: 1 });
       await new Promise((r) => setTimeout(r, 40));
 
-      // LiveWaiter enters online matchmaking queue -> server offers Standby1 first!
+      // LiveWaiter enters online matchmaking queue -> server prioritizes Standby1 ahead of passive Standby2!
       waiter.send({ type: 'queue', mode: 'quick3', name: 'LiveWaiter' });
       await waiter.nextMsg((m) => m.type === 'queued');
       const offer1 = await sb1.nextMsg((m) => m.type === 'match_offer');
@@ -1452,6 +1454,7 @@ describe('Online Multiplayer Server Integration', () => {
       cCpu.send({ t: 'ac', a: 'cpu_match' });
       cBat.send({ t: 'ac', a: 'practice_bat' });
       cLab.send({ t: 'ac', a: 'pitch_lab' });
+      cStandby.send({ t: 'ac', a: 'practice_pitch' });
       cStandby.send({ type: 'standby_join', mode: 'quick3' });
 
       // Friend match + spectator
@@ -1473,11 +1476,12 @@ describe('Online Multiplayer Server Integration', () => {
       const report = JSON.parse(res.body);
       const act = report.connections.activities as Record<string, number>;
       expect(report.connections.activeClients).toBe(8);
+      expect(report.connections.standbyCount).toBe(1);
       expect(act.title).toBe(1);
       expect(act.cpu_match).toBe(1);
       expect(act.practice_bat).toBe(1);
+      expect(act.practice_pitch).toBe(1);
       expect(act.pitch_lab).toBe(1);
-      expect(act.cpu_standby).toBe(1);
       expect(act.online_friend).toBe(2);
       expect(act.spectating).toBe(1);
       const sum = Object.values(act).reduce((a, b) => a + b, 0);
@@ -1494,6 +1498,66 @@ describe('Online Multiplayer Server Integration', () => {
         cSpec.close(),
       ]);
       await actSrv.close();
+    }
+  });
+
+  it('30. 3 consecutive Pitch Clock violations forfeit the stalling pitcher (and a real pitch resets the counter)', async () => {
+    const pcSrv = await startServer(0, {
+      pitchClockScale: 0.01, // ~180ms per violation
+      absWindowMs: 0,
+    });
+    const host = await connectClient(pcSrv.port, 'StallP');
+    const guest = await connectClient(pcSrv.port, 'WaitB');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'StallP' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      guest.send({ type: 'join', code: created.code, name: 'WaitB' });
+      await host.nextMsg((m) => m.type === 'match_start');
+      await guest.nextMsg((m) => m.type === 'match_start');
+
+      // Violation 1/3 & 2/3
+      const v1 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
+      expect((v1.callout as { subtitle: string }).subtitle).toContain('1/3');
+      const v2 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
+      expect((v2.callout as { subtitle: string }).subtitle).toContain('2/3');
+
+      // Pitcher throws a real pitch -> resets consecutive violation counter to 0!
+      host.send({
+        type: 'pitch_submit',
+        pitchSeq: v2.nextPitchSeq,
+        pitchId: 'straight',
+        speedKmh: 70,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      await host.nextMsg((m) => m.type === 'pitch_launch', 3000);
+      const launch = await guest.nextMsg((m) => m.type === 'pitch_launch', 3000);
+      guest.send({ type: 'no_swing', pitchSeq: launch.pitchSeq });
+      await host.nextMsg((m) => m.type === 'pitch_result', 3000);
+      await guest.nextMsg((m) => m.type === 'pitch_result', 3000);
+
+      // Now stall 3 consecutive times -> 1/3, 2/3, then 3rd immediately forfeits the pitcher!
+      const s1 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
+      expect((s1.callout as { subtitle: string }).subtitle).toContain('1/3');
+      const s2 = await guest.nextMsg((m) => m.type === 'pitch_result' && m.clockViolation === true, 3000);
+      expect((s2.callout as { subtitle: string }).subtitle).toContain('2/3');
+
+      const [overH, overG] = await Promise.all([
+        host.nextMsg((m) => m.type === 'match_over', 3000),
+        guest.nextMsg((m) => m.type === 'match_over', 3000),
+      ]);
+      expect(overH.reason).toBe('pitch_clock_forfeit');
+      expect(overH.winner).toBe('away');
+      expect(overG.reason).toBe('pitch_clock_forfeit');
+      expect(overG.winner).toBe('away');
+      expect((overG.match as { isGameOver: boolean; endReason?: string }).isGameOver).toBe(true);
+      expect((overG.match as { isGameOver: boolean; endReason?: string }).endReason).toBe('pitch_clock');
+    } finally {
+      await host.close();
+      await guest.close();
+      await pcSrv.close();
     }
   });
 });

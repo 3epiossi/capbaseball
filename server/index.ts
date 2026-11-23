@@ -95,6 +95,7 @@ interface ClientMeta {
   watchingCode: string | null;
   queuedMode: OnlineMode | null;
   standbyMode: OnlineMode | null;
+  standbyPriority: boolean;
   pageActivity: 'title' | 'cpu_match' | 'practice_bat' | 'practice_pitch' | 'pitch_lab';
   lastPingSentAt: number;
   lastPongAt: number;
@@ -142,6 +143,7 @@ interface Room {
   pitchClockTimer: NodeJS.Timeout | null;
   pitchClockDeadlineAt: number | null;
   pitchClockRemainingMs: number | null;
+  consecutiveClockViolations: Record<Side, number>;
   pausedBy: Set<Side>;
   pauseTimers: Record<Side, NodeJS.Timeout | null>;
   pauseExpiresAt: Record<Side, number>;
@@ -168,6 +170,8 @@ export interface ServerOptions {
   swingTimeoutPaddingMs?: number;
   /** Scale factor for server Pitch Clock duration (1 = normal 15s/20s; 0 disables; <1 accelerates tests). */
   pitchClockScale?: number;
+  /** Consecutive pitch clock timeouts by the same pitcher before automatic forfeit loss (default 3). */
+  pitchClockForfeitLimit?: number;
   /** Max duration (ms) a single player's online menu pause can hold the match (default 20000). */
   menuPauseMs?: number;
   /** Protection window (ms) preventing pitcher sneak-throws while opponent decides on ABS (default 2200). */
@@ -320,6 +324,7 @@ export function startServer(
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const pitchClockScale = opts.pitchClockScale ?? 1;
+  const pitchClockForfeitLimit = Math.max(1, opts.pitchClockForfeitLimit ?? 3);
   const menuPauseMs = opts.menuPauseMs ?? 20_000;
   const absWindowMs = opts.absWindowMs ?? 2_200;
   const offerTimeoutMs = opts.offerTimeoutMs ?? 20_000;
@@ -594,14 +599,17 @@ export function startServer(
       online_queue: 0,
       friend_wait: 0,
       spectating: 0,
-      cpu_standby: 0,
       cpu_match: 0,
       practice_bat: 0,
       practice_pitch: 0,
       pitch_lab: 0,
       title: 0,
     };
+    let standbyCount = 0;
     for (const c of clients.values()) {
+      if (c.standbyMode || offeredStandbyIds.has(c.id)) {
+        standbyCount += 1;
+      }
       if (c.roomCode) {
         const rm = rooms.get(c.roomCode);
         if (rm && rm.players.away) {
@@ -615,8 +623,6 @@ export function startServer(
         activities.spectating += 1;
       } else if (c.queuedMode) {
         activities.online_queue += 1;
-      } else if (c.standbyMode || offeredStandbyIds.has(c.id)) {
-        activities.cpu_standby += 1;
       } else {
         activities[c.pageActivity] = (activities[c.pageActivity] ?? 0) + 1;
       }
@@ -639,6 +645,7 @@ export function startServer(
       physicsWorkerMode: physicsPool.mode,
       physicsWorkerCount: physicsPool.workerCount,
       activities,
+      standbyCount,
       roomsHealth: {
         startedRooms,
         waitingRooms,
@@ -757,10 +764,40 @@ export function startServer(
       if (room.turnState !== 'awaiting_pitch' || room.match.isGameOver || room.pitchSeq !== expectedSeq) return;
       if (!room.players.home.connected || !room.players.away?.connected) return;
       if (room.pausedBy.size > 0) return;
-      const res = applyPitchClockViolation(room.match);
-      if (!res.applied) return;
+
+      const pitchingSide = getPitchingSide(room.match);
+      const battingSide = getBattingSide(room.match);
+      room.consecutiveClockViolations[pitchingSide] += 1;
+      const violationCount = room.consecutiveClockViolations[pitchingSide];
       monitor.pitchClockViolations += 1;
       room.lastActivityAt = Date.now();
+
+      if (violationCount >= pitchClockForfeitLimit) {
+        clearPitchClock(room);
+        clearRoomPauses(room);
+        room.absWindowUntil = 0;
+        if (room.swingTimer) {
+          clearTimeout(room.swingTimer);
+          room.swingTimer = null;
+        }
+        room.match.isGameOver = true;
+        room.match.winner = battingSide;
+        room.match.endReason = 'pitch_clock';
+        room.match.lastEvent = `${room.players[pitchingSide]?.name ?? pitchingSide} forfeited (pitch clock x${violationCount})`;
+        room.turnState = 'game_over';
+        room.activePitch = null;
+        recordMatchEnd(room, 'pitch_clock_forfeit');
+        sendToRoom(room, {
+          type: 'match_over',
+          winner: battingSide,
+          reason: 'pitch_clock_forfeit',
+          match: room.match,
+        });
+        return;
+      }
+
+      const res = applyPitchClockViolation(room.match);
+      if (!res.applied) return;
       const solvedSeq = room.pitchSeq;
       room.pitchSeq += 1;
       room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
@@ -775,12 +812,14 @@ export function startServer(
         outcome: res.walked ? 'WALK' : 'BALL',
         callout: {
           title: 'PITCH CLOCK',
-          subtitle: res.walked ? 'WALK (BB)' : 'AUTO BALL',
+          subtitle: res.walked
+            ? `WALK (BB) · ${violationCount}/${pitchClockForfeitLimit}`
+            : `AUTO BALL · ${violationCount}/${pitchClockForfeitLimit}`,
           color: '#f97316',
           ttl: 2.2,
         },
         inningChanged: false,
-        telemetry: 'PITCH CLOCK',
+        telemetry: `PITCH CLOCK (${violationCount}/${pitchClockForfeitLimit})`,
         match: room.match,
       });
       if (room.match.isGameOver) {
@@ -878,7 +917,7 @@ export function startServer(
     if (room.recorded) return;
     room.recorded = true;
     if (reason === 'completed') monitor.matchesCompleted += 1;
-    else if (reason === 'resign') monitor.matchesResigned += 1;
+    else if (reason === 'resign' || reason === 'pitch_clock_forfeit') monitor.matchesResigned += 1;
     else if (reason === 'disconnect_timeout') monitor.matchesDisconnectTimeout += 1;
     appendMatchLog(
       {
@@ -905,7 +944,33 @@ export function startServer(
       if (idx !== -1) standbyQueues[m].splice(idx, 1);
     }
     const c = clients.get(clientId);
-    if (c) c.standbyMode = null;
+    if (c) {
+      c.standbyMode = null;
+      c.standbyPriority = false;
+    }
+  }
+
+  function enqueueStandby(c: ClientMeta, mode: OnlineMode, priority: boolean, frontOfTier = false) {
+    removeFromStandby(c.id);
+    c.standbyMode = mode;
+    c.standbyPriority = priority;
+    const sq = standbyQueues[mode];
+    if (priority) {
+      if (frontOfTier) {
+        sq.unshift(c.id);
+      } else {
+        // Insert right after existing priority clients, ahead of passive CPU/practice standby clients
+        const firstNormalIdx = sq.findIndex((id) => !clients.get(id)?.standbyPriority);
+        if (firstNormalIdx === -1) sq.push(c.id);
+        else sq.splice(firstNormalIdx, 0, c.id);
+      }
+    } else if (frontOfTier) {
+      const firstNormalIdx = sq.findIndex((id) => !clients.get(id)?.standbyPriority);
+      if (firstNormalIdx === -1) sq.push(c.id);
+      else sq.splice(firstNormalIdx, 0, c.id);
+    } else {
+      sq.push(c.id);
+    }
   }
 
   function cancelOffersForClient(clientId: string, reason: string, requeueStandby = true) {
@@ -917,9 +982,7 @@ export function startServer(
         if (sc && sc.ws.readyState === WebSocket.OPEN) {
           sendJson(sc.ws, { type: 'offer_cancelled', offerId, reason });
           if (requeueStandby && !sc.roomCode && !draining) {
-            removeFromStandby(sc.id);
-            sc.standbyMode = offer.mode;
-            standbyQueues[offer.mode].unshift(sc.id);
+            enqueueStandby(sc, offer.mode, sc.standbyPriority, true);
           }
         }
       } else if (offer.standbyClientId === clientId) {
@@ -1459,6 +1522,7 @@ export function startServer(
       pitchClockTimer: null,
       pitchClockDeadlineAt: null,
       pitchClockRemainingMs: null,
+      consecutiveClockViolations: { home: 0, away: 0 },
       pausedBy: new Set(),
       pauseTimers: { home: null, away: null },
       pauseExpiresAt: { home: 0, away: 0 },
@@ -1690,13 +1754,17 @@ export function startServer(
     }
 
     if (isGetOrHead && normalizedPath === '/monitor') {
-      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(MONITOR_HTML, 'utf8');
+      const html = MONITOR_HTML.replace(
+        'src="./monitor.js"',
+        `src="./monitor.js?v=${encodeURIComponent(version ?? 'dev')}"`,
+      );
+      const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(html, 'utf8');
       monitor.recordHttp(200, bytes);
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       });
-      res.end(req.method === 'HEAD' ? undefined : MONITOR_HTML);
+      res.end(req.method === 'HEAD' ? undefined : html);
       return;
     }
 
@@ -1705,7 +1773,7 @@ export function startServer(
       monitor.recordHttp(200, bytes);
       res.writeHead(200, {
         'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       });
       res.end(req.method === 'HEAD' ? undefined : MONITOR_JS);
       return;
@@ -1861,6 +1929,7 @@ export function startServer(
       watchingCode: null,
       queuedMode: null,
       standbyMode: null,
+      standbyPriority: false,
       pageActivity: 'title',
       lastPingSentAt: nowOnConnect,
       lastPongAt: nowOnConnect,
@@ -1978,9 +2047,9 @@ export function startServer(
           const load = getServerLoad();
           if (load.status === 'red' || clients.size > publicClientCap) return;
           const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
+          const priority = Boolean(msg.priority);
           removeFromQueues(clientId);
-          client.standbyMode = mode;
-          standbyQueues[mode].push(clientId);
+          enqueueStandby(client, mode, priority, false);
           tryOfferToStandby(mode);
           break;
         }
@@ -2076,6 +2145,7 @@ export function startServer(
             pitchClockTimer: null,
             pitchClockDeadlineAt: null,
             pitchClockRemainingMs: null,
+            consecutiveClockViolations: { home: 0, away: 0 },
             pausedBy: new Set(),
             pauseTimers: { home: null, away: null },
             pauseExpiresAt: { home: 0, away: 0 },
@@ -2278,6 +2348,7 @@ export function startServer(
             return;
           }
           if (!canIntentionalWalk(room.match)) return;
+          room.consecutiveClockViolations[client.side] = 0;
           room.lastActivityAt = Date.now();
           room.absWindowUntil = 0;
 
@@ -2330,6 +2401,7 @@ export function startServer(
             }
             return;
           }
+          room.consecutiveClockViolations[client.side] = 0;
           room.lastActivityAt = Date.now();
           room.absWindowUntil = 0;
 
@@ -2689,6 +2761,7 @@ export function startServer(
           room.rematchVotes.clear();
           clearRoomPauses(room);
           clearPitchClock(room);
+          room.consecutiveClockViolations = { home: 0, away: 0 };
           room.absWindowUntil = 0;
           room.match = buildMatchState(room.mode, room.players.home.name, room.players.away.name, room.mercyRule);
           room.pitchSeq = 1;

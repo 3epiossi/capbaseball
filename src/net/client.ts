@@ -620,8 +620,8 @@ export class OnlineClient {
     this.sendRaw({ t: 'mp', p: paused ? 1 : 0 });
   }
 
-  joinStandby(mode: OnlineMode): void {
-    this.sendRaw({ t: 'sj', m: mode === 'official6' ? 1 : 0 });
+  joinStandby(mode: OnlineMode, priority = false): void {
+    this.sendRaw(priority ? { t: 'sj', m: mode === 'official6' ? 1 : 0, p: 1 } : { t: 'sj', m: mode === 'official6' ? 1 : 0 });
   }
 
   leaveStandby(): void {

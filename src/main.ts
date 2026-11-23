@@ -229,6 +229,7 @@ const setBreakPreview = document.getElementById('set-break-preview') as HTMLInpu
 const setSound = document.getElementById('set-sound') as HTMLInputElement;
 const setEmoteSfx = document.getElementById('set-emote-sfx') as HTMLInputElement;
 const btnMuteEmotes = document.getElementById('btn-mute-emotes') as HTMLButtonElement;
+const btnStandbyToggle = document.getElementById('btn-standby-toggle') as HTMLButtonElement;
 const friendMercyRule = document.getElementById('friend-mercy-rule') as HTMLInputElement;
 
 const catcherReturn = createCatcherReturnState();
@@ -572,6 +573,7 @@ function applyLocaleToDom(): void {
   btnSwingType.textContent = powerSwing ? t('btnPower') : t('btnNormal');
   btnSound.textContent = sfx.isMuted() ? t('btnMute') : t('btnSfx');
   btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
+  updateStandbyToggleBtn();
   pitchSelectedNameEl.textContent = getLocalizedPitchName(selectedPitch);
   if (phase === 'idle') {
     btnThrow.textContent = isPlayCallActive() ? t('btnWait') : t('btnHoldToPitch');
@@ -681,6 +683,41 @@ interface ClientMatchOffer {
 }
 let pendingMatchOffer: ClientMatchOffer | null = null;
 let lastOfferRenderedSec = -1;
+/** Session-wide opt-out: players in CPU/practice are auto-registered in online standby until they explicitly decline, time out, or toggle OFF in Menu. */
+let standbyOptedOut = false;
+let standbyPriorityMode = false;
+let standbyEntryNoticeShown = false;
+
+function updateStandbyToggleBtn(): void {
+  const on = !standbyOptedOut;
+  btnStandbyToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btnStandbyToggle.textContent = on ? t('btnStandbyOn') : t('btnStandbyOff');
+}
+
+function syncStandbyRegistration(showGentleNotice = false): void {
+  updateStandbyToggleBtn();
+  if (isOnline || spectating || onTitleScreen) return;
+  if (standbyOptedOut) {
+    if (pendingMatchOffer) {
+      const id = pendingMatchOffer.offerId;
+      hideMatchOfferToast();
+      if (onlineClient.connected) onlineClient.replyMatchOffer(id, false);
+    }
+    if (onlineClient.connected) onlineClient.leaveStandby();
+    return;
+  }
+  if (onlineClient.connected) {
+    if (!onlineClient.isServerBusy && !onlineClient.isUnstable) {
+      onlineClient.joinStandby(onlineModeChoice, standbyPriorityMode);
+      if (showGentleNotice && !standbyEntryNoticeShown) {
+        standbyEntryNoticeShown = true;
+        emoteCtrl.showSystem(t('standbyAutoTitle'), t('standbyAutoSub'), '#38bdf8', 3200);
+      }
+    }
+  } else {
+    void onlineClient.connect(getOnlinePlayerName(), 4500).catch(() => {});
+  }
+}
 
 function hideMatchOfferToast(): void {
   pendingMatchOffer = null;
@@ -1408,7 +1445,7 @@ function updateSafeCameraFraming(immediate: boolean): void {
   }
 }
 
-function startMode(mode: GameMode): void {
+function startMode(mode: GameMode, suppressStandbyNotice = false): void {
   sfx.unlock();
   isOnline = false;
   spectating = false;
@@ -1450,6 +1487,8 @@ function startMode(mode: GameMode): void {
   emoteCtrl.setOnlineSendEnabled(false);
   emoteCtrl.setVisible(true);
   btnMuteEmotes.hidden = true;
+  btnStandbyToggle.hidden = false;
+  updateStandbyToggleBtn();
   absPromptTimer = 0;
   absReplay = null;
   bounceRings = [];
@@ -1470,6 +1509,7 @@ function startMode(mode: GameMode): void {
     transitionDirector.playMatchStart(match.away.name, match.home.name);
   }
   syncClientActivity();
+  syncStandbyRegistration(!suppressStandbyNotice);
   if (getCurrentRole() === 'batter') {
     cpuAutoPitchTimer = 0.75;
   }
@@ -1477,6 +1517,8 @@ function startMode(mode: GameMode): void {
 
 function returnToTitle(): void {
   hideMatchOfferToast();
+  standbyPriorityMode = false;
+  btnStandbyToggle.hidden = true;
   if (onlineClient.connected) {
     onlineClient.leaveStandby();
   }
@@ -2202,7 +2244,9 @@ function showGameOverModal(): void {
       ? t('labelDisconnectWin')
       : match.endReason === 'resign'
         ? t('labelResignWin')
-        : '';
+        : match.endReason === 'pitch_clock'
+          ? t('labelPitchClockWin')
+          : '';
   const scoreSub = `${match.away.name} ${match.away.totalRuns} — ${match.home.totalRuns} ${match.home.name}`;
 
   transitionDirector.playGameSet(
@@ -2237,6 +2281,7 @@ function showGameOverModal(): void {
     disconnectTag: t('labelDisconnectTag'),
     resignWinLabel: t('labelResignWin'),
     resignTag: t('labelResignTag'),
+    pitchClockWinLabel: t('labelPitchClockWin'),
     mvpLabel: t('labelMatchMvp'),
   });
   wrap.appendChild(boxHost);
@@ -2505,6 +2550,7 @@ window.addEventListener('blur', () => {
 for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-mode]')) {
   btn.addEventListener('click', () => {
     const m = btn.dataset.mode as GameMode;
+    standbyPriorityMode = false;
     startMode(m);
   });
 }
@@ -2716,14 +2762,18 @@ function autoFallbackToCpu(title: string, detail: string, registerStandby = fals
   queueElapsedSec = 0;
   lobbyHub.hidden = false;
   queuePanel.hidden = true;
+  if (registerStandby) {
+    standbyOptedOut = false;
+    standbyPriorityMode = true;
+    standbyEntryNoticeShown = true;
+  } else {
+    standbyPriorityMode = false;
+  }
   if (onlineClient.connected) {
     onlineClient.unqueue();
-    if (registerStandby && !onlineClient.isServerBusy && !onlineClient.isUnstable) {
-      onlineClient.joinStandby(onlineModeChoice);
-    }
   }
   if (friendDialog.open) friendDialog.close();
-  startMode('quick3');
+  startMode('quick3', true);
   const loc = localizeServerCallout(locale, title, detail);
   emoteCtrl.showSystem(loc.title, loc.subtitle, '#f97316', 3600);
 }
@@ -2740,9 +2790,12 @@ btnOfferAccept.addEventListener('click', () => {
 btnOfferDecline.addEventListener('click', () => {
   if (!pendingMatchOffer) return;
   const id = pendingMatchOffer.offerId;
+  standbyOptedOut = true;
+  updateStandbyToggleBtn();
   hideMatchOfferToast();
   if (onlineClient.connected) {
     onlineClient.replyMatchOffer(id, false);
+    onlineClient.leaveStandby();
   }
 });
 
@@ -2773,6 +2826,10 @@ onlineClient.onNetUpdate((m) => {
 
 btnHubPlay.addEventListener('click', async () => {
   sfx.unlock();
+  // Actively clicking Online Match re-enables online standby invites for this session
+  standbyOptedOut = false;
+  standbyPriorityMode = true;
+  updateStandbyToggleBtn();
 
   // Pre-check server green-zone load & network stability before queuing
   if (onlineClient.connected && onlineClient.isServerBusy) {
@@ -3023,6 +3080,7 @@ function enterOnlineMatch(
   emoteCtrl.setOnlineSendEnabled(true);
   emoteCtrl.setVisible(true);
   btnMuteEmotes.hidden = false;
+  btnStandbyToggle.hidden = true;
   resetOnlineFreezeState();
   absPromptTimer = 0;
   absReplay = null;
@@ -3082,6 +3140,7 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   emoteCtrl.setOnlineSendEnabled(true);
   emoteCtrl.setVisible(true);
   btnMuteEmotes.hidden = false;
+  btnStandbyToggle.hidden = true;
   absPromptTimer = 0;
   absReplay = null;
   batterSwungThisPitch = false;
@@ -3339,6 +3398,7 @@ onlineClient.onMessage((msg) => {
         setServerUpdateCountdown(msg.updateAtMs);
       }
       syncClientActivity(true);
+      syncStandbyRegistration(true);
       break;
     }
     case 'stats': {
@@ -3529,6 +3589,7 @@ onlineClient.onMessage((msg) => {
       if (!match.endReason) {
         if (msg.reason === 'disconnect_timeout') match.endReason = 'disconnect';
         else if (msg.reason === 'resign') match.endReason = 'resign';
+        else if (msg.reason === 'pitch_clock_forfeit') match.endReason = 'pitch_clock';
       }
       visualHalf = match.half;
       onlineTurnState = 'game_over';
@@ -3556,7 +3617,7 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'match_offer': {
-      if (isOnline || onTitleScreen) {
+      if (isOnline || onTitleScreen || standbyOptedOut) {
         onlineClient.replyMatchOffer(msg.offerId, false);
         break;
       }
@@ -3575,7 +3636,10 @@ onlineClient.onMessage((msg) => {
       if (pendingMatchOffer && pendingMatchOffer.offerId === msg.offerId) {
         const wasVisible = pendingMatchOffer.visible;
         hideMatchOfferToast();
-        if (wasVisible && msg.reason === 'expired') {
+        if (msg.reason === 'timeout') {
+          standbyOptedOut = true;
+          updateStandbyToggleBtn();
+        } else if (wasVisible && msg.reason === 'expired') {
           emoteCtrl.showSystem(t('offerExpired'), t('offerExpiredSub'), '#94a3b8', 2600);
         }
       }
@@ -3687,6 +3751,11 @@ setEmoteSfx.addEventListener('change', () => {
 btnMuteEmotes.addEventListener('click', () => {
   emoteCtrl.mutedOpponent = !emoteCtrl.mutedOpponent;
   btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
+  updateStandbyToggleBtn();
+});
+btnStandbyToggle.addEventListener('click', () => {
+  standbyOptedOut = !standbyOptedOut;
+  syncStandbyRegistration(false);
 });
 
 // Dialog close & Safari closedby="any" fallback (modern-web-guidance 'dialog')
@@ -3738,12 +3807,12 @@ function step(now: number): void {
 
   resizeCanvases();
 
-  // Matchmaking 20s fallback timer (enters CPU + joins standby matchmaking queue)
+  // Matchmaking 40s fallback timer (enters CPU + joins priority standby matchmaking queue)
   if (onTitleScreen && onlineWaitingQueue) {
     queueElapsedSec += rawDt;
     const secs = Math.floor(queueElapsedSec);
     queueStatusText.textContent = `${t('queueFinding')} 0:${String(secs).padStart(2, '0')}...`;
-    if (queueElapsedSec >= 20) {
+    if (queueElapsedSec >= 40) {
       cancelQueueToCpu(true);
     }
   }
@@ -3773,8 +3842,10 @@ function step(now: number): void {
     } else {
       const remMs = pendingMatchOffer.expiresAtMs - Date.now();
       if (remMs <= 0) {
-        // Treat 20s timeout identically to declining: close modal, remove from standby queue & pass opponent to next player
+        // Treat 20s timeout identically to declining: close modal, opt out for session, remove from standby queue & pass opponent to next player
         const expiredId = pendingMatchOffer.offerId;
+        standbyOptedOut = true;
+        updateStandbyToggleBtn();
         hideMatchOfferToast();
         if (onlineClient.connected) {
           onlineClient.replyMatchOffer(expiredId, false);

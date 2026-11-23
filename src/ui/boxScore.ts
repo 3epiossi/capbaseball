@@ -14,6 +14,7 @@ export interface BoxScoreLabels {
   disconnectTag?: string;
   resignWinLabel?: string;
   resignTag?: string;
+  pitchClockWinLabel?: string;
   mvpLabel?: string;
 }
 
@@ -111,6 +112,8 @@ export function renderBoxScore(
     addPill(opts?.disconnectWinLabel || 'OPPONENT DISCONNECTED', '', true);
   } else if (match.endReason === 'resign') {
     addPill(opts?.resignWinLabel || 'OPPONENT FORFEITED', '', true);
+  } else if (match.endReason === 'pitch_clock') {
+    addPill(opts?.pitchClockWinLabel || 'OPPONENT PITCH CLOCK FORFEIT', '', true);
   } else if (match.mercyTriggered || match.endReason === 'mercy') {
     addPill(opts?.coldGameLabel || 'COLD GAME', lDiff10, true);
   }

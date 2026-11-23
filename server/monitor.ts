@@ -83,6 +83,7 @@ export interface ServerSnapshotInput {
   physicsWorkerCount?: number;
   roomsHealth?: RoomHealthSnapshot;
   activities?: Record<string, number>;
+  standbyCount?: number;
 }
 
 export class ServerMonitor {
@@ -501,6 +502,7 @@ export class ServerMonitor {
         acceptedTotal: this.connAcceptedTotal,
         closedTotal: this.connClosedTotal,
         activities: snap.activities ?? {},
+        standbyCount: snap.standbyCount ?? 0,
       },
       rejections: {
         ipLimit: this.rejectedIpLimit,

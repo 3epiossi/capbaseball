@@ -1740,6 +1740,12 @@ select {
   font-size: 0.82rem;
 }
 
+#btn-standby-toggle[aria-pressed='true'] {
+  border-color: var(--cyan-hi);
+  color: var(--cyan-hi);
+  background-color: rgba(56, 189, 248, 0.12);
+}
+
 .menu-online-timer {
   padding: 0.36rem 0.55rem;
   text-align: center;

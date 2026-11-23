@@ -132,7 +132,7 @@ export const DICT = {
     rule6Head: 'EXTRA INNINGS:',
     rule6Body: ' Tied after regulation → Extra innings start with bases loaded & 0 outs until a winner is decided!',
     rule7Head: 'PITCH CLOCK:',
-    rule7Body: ' 15s bases empty / 20s with runners on base (paused during calls & ABS). Violation = automatic ball.',
+    rule7Body: ' 15s bases empty / 20s with runners on base (paused during calls & ABS). Violation = automatic ball; 3 consecutive timeouts online = forfeit.',
     updateBannerText: 'SERVER UPDATED · REFRESH FOR LATEST VERSION',
     btnRefreshNow: 'REFRESH',
     callPitchClock: 'PITCH CLOCK',
@@ -252,6 +252,7 @@ export const DICT = {
     labelDisconnectTag: 'DISCONNECT',
     labelResignWin: 'OPPONENT FORFEITED',
     labelResignTag: 'FORFEIT',
+    labelPitchClockWin: 'OPPONENT PITCH CLOCK FORFEIT',
     roomTagLive: 'LIVE',
     roomTagFriend: 'FRIEND',
     watchOuts: 'OUT',
@@ -262,6 +263,10 @@ export const DICT = {
     offerExpired: 'INVITE EXPIRED',
     offerExpiredSub: 'OPPONENT MATCHED ELSEWHERE · CONTINUING CPU',
     standbyNoticeSub: 'STANDBY QUEUE ACTIVE · WILL INVITE WHEN OPPONENT JOINS',
+    standbyAutoTitle: 'ONLINE STANDBY ON',
+    standbyAutoSub: 'Will notify if an online opponent queues · Toggle anytime in Menu',
+    btnStandbyOn: 'ONLINE INVITES: ON',
+    btnStandbyOff: 'ONLINE INVITES: OFF',
     preUpdatePrefix: 'FORCED SERVER UPDATE IN',
     preUpdateSuffix: '· NEW ONLINE / FRIEND GAMES PAUSED',
     preUpdateNow: 'SERVER UPDATING NOW · PLEASE REFRESH SHORTLY',
@@ -428,7 +433,7 @@ export const DICT = {
     rule6Head: '延長賽制：',
     rule6Body: ' 正規局數平手即進入延長突破僵局，每半局滿壘無人出局開局，直到分出勝負！',
     rule7Head: '投球時鐘：',
-    rule7Body: ' 壘上無人 15 秒／有跑者 20 秒（判定與 ABS 顯示期間暫停計時），超時自動判壞球。',
+    rule7Body: ' 壘上無人 15 秒／有跑者 20 秒（判定與 ABS 顯示期間暫停計時），超時自動判壞球；線上連續 3 次超時直接裁定敗北。',
     updateBannerText: '伺服器已更新 · 請刷新網頁取得最新版',
     btnRefreshNow: '立即刷新',
     callPitchClock: '投球逾時',
@@ -548,6 +553,7 @@ export const DICT = {
     labelDisconnectTag: '對手斷線',
     labelResignWin: '對手棄權獲勝',
     labelResignTag: '對手棄權',
+    labelPitchClockWin: '對手超時未投裁定獲勝',
     roomTagLive: 'LIVE',
     roomTagFriend: 'FRIEND',
     watchOuts: '出局',
@@ -558,6 +564,10 @@ export const DICT = {
     offerExpired: '邀約已失效',
     offerExpiredSub: '對方已配對其他玩家，繼續 CPU 對戰',
     standbyNoticeSub: '保留線上候補，有真人排隊將跳出邀約',
+    standbyAutoTitle: '已開啟線上對戰候補',
+    standbyAutoSub: '有真人配對時將通知你，可於選單開關',
+    btnStandbyOn: '接收線上邀約：開',
+    btnStandbyOff: '接收線上邀約：關',
     preUpdatePrefix: '伺服器將於',
     preUpdateSuffix: '後強制更新 · 暫停開新局（進行中對局可打完）',
     preUpdateNow: '伺服器正在更新重啟 · 請稍候重新整理',
@@ -724,7 +734,7 @@ export const DICT = {
     rule6Head: '延長戦：',
     rule6Body: ' 規定回同点なら延長タイブレークへ突入！毎回無死満塁から決着がつくまで続行します。',
     rule7Head: 'ピッチクロック：',
-    rule7Body: ' 走者なし15秒／走者あり20秒（判定・ABS表示中は停止）。違反は自動ボール。',
+    rule7Body: ' 走者なし15秒／走者あり20秒（判定・ABS表示中は停止）。違反は自動ボール、オンラインで3連続違反は反則負け。',
     updateBannerText: 'サーバーが更新されました · ページを再読み込みしてください',
     btnRefreshNow: '再読み込み',
     callPitchClock: 'ピッチクロック違反',
@@ -844,6 +854,7 @@ export const DICT = {
     labelDisconnectTag: '相手切断',
     labelResignWin: '相手棄権により勝利',
     labelResignTag: '棄権勝',
+    labelPitchClockWin: '相手ピッチクロック反則により勝利',
     roomTagLive: 'LIVE',
     roomTagFriend: 'FRIEND',
     watchOuts: 'OUT',
@@ -854,6 +865,10 @@ export const DICT = {
     offerExpired: '招待期限切れ',
     offerExpiredSub: '相手が別マッチへ移動しました（CPU戦続行）',
     standbyNoticeSub: 'CPU戦中もオンライン待機中（相手が見つかると通知）',
+    standbyAutoTitle: 'オンライン対戦候補 ON',
+    standbyAutoSub: '対戦相手が見つかると通知（メニューで切替可）',
+    btnStandbyOn: 'オンライン招待：ON',
+    btnStandbyOff: 'オンライン招待：OFF',
     preUpdatePrefix: 'サーバー強制更新まで',
     preUpdateSuffix: ' · 新規対戦（フレンド含む）一時停止',
     preUpdateNow: 'サーバーを更新再起動中です · まもなく再読み込みしてください',
@@ -1101,7 +1116,9 @@ export function localizeServerCallout(
         .replace(/\bWEAK\b/g, t('gradeWeak'))
         .replace(/\bOVER WALL\b/g, t('callOverWall'))
         .replace(/\bOFF WALL · 3B\b/g, t('callWall3b'))
-        .replace(/\bOFF WALL · 2B\b/g, t('callWall2b'));
+        .replace(/\bOFF WALL · 2B\b/g, t('callWall2b'))
+        .replace(/\bAUTO BALL\b/g, t('callAutoBall'))
+        .replace(/WALK \(BB\)/g, t('callAutoWalk'));
     }
   }
 
