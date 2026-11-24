@@ -41,7 +41,7 @@
 ### 2. 雙路徑服務、記憶體快取與流量監控端點
 
 - **根目錄與子路徑相容**：HTTP 伺服器同時支援 `/` 與 `/capbaseball/`；收到無結尾斜線的 `/capbaseball` GET／HEAD 請求時，自動回傳 `301` 導向 `/capbaseball/`；`/monitor/` 與 `/pitch-lab/` 亦各自 `301` 導向對應乾淨路徑（`/capbaseball/monitor` 與 `/capbaseball/pitch-lab`，後者直接回傳記憶體快取中的 `pitch-lab.html`）。
-- **記憶體靜態快取（Zero Disk I/O）**：伺服器啟動時將 `dist/` 與預壓縮 `.gz` 一次載入 `staticCache` `Map` 並計算 SHA-1 `ETag`；靜態資源全面從 RAM 回應並支援 `If-None-Match` → `304 Not Modified`，免除高併發下每請求多次同步 `fs.statSync` 與開檔串流的磁碟瓶頸。
+- **記憶體靜態快取（Zero Disk I/O）**：伺服器啟動時將 `dist/` 與預壓縮 `.gz` 一次載入 `staticCache` `Map` 並計算 SHA-1 `ETag`；靜態資源全面從 RAM 回應並支援 `If-None-Match` → `304 Not Modified`，免除高併發下每請求多次同步 `fs.statSync` 與開檔串流的磁碟瓶頸；其中 `/sw.js`、`/version.json`、`/index.html`、`/pitch-lab.html` 與 `/manifest.webmanifest` 採 `Cache-Control: no-store, no-cache, must-revalidate` 防止 Cloudflare 邊緣快取舊版 Service Worker。
 - **即時監控端點（`/monitor` 與 `/metrics`）**：
   - `GET /capbaseball/monitor`（與 `/capbaseball/monitor.js`）：免登入外部 JS 儀表板（完全相容 `script-src 'self'` CSP，採 `Cache-Control: no-store` 與 `monitor.js?v=<build>` 破快取避免 Cloudflare 覆寫 4 小時快取），即時顯示 **10 種玩家所在真實頁面分布**（`online_live`、`online_friend`、`online_queue`、`friend_wait`、`spectating`、`cpu_match`、`practice_bat`、`practice_pitch`、`pitch_lab`、`title`，加總恆等於 `activeClients`，含 `/pitch-lab` 輕量連線回報與嚴格白名單驗證）與獨立的 **`線上候補名單` 人數徽章（`connections.standbyCount`）**、每秒 HTTP/WS 吞吐與封包類型、拒收計數、**對戰異常與同步健康指標**（卡死未活動 >45 秒房間數、投球時鐘違規、揮棒逾時未回傳、錯序／過期封包、超界輸入裁切、物理 `NaN` 檢查、斷線重連成功率、高局數／大比分房）與 Raspberry Pi CPU 溫度／降頻（`vcgencmd get_throttled`）。
   - `GET /capbaseball/metrics`：完整 JSON 遙測輸出（含 `connections.activities` 10 桶真實頁面統計與 `connections.standbyCount`，不含玩家暱稱、房號或完整 IP 等 PII）。若設定環境變數 `MONITOR_TOKEN`，需透過 `?token=`、`x-monitor-token` 或 `Authorization: Bearer` 驗證；另可設定 `METRICS_LOG` 每 60 秒寫入一筆歷史摘要至 JSONL。

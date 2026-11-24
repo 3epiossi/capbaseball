@@ -449,6 +449,8 @@ export class OnlineClient {
       this.rttWindow = [];
       this.missedPings = 0;
       this.netQuality = 'offline';
+    } else if (this.netQuality === 'offline') {
+      this.netQuality = 'good';
     }
     for (const cb of this.statusListeners) cb(val);
     this.emitNet();

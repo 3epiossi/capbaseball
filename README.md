@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.5.1`（語意化三段式版本號）
+- **目前里程碑**：`v2.5.2`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 57 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 58 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -274,3 +274,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **前端主動清除半開死連線＋對戰中閃斷無縫自動重連**：[src/net/client.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/client.ts) 連續漏掉 `2` 次 ping 即主動關閉死 socket 觸發重連，並新增 `probeAlive(2500)` 於 `visibilitychange`／`pageshow`／`online` 時 2.5 秒探活重建；[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 在人已處於對戰畫面中閃斷時直接靜默 `reconnect()` 接回（僅主畫面重開時彈確認框），`online` 事件同步歸零退避並立即重試。
   - **修復觀戰／賽後回主畫面顯示「離線模式」**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 的 `returnToTitle()` 退出觀戰僅送 `unwatchRoom()` 不再中斷 WS；線上對戰離開清席位後立即靜默重建 WS 連線維持頂部「在線 N」狀態。
   - **修復 `/analytics` 場均得分／投球數／完賽數顯示 `0`**：[server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 相容 `matches.jsonl` 的 `awayRuns`／`homeRuns`／`innings`／`pitches` 與 `completed` 欄位（測試擴充至 **57/57** 全部通過）。
+- **v2.5.2 消除線上假斷線負、觀戰斷線自動重連、`sw.js` 防快取與兩隊獨立左右打（2026-11-24）**：
+  - **線上對戰 `☰` 選單隱藏「回主畫面」**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 在線上對戰進行中（`isOnline && !spectating && !onTitleScreen && !match.isGameOver`）隱藏 `#btn-menu-title`，僅保留「返回比賽」與「認輸棄賽」（`#btn-resign`），消除誤按回主畫面造成假 `disconnect_timeout` 與對手空等 30 秒。
+  - **觀戰／大廳自動重連＋`sw.js` 阻擋 Cloudflare 4 小時快取**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 的 `resumeSession()` 改支援觀戰斷線自動重連並補送 `watchRoom(onlineRoomCode)`（若該局已結束則退回主畫面維持在線），大廳／單人模式斷線亦自動靜默重連；[src/net/client.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/client.ts) 於 `setConnected(true)` 預設 `netQuality = 'good'` 避免灰點殘留；[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 對 `/sw.js`、`/version.json`、`/index.html`、`/pitch-lab.html` 與 `/manifest.webmanifest` 強制回傳 `Cache-Control: no-store, no-cache, must-revalidate`。
+  - **兩隊獨立左右打設定**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 將單一 `room.batterSide` 改為 `batterSides: { away, home }` 並在換局（含 ABS 改判第 3 出局換局）與 `pitch_launch` 切換為當半局進攻方設定；[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 拆出己方設定 `myBatterHandedness`，防止對手切換左右打覆寫我方按鈕與下個半局打席（新增 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 第 34 項整合測試，全部 **58/58** 通過）。

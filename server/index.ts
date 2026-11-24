@@ -151,7 +151,7 @@ interface Room {
   pitchSeq: number;
   solvingSeq: number | null;
   turnState: TurnState;
-  batterSide: 'R' | 'L';
+  batterSides: { away: 'R' | 'L'; home: 'R' | 'L' };
   activePitch: ActivePitchData | null;
   swingTimer: NodeJS.Timeout | null;
   pitchClockTimer: NodeJS.Timeout | null;
@@ -421,7 +421,15 @@ export function startServer(
         const sha = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12);
         staticCache.set(rel, {
           contentType: MIME_TYPES[ext] || 'application/octet-stream',
-          cacheControl: rel.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+          cacheControl: rel.startsWith('/assets/')
+            ? 'public, max-age=31536000, immutable'
+            : rel === '/sw.js' ||
+                rel === '/version.json' ||
+                rel === '/index.html' ||
+                rel === '/pitch-lab.html' ||
+                rel === '/manifest.webmanifest'
+              ? 'no-store, no-cache, must-revalidate'
+              : 'no-cache',
           etag: `"${raw.length}-${sha}"`,
           raw,
           gz,
@@ -1132,6 +1140,10 @@ export function startServer(
     }
   }
 
+  function getCurrentBatterSide(room: Room): 'R' | 'L' {
+    return room.batterSides[getBattingSide(room.match)];
+  }
+
   function sendStateSync(room: Room, side: Side) {
     const player = room.players[side];
     if (!player?.ws) return;
@@ -1144,7 +1156,7 @@ export function startServer(
       side,
       pitchSeq: room.pitchSeq,
       turnState: room.turnState,
-      batterSide: room.batterSide,
+      batterSide: getCurrentBatterSide(room),
       match: room.match,
       names: {
         home: room.players.home.name,
@@ -1393,20 +1405,23 @@ export function startServer(
     room.turnState = room.match.isGameOver ? 'game_over' : 'awaiting_pitch';
     room.activePitch = null;
 
-    sendToRoom(room, {
-      type: 'pitch_result',
-      pitchSeq: solvedSeq,
-      nextPitchSeq: room.pitchSeq,
-      swung,
-      swingData,
-      resolution: missResolution,
-      outcome: outcomeStr,
-      callout,
-      inningChanged,
-      telemetry,
-      platePos: [plateField[0], plateField[1]],
-      match: room.match,
-    });
+      sendToRoom(room, {
+        type: 'pitch_result',
+        pitchSeq: solvedSeq,
+        nextPitchSeq: room.pitchSeq,
+        swung,
+        swingData,
+        resolution: missResolution,
+        outcome: outcomeStr,
+        callout,
+        inningChanged,
+        telemetry,
+        platePos: [plateField[0], plateField[1]],
+        match: room.match,
+      });
+      if (inningChanged && !room.match.isGameOver) {
+        sendToRoom(room, { type: 'batter_side', side: getCurrentBatterSide(room) });
+      }
 
     if (room.match.isGameOver) {
       room.absWindowUntil = 0;
@@ -1669,6 +1684,9 @@ export function startServer(
       platePos: [plateField[0], plateField[1]],
       match: room.match,
     });
+    if (inningChanged && !room.match.isGameOver) {
+      sendToRoom(room, { type: 'batter_side', side: getCurrentBatterSide(room) });
+    }
 
     room.absWindowUntil = 0;
     if (room.match.isGameOver) {
@@ -1704,7 +1722,7 @@ export function startServer(
         token: p.token,
         pitchSeq: room.pitchSeq,
         turnState: room.turnState,
-        batterSide: room.batterSide,
+        batterSide: getCurrentBatterSide(room),
         match: room.match,
         names,
         spectators: room.spectators.size,
@@ -1736,7 +1754,7 @@ export function startServer(
       pitchSeq: 1,
       solvingSeq: null,
       turnState: 'awaiting_pitch',
-      batterSide: 'L',
+      batterSides: { away: 'L', home: 'L' },
       activePitch: null,
       swingTimer: null,
       pitchClockTimer: null,
@@ -2425,7 +2443,7 @@ export function startServer(
             pitchSeq: 1,
             solvingSeq: null,
             turnState: 'awaiting_pitch',
-            batterSide: 'L',
+            batterSides: { away: 'L', home: 'L' },
             activePitch: null,
             swingTimer: null,
             pitchClockTimer: null,
@@ -2766,11 +2784,12 @@ export function startServer(
         case 'set_batter_side': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_pitch') return;
-          if (client.side !== getBattingSide(room.match)) return;
+          if (!room || room.turnState === 'game_over') return;
           const sideVal = msg.side === 'L' || msg.side === 'left' ? 'L' : 'R';
-          room.batterSide = sideVal;
-          sendToRoom(room, { type: 'batter_side', side: sideVal });
+          room.batterSides[client.side] = sideVal;
+          if (client.side === getBattingSide(room.match)) {
+            sendToRoom(room, { type: 'batter_side', side: sideVal });
+          }
           break;
         }
 
@@ -2951,7 +2970,7 @@ export function startServer(
                 targetY,
                 errorX,
                 errorY,
-                batterSide: room.batterSide,
+                batterSide: getCurrentBatterSide(room),
                 breakCm,
               });
             })
@@ -2991,7 +3010,7 @@ export function startServer(
           room.lastActivityAt = Date.now();
           const swingMode: SwingMode = msg.swingMode === 'power' ? 'power' : 'normal';
           const batterSide: 'R' | 'L' = msg.batterSide === 'L' || msg.batterSide === 'left' ? 'L' : 'R';
-          room.batterSide = batterSide;
+          room.batterSides[getBattingSide(room.match)] = batterSide;
 
           void finalizeSwing(room, true, {
             flightTimeSec,
@@ -3072,7 +3091,7 @@ export function startServer(
             match: room.match,
             pitchSeq: room.pitchSeq,
             turnState: room.turnState,
-            batterSide: room.batterSide,
+            batterSide: getCurrentBatterSide(room),
             activePitch: room.activePitch
               ? {
                   pitchSeq: room.activePitch.pitchSeq,
@@ -3121,6 +3140,7 @@ export function startServer(
             monitor.staleOrOutOfTurnIgnored += 1;
             return;
           }
+          const prevAbsHalf = room.match.half;
           const res = applyAbsChallenge(room.match, client.side);
           if (!res.ok) return;
           monitor.absChallengesTotal += 1;
@@ -3155,6 +3175,9 @@ export function startServer(
             match: room.match,
             pitchSeq: room.pitchSeq,
           });
+          if (room.match.half !== prevAbsHalf && !room.match.isGameOver) {
+            sendToRoom(room, { type: 'batter_side', side: getCurrentBatterSide(room) });
+          }
           if (room.match.isGameOver) {
             clearPitchClock(room);
             clearRoomPauses(room);

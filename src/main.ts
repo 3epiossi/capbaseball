@@ -609,7 +609,8 @@ function applyLocaleToDom(): void {
     const key = el.dataset.i18nPlaceholder as DictKey | undefined;
     if (key) el.placeholder = t(key);
   }
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
+  const visibleHand = isOnline && !spectating ? myBatterHandedness : batterHandedness;
+  btnHand.textContent = visibleHand === 'right' ? t('btnRhb') : t('btnLhb');
   btnSwingType.textContent = powerSwing ? t('btnPower') : t('btnNormal');
   btnSound.textContent = sfx.isMuted() ? t('btnMute') : t('btnSfx');
   btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
@@ -622,7 +623,6 @@ function applyLocaleToDom(): void {
   if (phase === 'idle') {
     btnThrow.textContent = isPlayCallActive() ? t('btnWait') : t('btnHoldToPitch');
   }
-  topOnlineText.textContent = `${t('livePrefix')} ${lastOnlineCount}`;
   transitionDirector.setLabels({
     playBall: t('transPlayBall'),
     changeSides: t('transChangeSides'),
@@ -830,6 +830,7 @@ let lastPreviewPitchId: PitchId | null = null;
 
 let batCursor = { x: 0, y: 0.72 };
 let batterHandedness: 'left' | 'right' = 'left';
+let myBatterHandedness: 'left' | 'right' = 'left';
 let powerSwing = false;
 
 type SpringZone = 'SOFT' | 'BEST' | 'OVER';
@@ -1506,6 +1507,10 @@ function updateHudAndDocks(): void {
   }
 
   const role = getCurrentRole();
+  if (isOnline && !spectating && !onTitleScreen && role === 'batter') {
+    batterHandedness = myBatterHandedness;
+    btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
+  }
   const canPitchUi =
     !onTitleScreen &&
     !spectating &&
@@ -1534,9 +1539,10 @@ function updateHudAndDocks(): void {
     }
   }
   btnIbb.disabled = !canIntentionalWalk(match) || phase !== 'idle' || playCallBlocking;
-  btnResign.hidden = !isOnline || spectating || onTitleScreen || match.isGameOver;
+  const inActiveOnlineMatch = isOnline && !spectating && !onTitleScreen && !match.isGameOver;
+  btnResign.hidden = !inActiveOnlineMatch;
   btnMenuBack.hidden = onTitleScreen;
-  btnMenuTitle.hidden = onTitleScreen;
+  btnMenuTitle.hidden = onTitleScreen || inActiveOnlineMatch;
   btnMenu.hidden = false;
   btnAbsChallenge.hidden = !isAbsChallengeAvailable();
   updateSafeCameraFraming(false);
@@ -2860,11 +2866,18 @@ btnIbb.addEventListener('click', () => {
 });
 
 btnHand.addEventListener('click', () => {
-  batterHandedness = batterHandedness === 'right' ? 'left' : 'right';
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
-  if (isOnline && getCurrentRole() === 'batter') {
-    onlineClient.setBatterSide(batterHandedness === 'right' ? 'R' : 'L');
+  if (isOnline && !spectating) {
+    myBatterHandedness = myBatterHandedness === 'right' ? 'left' : 'right';
+    if (getCurrentRole() === 'batter') {
+      batterHandedness = myBatterHandedness;
+    }
+    btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
+    onlineClient.setBatterSide(myBatterHandedness === 'right' ? 'R' : 'L');
+    return;
   }
+  batterHandedness = batterHandedness === 'right' ? 'left' : 'right';
+  myBatterHandedness = batterHandedness;
+  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 });
 
 btnSwingType.addEventListener('click', () => {
@@ -2903,6 +2916,9 @@ btnMenuBack.addEventListener('click', () => {
 });
 btnMenuTitle.addEventListener('click', () => {
   if (menuDialog.open) menuDialog.close();
+  if (isOnline && !spectating && !onTitleScreen && !match.isGameOver) {
+    return;
+  }
   returnToTitle();
 });
 btnResign.addEventListener('click', () => {
@@ -3332,7 +3348,12 @@ function enterOnlineMatch(
   visualInning = match.inning;
   visualHalf = match.half;
   batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
+  if (msg.type === 'match_start') {
+    myBatterHandedness = 'left';
+  } else if (onlineSide && onlineSide !== (visualHalf === 'top' ? 'home' : 'away')) {
+    myBatterHandedness = batterHandedness;
+  }
+  btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
   onTitleScreen = false;
   titleScreen.hidden = true;
@@ -3737,8 +3758,10 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'batter_side': {
-      batterHandedness = msg.side === 'L' ? 'left' : 'right';
-      btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
+      // Only updates on-field batter stance for pitcher/spectator; never overwrites our own batting preference
+      if (spectating || getCurrentRole() !== 'batter') {
+        batterHandedness = msg.side === 'L' ? 'left' : 'right';
+      }
       break;
     }
     case 'pitch_launch': {
@@ -3753,8 +3776,12 @@ onlineClient.onMessage((msg) => {
         visualHalf = match.half;
         updateHudAndDocks();
       }
-      batterHandedness = p.batterSide === 'L' ? 'left' : 'right';
-      btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
+      if (spectating || getCurrentRole() !== 'batter') {
+        batterHandedness = p.batterSide === 'L' ? 'left' : 'right';
+      } else {
+        batterHandedness = myBatterHandedness;
+        btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
+      }
       launchPitch(p.pitchId, p.speedKmh, p.targetX, p.targetY, p.errorX, p.errorY, p.seed);
       break;
     }
@@ -3993,6 +4020,8 @@ onlineClient.onMessage((msg) => {
         updateHudAndDocks();
       } else if (msg.code === 'reconnect_failed') {
         saveSession(null);
+      } else if (msg.code === 'room_not_found' && spectating && !onTitleScreen) {
+        returnToTitle();
       } else if (msg.code === 'opponent_left') {
         emoteCtrl.showSystem(t('callOpponentLeft'), msg.message.toUpperCase(), '#f97316', 2800);
         saveSession(null);
@@ -5173,20 +5202,23 @@ function clearResumeTimer(): void {
 }
 
 function resumeSession(): void {
-  const session = loadSession();
-  if (!session) {
-    clearResumeTimer();
-    resumeAttempt = 0;
-    return;
-  }
   if (document.visibilityState !== 'visible') return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  const session = loadSession();
+  const isActiveSpectate = spectating && Boolean(onlineRoomCode) && !onTitleScreen;
   if (resumeInFlight) return;
+
   if (onlineClient.connected) {
     // If already on the active match screen with a live socket, probeAlive() handles zombie detection;
     // only run checkSession() when on the title screen (or returning from an offline state).
-    if (onTitleScreen && !reconnectDialog.open) {
+    if (session && onTitleScreen && !reconnectDialog.open) {
       onlineClient.checkSession(session.code, session.token);
     }
+    return;
+  }
+
+  // Stop background idle retries after 4 failed attempts if neither in a match nor spectating
+  if (!session && !isActiveSpectate && resumeAttempt >= 4) {
     return;
   }
 
@@ -5198,12 +5230,13 @@ function resumeSession(): void {
       const latest = loadSession();
       if (latest) {
         onlineClient.checkSession(latest.code, latest.token);
+      } else if (spectating && onlineRoomCode && !onTitleScreen) {
+        onlineClient.watchRoom(onlineRoomCode);
       }
       resumeAttempt = 0;
     })
     .catch(() => {
-      if (!loadSession()) {
-        resumeAttempt = 0;
+      if (!loadSession() && !(spectating && onlineRoomCode) && resumeAttempt >= 3) {
         return;
       }
       const delayMs = Math.min(5000, 1000 * 2 ** resumeAttempt);
@@ -5234,6 +5267,7 @@ onlineClient.onStatus((connected) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    resumeAttempt = 0;
     if (onlineClient.connected) {
       onlineClient.probeAlive(2500);
     }
@@ -5244,6 +5278,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pageshow', (e) => {
   if (e.persisted) {
+    resumeAttempt = 0;
     if (onlineClient.connected) {
       onlineClient.probeAlive(2500);
     }

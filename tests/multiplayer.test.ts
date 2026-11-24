@@ -1818,4 +1818,93 @@ describe('Online Multiplayer Server Integration', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('34. Away and Home teams maintain independent batter handedness across half-innings', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capbb-hand-'));
+    const hSrv = await startServer(0, {
+      matchLogPath: path.join(tmpDir, 'matches.jsonl'),
+      pitchLogPath: path.join(tmpDir, 'pitches.jsonl'),
+      randomizeFriendSides: false,
+      pitchClockScale: 0,
+      absWindowMs: 0,
+    });
+    const home = await connectClient(hSrv.port, 'HomeH');
+    const away = await connectClient(hSrv.port, 'AwayH');
+    try {
+      home.send({ type: 'create', mode: 'quick3', name: 'HomeH' });
+      const created = await home.nextMsg((m) => m.type === 'room_created');
+      away.send({ type: 'join', code: String(created.code), name: 'AwayH' });
+      await away.nextMsg((m) => m.type === 'room_joined');
+      await Promise.all([
+        home.nextMsg((m) => m.type === 'match_start'),
+        away.nextMsg((m) => m.type === 'match_start'),
+      ]);
+
+      // Top of 1st (away batting): away switches to Right-handed ('R')
+      away.send({ type: 'set_batter_side', side: 'R' });
+      const [bsHome, bsAway] = await Promise.all([
+        home.nextMsg((m) => m.type === 'batter_side'),
+        away.nextMsg((m) => m.type === 'batter_side'),
+      ]);
+      expect(bsHome.side).toBe('R');
+      expect(bsAway.side).toBe('R');
+
+      // Home pitches 9 straight strikes (3 strikeouts) -> inning switches to bottom of 1st (home batting)
+      let seq = 1;
+      for (let k = 0; k < 3; k++) {
+        for (let s = 0; s < 3; s++) {
+          home.send({
+            type: 'pitch_submit',
+            pitchSeq: seq,
+            pitchId: 'straight',
+            speedKmh: 70,
+            targetX: 0,
+            targetY: 0.72,
+            errorX: 0,
+            errorY: 0,
+          });
+          const [lh] = await Promise.all([
+            home.nextMsg((m) => m.type === 'pitch_launch'),
+            away.nextMsg((m) => m.type === 'pitch_launch'),
+          ]);
+          expect(lh.batterSide).toBe('R');
+          away.send({ type: 'no_swing', pitchSeq: seq });
+          await Promise.all([
+            home.nextMsg((m) => m.type === 'pitch_result'),
+            away.nextMsg((m) => m.type === 'pitch_result'),
+          ]);
+          seq += 1;
+        }
+      }
+
+      // Bottom of 1st: server switches room active batterSide back to Home's saved stance ('L')!
+      const [swapHome, swapAway] = await Promise.all([
+        home.nextMsg((m) => m.type === 'batter_side'),
+        away.nextMsg((m) => m.type === 'batter_side'),
+      ]);
+      expect(swapHome.side).toBe('L');
+      expect(swapAway.side).toBe('L');
+
+      // Away pitches in bottom of 1st -> pitch_launch must carry Home's 'L', NOT Away's 'R'!
+      away.send({
+        type: 'pitch_submit',
+        pitchSeq: seq,
+        pitchId: 'straight',
+        speedKmh: 72,
+        targetX: 0,
+        targetY: 0.72,
+        errorX: 0,
+        errorY: 0,
+      });
+      const [botLaunch] = await Promise.all([
+        away.nextMsg((m) => m.type === 'pitch_launch'),
+        home.nextMsg((m) => m.type === 'pitch_launch'),
+      ]);
+      expect(botLaunch.batterSide).toBe('L');
+    } finally {
+      await Promise.all([home.close(), away.close()]);
+      await hSrv.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
