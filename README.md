@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.5.0`（語意化三段式版本號）
+- **目前里程碑**：`v2.5.1`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 56 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 57 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -267,3 +267,10 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **五球種單排等寬按鈕**：[index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html) 與 [src/styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) 移除菱形改為單排 5 等寬（`直球 / 卡特 / 指叉 / 變速 / 蝴蝶`，支援鍵盤 `1`–`5`）。
   - **強化暴投（`WILD PITCH`）／捕逸（`PASSED BALL`）／不死三振**：[src/ai/cpu.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ai/cpu.ts) 新增 `evaluateCatcherCatch` 區分好球帶內蝴蝶球尾流／`>= 72 km/h` 速球／急墜指叉低球漏接（捕逸）與大偏離／提前落地 `< 0.14m`（暴投），同步接入 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts)、[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 與三語翻譯（測試擴充至 **56/56** 全部通過）。
   - **`/pitch-lab` 全參數解放與分析頁擴充**：[pitch-lab.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/pitch-lab.html) 與 [src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 放寬球速（`20–120 km/h`）、轉速（`0–6000 rpm`）、傾角（`±180°`）、仰角／偏航（`±90°`）與釋球點範圍，改用捕手視角箭頭圖示並新增 `蝴蝶` 範本；[server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 補上 `蝴蝶 (KNU)` 統計列。
+- **v2.5.1 修復手機半開殭屍連線誤殺重連紀錄、觀戰結束顯示離線模式與 `/analytics` 欄位對齊（2026-11-24）**：
+  - **修復 `session_check` 誤判殭屍半開連線仍在線（導致手機閃斷重載跳不出「回到比賽」框並遭判斷線負）**：
+    - **根因**：手機切換 Wi-Fi/5G 或重載網頁時，經過 Cloudflare Tunnel 的舊 TCP 連線在伺服器 `deadSocketTimeoutMs`（36 秒）到期前仍處於 `OPEN`，新分頁送出 `session_check` 時伺服器誤回 `{ active: false }`，導致前端立刻 `saveSession(null)` 清空本地憑證。
+    - **解法**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 於 `session_check` 主動對舊連線發送 RFC 6455 `ws.ping()` 探測（預設 `700ms`）：活著的第二分頁秒回 `pong` 時回傳 `{ active: false, alreadyActive: true }`（不搶線亦不刪前端憑證）；未回應的殭屍連線則立刻 `terminate()` 並回 `{ active: true, ... }` 讓玩家奪回座位；同步將 `graceMs` 放寬為 `30s`（並於 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 新增第 33 項整合測試）。
+  - **前端主動清除半開死連線＋對戰中閃斷無縫自動重連**：[src/net/client.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/client.ts) 連續漏掉 `2` 次 ping 即主動關閉死 socket 觸發重連，並新增 `probeAlive(2500)` 於 `visibilitychange`／`pageshow`／`online` 時 2.5 秒探活重建；[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 在人已處於對戰畫面中閃斷時直接靜默 `reconnect()` 接回（僅主畫面重開時彈確認框），`online` 事件同步歸零退避並立即重試。
+  - **修復觀戰／賽後回主畫面顯示「離線模式」**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 的 `returnToTitle()` 退出觀戰僅送 `unwatchRoom()` 不再中斷 WS；線上對戰離開清席位後立即靜默重建 WS 連線維持頂部「在線 N」狀態。
+  - **修復 `/analytics` 場均得分／投球數／完賽數顯示 `0`**：[server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 相容 `matches.jsonl` 的 `awayRuns`／`homeRuns`／`innings`／`pitches` 與 `completed` 欄位（測試擴充至 **57/57** 全部通過）。

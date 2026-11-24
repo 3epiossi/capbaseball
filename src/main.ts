@@ -1663,10 +1663,12 @@ function returnToTitle(): void {
   if (onlineClient.connected) {
     onlineClient.leaveStandby();
   }
-  if (spectating) {
+  const wasSpectating = spectating;
+  const wasOnlineMatch = isOnline && !spectating;
+  if (wasSpectating) {
     onlineClient.unwatchRoom();
   }
-  if (isOnline) {
+  if (wasOnlineMatch) {
     onlineClient.disconnect();
   }
   isOnline = false;
@@ -1701,7 +1703,17 @@ function returnToTitle(): void {
   cam.resetImmediate();
   updateHudAndDocks();
   updateSafeCameraFraming(true);
-  syncClientActivity();
+  if (wasOnlineMatch) {
+    // Re-establish silent title-screen WS connection so the online counter stays live instead of showing "Offline"
+    void onlineClient
+      .connect(getOnlinePlayerName())
+      .then(() => {
+        syncClientActivity();
+      })
+      .catch(() => {});
+  } else {
+    syncClientActivity();
+  }
 }
 
 function launchPitch(
@@ -3933,8 +3945,9 @@ onlineClient.onMessage((msg) => {
     case 'session_status': {
       if (!msg.active) {
         closeReconnectPrompt();
-        // Only clear saved session if we aren't actively connected to this match in the current tab
-        if (!isOnline || onTitleScreen) {
+        // Never wipe saved session if another live tab owns the seat (`alreadyActive`),
+        // or while actively connected to this match in the current tab
+        if (!msg.alreadyActive && (!isOnline || onTitleScreen)) {
           saveSession(null);
         }
         break;
@@ -3944,8 +3957,9 @@ onlineClient.onMessage((msg) => {
         closeReconnectPrompt();
         break;
       }
-      if (msg.waiting) {
-        // Waiting friend room before game start: silently resume hosting the room code
+      if (msg.waiting || (isOnline && !spectating && !onTitleScreen)) {
+        // Waiting friend room OR player already on the live match screen after a brief network blip:
+        // silently auto-reconnect without interrupting with a modal confirmation dialog
         closeReconnectPrompt();
         onlineClient.reconnect(sess.code, sess.token);
         break;
@@ -5168,7 +5182,9 @@ function resumeSession(): void {
   if (document.visibilityState !== 'visible') return;
   if (resumeInFlight) return;
   if (onlineClient.connected) {
-    if (!reconnectDialog.open) {
+    // If already on the active match screen with a live socket, probeAlive() handles zombie detection;
+    // only run checkSession() when on the title screen (or returning from an offline state).
+    if (onTitleScreen && !reconnectDialog.open) {
       onlineClient.checkSession(session.code, session.token);
     }
     return;
@@ -5218,6 +5234,9 @@ onlineClient.onStatus((connected) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    if (onlineClient.connected) {
+      onlineClient.probeAlive(2500);
+    }
     resumeSession();
     void pollHealthVersion();
   }
@@ -5225,6 +5244,9 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pageshow', (e) => {
   if (e.persisted) {
+    if (onlineClient.connected) {
+      onlineClient.probeAlive(2500);
+    }
     resumeSession();
   }
   void pollHealthVersion();
@@ -5235,6 +5257,12 @@ window.addEventListener('focus', () => {
 });
 
 window.addEventListener('online', () => {
+  clearResumeTimer();
+  resumeAttempt = 0;
+  if (onlineClient.connected) {
+    onlineClient.probeAlive(2500);
+  }
+  resumeSession();
   void pollHealthVersion();
 });
 

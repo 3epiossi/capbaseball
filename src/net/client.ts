@@ -211,6 +211,7 @@ export type ServerMessage =
   | {
       type: 'session_status';
       active: boolean;
+      alreadyActive?: boolean;
       code: string;
       roomKind: RoomKind;
       opponentName: string;
@@ -370,6 +371,43 @@ export class OnlineClient {
     this.recomputeNetQuality();
   }
 
+  private lastMessageAt = 0;
+  private aliveProbeTimer: number | null = null;
+
+  private forceDropZombieSocket(ws: WebSocket): void {
+    if (this.ws !== ws) return;
+    this.ws = null;
+    this.connectPromise = null;
+    try {
+      ws.close();
+    } catch {
+      // ignore
+    }
+    this.setConnected(false);
+  }
+
+  /**
+   * Actively probe a possibly half-open TCP socket (e.g. after mobile sleep or Wi-Fi/5G switch).
+   * If no server message or pong arrives within `timeoutMs`, tears down the dead socket immediately
+   * so `onStatus(false)` can trigger seamless reconnect before server graceMs expires.
+   */
+  probeAlive(timeoutMs = 2500): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const probeAt = Date.now();
+    this.pendingPingAt = probeAt;
+    this.sendRaw({ t: 'p', n: probeAt });
+    if (this.aliveProbeTimer !== null) {
+      window.clearTimeout(this.aliveProbeTimer);
+    }
+    this.aliveProbeTimer = window.setTimeout(() => {
+      this.aliveProbeTimer = null;
+      if (this.ws === ws && this.lastMessageAt < probeAt) {
+        this.forceDropZombieSocket(ws);
+      }
+    }, timeoutMs);
+  }
+
   private startPingLoop(): void {
     this.stopPingLoop();
     const sendProbe = () => {
@@ -378,6 +416,10 @@ export class OnlineClient {
       if (this.pendingPingAt > 0 && Date.now() - this.pendingPingAt >= 4500) {
         this.missedPings += 1;
         this.recomputeNetQuality();
+        if (this.missedPings >= 2) {
+          this.forceDropZombieSocket(this.ws);
+          return;
+        }
       }
       const now = Date.now();
       this.pendingPingAt = now;
@@ -391,6 +433,10 @@ export class OnlineClient {
     if (this.pingTimer !== null) {
       window.clearInterval(this.pingTimer);
       this.pingTimer = null;
+    }
+    if (this.aliveProbeTimer !== null) {
+      window.clearTimeout(this.aliveProbeTimer);
+      this.aliveProbeTimer = null;
     }
     this.pendingPingAt = 0;
   }
@@ -457,6 +503,7 @@ export class OnlineClient {
       });
 
       ws.addEventListener('message', (ev) => {
+        this.lastMessageAt = Date.now();
         let parsed: Record<string, unknown>;
         try {
           parsed = JSON.parse(String(ev.data)) as Record<string, unknown>;

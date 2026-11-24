@@ -684,8 +684,8 @@ describe('Online Multiplayer Server Integration', () => {
   it('13. Protocol-level ws.ping keeps frozen-JS clients alive while closing truly silent sockets', async () => {
     const hbSrv = await startServer(0, {
       matchLogPath: path.join(tmpDir, 'hb.jsonl'),
-      pingIntervalMs: 30,
-      deadSocketTimeoutMs: 110,
+      pingIntervalMs: 50,
+      deadSocketTimeoutMs: 260,
     });
     // Frozen-JS client: never sends JSON messages after hello, but browser/OS stack still auto-pongs RFC 6455 ping
     const bgWs = new WebSocket(`ws://127.0.0.1:${hbSrv.port}`, { autoPong: true });
@@ -1749,12 +1749,72 @@ describe('Online Multiplayer Server Integration', () => {
       expect(report.window.retainedMaxPitches).toBe(50000);
       expect(report.matchesSummary.total).toBe(1);
       expect(report.matchesSummary.friend).toBe(1);
+      expect(report.matchesSummary.avgPitchesPerMatch).toBe(1);
       expect(report.battingSummary.totalPitches).toBe(1);
       expect(report.recentMatches[0].code).toBe(code);
       void hostToken;
     } finally {
       await Promise.all([host.close(), guest.close(), probe.close()]);
       await anSrv.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('33. session_check protects live 2nd tab (alreadyActive) while reclaiming zombie half-open sockets', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capbb-zombie-'));
+    const zSrv = await startServer(0, {
+      matchLogPath: path.join(tmpDir, 'matches.jsonl'),
+      pitchLogPath: path.join(tmpDir, 'pitches.jsonl'),
+      randomizeFriendSides: false,
+      graceMs: 30_000,
+      sessionProbeMs: 180,
+    });
+    const host = await connectClient(zSrv.port, 'HostZ');
+    const guest = await connectClient(zSrv.port, 'GuestZ');
+    const tab2 = await connectClient(zSrv.port, 'GuestTab2');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'HostZ' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      const code = String(created.code);
+
+      guest.send({ type: 'join', code, name: 'GuestZ' });
+      const joined = await guest.nextMsg((m) => m.type === 'room_joined');
+      const guestToken = String(joined.token);
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'match_start'),
+        guest.nextMsg((m) => m.type === 'match_start'),
+      ]);
+
+      // Case 1: Guest's original tab is genuinely alive -> tab2 gets active=false, alreadyActive=true
+      tab2.send({ type: 'session_check', code, token: guestToken });
+      const stLive = await tab2.nextMsg((m) => m.type === 'session_status');
+      expect(stLive.active).toBe(false);
+      expect(stLive.alreadyActive).toBe(true);
+      expect(guest.ws.readyState).toBe(WebSocket.OPEN);
+
+      // Case 2: Simulate a zombie half-open mobile TCP socket by pausing guest's underlying socket so it never replies to ws.ping()
+      const rawSock = (guest.ws as unknown as { _socket?: { pause?: () => void } })._socket;
+      rawSock?.pause?.();
+
+      tab2.send({ type: 'session_check', code, token: guestToken });
+      const stZombie = await tab2.nextMsg((m) => m.type === 'session_status', 3000);
+      expect(stZombie.active).toBe(true);
+      expect(stZombie.code).toBe(code);
+      expect(stZombie.opponentName).toBe('HostZ');
+
+      // Reconnecting from tab2 seamlessly restores the match
+      tab2.send({ type: 'reconnect', code, token: guestToken });
+      const [syncTab2, oppReconn] = await Promise.all([
+        tab2.nextMsg((m) => m.type === 'state_sync'),
+        host.nextMsg((m) => m.type === 'opponent_reconnected'),
+      ]);
+      expect(syncTab2.side).toBe('away');
+      expect(oppReconn.type).toBe('opponent_reconnected');
+    } finally {
+      const rawSock = (guest.ws as unknown as { _socket?: { resume?: () => void } })._socket;
+      rawSock?.resume?.();
+      await Promise.all([host.close(), guest.close(), tab2.close()]);
+      await zSrv.close();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

@@ -180,6 +180,8 @@ export interface ServerOptions {
   pingIntervalMs?: number;
   deadSocketTimeoutMs?: number;
   graceMs?: number;
+  /** How long (ms) session_check waits for an old socket to answer ws.ping() before treating it as a zombie (default 700). */
+  sessionProbeMs?: number;
   /** How long a room with no guest survives its host going offline (sharing the code on a phone). */
   waitingGraceMs?: number;
   swingTimeoutPaddingMs?: number;
@@ -360,7 +362,8 @@ export function startServer(
   );
   const pingIntervalMs = opts.pingIntervalMs ?? 12_000;
   const deadSocketTimeoutMs = opts.deadSocketTimeoutMs ?? Math.max(35_000, pingIntervalMs * 3);
-  const graceMs = opts.graceMs ?? 20_000;
+  const graceMs = opts.graceMs ?? 30_000;
+  const sessionProbeMs = opts.sessionProbeMs ?? 700;
   const waitingGraceMs = opts.waitingGraceMs ?? 300_000;
   const swingTimeoutPaddingMs = opts.swingTimeoutPaddingMs ?? 4500;
   const pitchClockScale = opts.pitchClockScale ?? 1;
@@ -2642,24 +2645,67 @@ export function startServer(
             break;
           }
           const seat = room.players[matchedSide]!;
-          // Only prompt reconnect when the seat is currently offline (prevents a 2nd local tab from hijacking an active tab)
+          const sendActiveStatus = (curRoom: Room, curSeat: RoomPlayer) => {
+            const oppSide: Side = matchedSide === 'home' ? 'away' : 'home';
+            const opp = curRoom.players[oppSide];
+            const remMs = curSeat.disconnectDeadlineAt ? Math.max(0, curSeat.disconnectDeadlineAt - Date.now()) : graceMs;
+            sendJson(ws, {
+              type: 'session_status',
+              active: true,
+              code,
+              roomKind: curRoom.isMatchmaking ? 'live' : 'friend',
+              opponentName: opp?.name ?? '',
+              remainingSec: Math.ceil(remMs / 1000),
+              waiting: !curRoom.players.away,
+            });
+          };
           const seatOnline = seat.connected && seat.ws !== null && seat.ws.readyState === WebSocket.OPEN;
           if (seatOnline) {
-            sendJson(ws, { type: 'session_status', active: false });
+            if (seat.ws === ws) {
+              sendJson(ws, { type: 'session_status', active: false, alreadyActive: true });
+              break;
+            }
+            // Probe old socket via RFC 6455 ping: a genuinely active 2nd tab answers within ~10-200ms,
+            // while a zombie half-open mobile socket (behind Cloudflare Tunnel after network switch/reload)
+            // never replies and should be terminated so the player can reclaim their seat.
+            const oldWs = seat.ws!;
+            let responded = false;
+            const onPong = () => {
+              responded = true;
+            };
+            oldWs.once('pong', onPong);
+            try {
+              oldWs.ping();
+            } catch {
+              responded = false;
+            }
+            setTimeout(() => {
+              oldWs.off('pong', onPong);
+              if (ws.readyState !== WebSocket.OPEN) return;
+              if (responded && oldWs.readyState === WebSocket.OPEN) {
+                sendJson(ws, { type: 'session_status', active: false, alreadyActive: true });
+                return;
+              }
+              try {
+                oldWs.terminate();
+              } catch {
+                // ignore
+              }
+              const curRoom = rooms.get(code);
+              if (!curRoom || curRoom.turnState === 'game_over') {
+                sendJson(ws, { type: 'session_status', active: false });
+                return;
+              }
+              const curSeat = curRoom.players[matchedSide!];
+              if (!curSeat || curSeat.token !== token) {
+                sendJson(ws, { type: 'session_status', active: false });
+                return;
+              }
+              sendActiveStatus(curRoom, curSeat);
+            }, sessionProbeMs);
             break;
           }
-          const oppSide: Side = matchedSide === 'home' ? 'away' : 'home';
-          const opp = room.players[oppSide];
-          const remMs = seat.disconnectDeadlineAt ? Math.max(0, seat.disconnectDeadlineAt - Date.now()) : graceMs;
-          sendJson(ws, {
-            type: 'session_status',
-            active: true,
-            code,
-            roomKind: room.isMatchmaking ? 'live' : 'friend',
-            opponentName: opp?.name ?? '',
-            remainingSec: Math.ceil(remMs / 1000),
-            waiting: !room.players.away,
-          });
+          sendActiveStatus(room, seat);
           break;
         }
 

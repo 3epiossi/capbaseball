@@ -635,6 +635,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
       return {
         t: 'scs',
         ok: msg.active ? 1 : 0,
+        ...(msg.alreadyActive ? { aa: 1 } : {}),
         ...(msg.code ? { c: msg.code } : {}),
         ...(msg.roomKind ? { rk: msg.roomKind === 'friend' ? 1 : 0 } : {}),
         ...(typeof msg.opponentName === 'string' && msg.opponentName ? { opp: msg.opponentName } : {}),
@@ -917,6 +918,7 @@ export function decodeServerMsg(
       return {
         type: 'session_status',
         active: raw.ok === 1,
+        ...(raw.aa === 1 ? { alreadyActive: true } : {}),
         code: typeof raw.c === 'string' ? raw.c : '',
         roomKind: raw.rk === 1 ? 'friend' : 'live',
         opponentName: typeof raw.opp === 'string' ? raw.opp : '',

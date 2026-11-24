@@ -83,9 +83,12 @@ interface MatchRecord {
   reason?: string;
   endReason?: string;
   winner?: 'away' | 'home' | null;
+  innings?: number;
   inningsPlayed?: number;
   awayName?: string;
   homeName?: string;
+  awayRuns?: number;
+  homeRuns?: number;
   awayScore?: number;
   homeScore?: number;
   awayHits?: number;
@@ -96,6 +99,7 @@ interface MatchRecord {
   homeStrikeouts?: number;
   awayPitches?: number;
   homePitches?: number;
+  pitches?: number;
   totalPitches?: number;
   absUsedAway?: number;
   absUsedHome?: number;
@@ -156,14 +160,14 @@ export function buildAnalyticsReport(
     if (m.winner === 'away') awayWins += 1;
     else if (m.winner === 'home') homeWins += 1;
     totalDurationSec += Number(m.durationSec) || 0;
-    const awaySc = Number(m.awayScore) || 0;
-    const homeSc = Number(m.homeScore) || 0;
+    const awaySc = Number(m.awayRuns ?? m.awayScore) || 0;
+    const homeSc = Number(m.homeRuns ?? m.homeScore) || 0;
     const matchRuns = awaySc + homeSc;
     totalRuns += matchRuns;
     if (matchRuns > maxMatchRuns) maxMatchRuns = matchRuns;
     if (Math.abs(awaySc - homeSc) >= 15) extremeRunDiffMatches += 1;
-    if ((Number(m.inningsPlayed) || 0) >= 8) highInningMatches += 1;
-    totalMatchPitches += Number(m.totalPitches) || 0;
+    if ((Number(m.innings ?? m.inningsPlayed) || 0) >= 8) highInningMatches += 1;
+    totalMatchPitches += Number(m.pitches ?? m.totalPitches) || 0;
     totalHits += (Number(m.awayHits) || 0) + (Number(m.homeHits) || 0);
     totalWalks += (Number(m.awayWalks) || 0) + (Number(m.homeWalks) || 0);
     totalStrikeouts += (Number(m.awayStrikeouts) || 0) + (Number(m.homeStrikeouts) || 0);
@@ -584,6 +588,7 @@ export const ANALYTICS_JS = `(() => {
   };
 
   const REASON_NAMES = {
+    completed: '正常完賽',
     normal: '正常完賽',
     mercy: '提前結束',
     resign: '投降棄權',
@@ -659,7 +664,7 @@ export const ANALYTICS_JS = `(() => {
       setText('b-outs', out.outsInPlay + ' / ' + out.foulBalls + ' / ' + out.foulFlyOuts);
 
       const rs = ms.reasons || {};
-      setText('r-normal', (rs.normal || 0) + ' / ' + (rs.mercy || 0));
+      setText('r-normal', ((rs.completed || 0) + (rs.normal || 0)) + ' / ' + (rs.mercy || 0));
       setText(
         'r-early',
         (rs.resign || 0) + ' / ' +
@@ -730,13 +735,13 @@ export const ANALYTICS_JS = `(() => {
             typeTd,
             td(m.code || '--'),
             td(m.awayName || '--'),
-            td((m.awayScore ?? 0) + ' - ' + (m.homeScore ?? 0)),
+            td((m.awayRuns ?? m.awayScore ?? 0) + ' - ' + (m.homeRuns ?? m.homeScore ?? 0)),
             td(m.homeName || '--'),
-            td(m.inningsPlayed ?? '--'),
+            td(m.innings ?? m.inningsPlayed ?? '--'),
             td((m.awayHits ?? 0) + '/' + (m.homeHits ?? 0)),
             td((m.awayStrikeouts ?? 0) + '/' + (m.homeStrikeouts ?? 0)),
             td((m.awayWalks ?? 0) + '/' + (m.homeWalks ?? 0)),
-            td(m.totalPitches ?? '--'),
+            td(m.pitches ?? m.totalPitches ?? '--'),
             td((m.durationSec ?? 0) + '秒'),
             td(REASON_NAMES[rKey] || rKey)
           );
