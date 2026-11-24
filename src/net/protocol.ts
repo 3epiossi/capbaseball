@@ -10,8 +10,63 @@ import type { PitchId } from '../physics/pitches';
 import type { GameMode, MatchEndReason, MatchState, PlayerSlot } from '../rules/match';
 
 export type ServerLoadStatus = 'green' | 'yellow' | 'red';
+export type SpringZoneWire = 'SOFT' | 'BEST' | 'OVER';
 
-export const PITCH_IDS_ORDER: readonly PitchId[] = ['straight', 'cutter', 'fork', 'changeup', 'knuckle'];
+export interface ClientDeviceProfile {
+  device: 'mobile' | 'tablet' | 'desktop';
+  os: 'ios' | 'android' | 'macos' | 'windows' | 'linux' | 'other';
+  browser: 'line' | 'ig' | 'fb' | 'safari' | 'chrome' | 'edge' | 'firefox' | 'other';
+  input: 'touch' | 'mouse';
+  orient: 'landscape' | 'portrait';
+  pwa: boolean;
+  locale: 'zh-TW' | 'en' | 'ja';
+  skipLog?: boolean;
+}
+
+const VALID_DEVICES = new Set(['mobile', 'tablet', 'desktop']);
+const VALID_OS = new Set(['ios', 'android', 'macos', 'windows', 'linux', 'other']);
+const VALID_BROWSERS = new Set(['line', 'ig', 'fb', 'safari', 'chrome', 'edge', 'firefox', 'other']);
+const VALID_INPUTS = new Set(['touch', 'mouse']);
+const VALID_ORIENTS = new Set(['landscape', 'portrait']);
+const VALID_LOCALES = new Set(['zh-TW', 'en', 'ja']);
+
+export function sanitizeDeviceProfile(raw: unknown): ClientDeviceProfile | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const dv = String(r.dv ?? r.device ?? '');
+  const os = String(r.os ?? '');
+  const br = String(r.br ?? r.browser ?? '');
+  const inp = String(r.in ?? r.input ?? '');
+  const or = String(r.or ?? r.orient ?? '');
+  const lc = String(r.lc ?? r.locale ?? '');
+  if (!VALID_DEVICES.has(dv) && !VALID_INPUTS.has(inp)) return null;
+  return {
+    device: (VALID_DEVICES.has(dv) ? dv : 'desktop') as ClientDeviceProfile['device'],
+    os: (VALID_OS.has(os) ? os : 'other') as ClientDeviceProfile['os'],
+    browser: (VALID_BROWSERS.has(br) ? br : 'other') as ClientDeviceProfile['browser'],
+    input: (VALID_INPUTS.has(inp) ? inp : dv === 'desktop' ? 'mouse' : 'touch') as ClientDeviceProfile['input'],
+    orient: (VALID_ORIENTS.has(or) ? or : 'landscape') as ClientDeviceProfile['orient'],
+    pwa: r.pw === 1 || r.pwa === true,
+    locale: (VALID_LOCALES.has(lc) ? lc : 'zh-TW') as ClientDeviceProfile['locale'],
+    skipLog: r.nr === 1 || r.skipLog === true,
+  };
+}
+
+export function encodeSpringZone(zone?: SpringZoneWire | null): number | undefined {
+  if (zone === 'SOFT') return 0;
+  if (zone === 'BEST') return 1;
+  if (zone === 'OVER') return 2;
+  return undefined;
+}
+
+export function decodeSpringZone(code: unknown): SpringZoneWire | null {
+  if (code === 0 || code === 'SOFT') return 'SOFT';
+  if (code === 1 || code === 'BEST') return 'BEST';
+  if (code === 2 || code === 'OVER') return 'OVER';
+  return null;
+}
+
+export const PITCH_IDS_ORDER: readonly PitchId[] = ['straight', 'cutter', 'fork', 'changeup', 'knuckle', 'shuuto'];
 const LOAD_ORDER: readonly ServerLoadStatus[] = ['green', 'yellow', 'red'];
 
 export function round2(n: number): number {
@@ -329,7 +384,12 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
     case 'po':
       return { type: 'pong', t: raw.n };
     case 'hi':
-      return { type: 'hello', name: raw.n, v: raw.v ?? 2 };
+      return {
+        type: 'hello',
+        name: raw.n,
+        v: raw.v ?? 2,
+        ...(raw.d ? { deviceProfile: sanitizeDeviceProfile(raw.d) } : {}),
+      };
     case 'q':
       return { type: 'queue', mode: raw.m === 1 ? 'official6' : 'quick3', name: raw.n };
     case 'uq':
@@ -363,6 +423,7 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
         targetY: raw.y,
         errorX: raw.ex ?? 0,
         errorY: raw.ey ?? 0,
+        ...(raw.sz !== undefined ? { springZone: decodeSpringZone(raw.sz) } : {}),
       };
     case 'sw':
       return {

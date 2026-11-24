@@ -173,6 +173,10 @@ export function evaluateCatcherCatch(
     if ((opts.pitchId === 'fork' || brk >= 65) && plateY < 0.38) {
       pbProb += plateY < 0.30 ? 0.18 : 0.14;
     }
+    // Sharp horizontal break (e.g. shuuto) hugging the extreme lateral edge
+    if (opts.pitchId === 'shuuto' && dx > 0.24) {
+      pbProb += 0.08;
+    }
     // Subtle rim bobble even on ordinary pitches hugging the edge of comfort reach
     if (pbProb === 0 && nearEdge) {
       pbProb += 0.025;

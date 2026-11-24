@@ -453,6 +453,12 @@ select {
   gap: 0.45rem;
 }
 
+.sb-abs-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .sb-outs,
 .sb-abs {
   display: inline-flex;
@@ -471,6 +477,14 @@ select {
 
 .sb-abs em {
   color: var(--cyan);
+}
+
+.sb-abs.away em {
+  color: #e2e8f0;
+}
+
+.sb-abs.home em {
+  color: var(--gold);
 }
 
 .pip {
@@ -510,6 +524,18 @@ select {
   background: var(--cyan);
   border-color: #e0f2fe;
   box-shadow: 0 0 6px rgba(56, 189, 248, 0.75);
+}
+
+.pip.abs.away.on {
+  background: #e2e8f0;
+  border-color: #ffffff;
+  box-shadow: 0 0 6px rgba(226, 232, 240, 0.75);
+}
+
+.pip.abs.home.on {
+  background: var(--gold);
+  border-color: #fef08a;
+  box-shadow: 0 0 6px rgba(244, 196, 28, 0.8);
 }
 
 /* HR Derby Banner inside Scorebug */
@@ -1073,10 +1099,10 @@ select {
   text-transform: uppercase;
 }
 
-/* 5-Pitch Single-Row Equal-Width Selector */
+/* 6-Pitch 3x2 Equal-Width Selector */
 .pitch-diamond {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.22rem;
   align-items: stretch;
 }
@@ -2414,7 +2440,7 @@ dialog.reconnect-dialog {
   }
 
   .pitch-diamond {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.18rem;
   }
 
@@ -2561,7 +2587,7 @@ dialog.reconnect-dialog {
   }
 
   .pitcher-wheel-dock .pitch-diamond {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.16rem;
   }
 
@@ -2733,7 +2759,7 @@ dialog.reconnect-dialog {
   }
 
   .pitch-diamond {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.28rem;
   }
 

@@ -87,6 +87,7 @@ export const DICT = {
     pitchFork: 'FORK',
     pitchChangeup: 'CHANGEUP',
     pitchKnuckle: 'KNUCKLEBALL',
+    pitchShuuto: 'SHUUTO',
     springTitle: 'SPRING',
     springCharging: 'HOLD · COMPRESSING',
     springRebounding: 'REBOUNDING...',
@@ -311,6 +312,7 @@ export const DICT = {
     pitchShortFork: 'FORK',
     pitchShortChangeup: 'CH',
     pitchShortKnuckle: 'KNU',
+    pitchShortShuuto: 'SHU',
     brkShort: 'BRK',
     evShort: 'EV',
     laShort: 'LA',
@@ -424,6 +426,7 @@ export const DICT = {
     pitchFork: '指叉球',
     pitchChangeup: '變速球',
     pitchKnuckle: '蝴蝶球',
+    pitchShuuto: '噴射球',
     springTitle: '彈簧蓄力',
     springCharging: '按住壓縮中',
     springRebounding: '回彈判定中...',
@@ -648,6 +651,7 @@ export const DICT = {
     pitchShortFork: '指叉',
     pitchShortChangeup: '變速',
     pitchShortKnuckle: '蝴蝶',
+    pitchShortShuuto: '噴射',
     brkShort: '變化',
     evShort: '初速',
     laShort: '仰角',
@@ -761,6 +765,7 @@ export const DICT = {
     pitchFork: 'フォーク',
     pitchChangeup: 'チェンジアップ',
     pitchKnuckle: 'ナックル',
+    pitchShuuto: 'シュート',
     springTitle: 'スプリング',
     springCharging: '長押しで圧縮中',
     springRebounding: '反発計測中...',
@@ -985,6 +990,7 @@ export const DICT = {
     pitchShortFork: 'フォーク',
     pitchShortChangeup: 'チェンジ',
     pitchShortKnuckle: 'ナックル',
+    pitchShortShuuto: 'シュート',
     brkShort: '変化',
     evShort: '初速',
     laShort: '角度',
@@ -1087,6 +1093,7 @@ export function getPitchShortLabel(locale: Locale, codeOrId: string): string {
   if (key === 'FORK' || key === 'FRK') return t('pitchShortFork');
   if (key === 'CHANGEUP' || key === 'CH' || key === 'CHG') return t('pitchShortChangeup');
   if (key === 'KNUCKLE' || key === 'KNU' || key === 'KN') return t('pitchShortKnuckle');
+  if (key === 'SHUUTO' || key === 'SHU') return t('pitchShortShuuto');
   return codeOrId;
 }
 
@@ -1094,7 +1101,7 @@ export function localizeTelemetry(locale: Locale, raw: string): string {
   if (locale === 'en' || !raw) return raw;
   const t = createTranslator(locale);
   let out = raw;
-  out = out.replace(/\b(4SFB|STR|CUT|FORK|FRK|CHG|CH|KNU|KN)\b/g, (m) => getPitchShortLabel(locale, m));
+  out = out.replace(/\b(4SFB|STR|CUT|FORK|FRK|CHG|CH|KNU|KN|SHU)\b/g, (m) => getPitchShortLabel(locale, m));
   out = out.replace(/\bBRK\b/g, t('brkShort'));
   out = out.replace(/\bEV\b/g, t('evShort'));
   out = out.replace(/\bLA\b/g, t('laShort'));

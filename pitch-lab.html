@@ -29,18 +29,66 @@
             <button type="button" class="preset-btn" data-preset="fork">指叉</button>
             <button type="button" class="preset-btn" data-preset="changeup">變速</button>
             <button type="button" class="preset-btn" data-preset="knuckle">蝴蝶</button>
+            <button type="button" class="preset-btn" data-preset="shuuto">噴射</button>
           </div>
         </section>
 
         <section class="dock-section">
           <div class="sec-head">
-            <h2>鎖定空氣常數（唯讀）</h2>
+            <h2>環境與氣動效果（非投手參數）</h2>
             <select id="aero-profile" class="compact-select" aria-label="空氣常數基準">
-              <option value="unified">統一固定空氣</option>
               <option value="game_preset">遊戲現行球種</option>
+              <option value="unified">統一固定空氣</option>
+              <option value="custom">自訂參數</option>
             </select>
           </div>
-          <div class="locked-grid" id="locked-aero-grid"></div>
+          <details class="aero-details">
+            <summary>展開調整 6 項物理影響參數</summary>
+            <div class="aero-sliders">
+              <div class="ctrl-group">
+                <label for="in-aero-brake">
+                  <span>空氣煞車強度</span>
+                  <strong id="val-aero-brake">0.60</strong>
+                </label>
+                <input id="in-aero-brake" type="range" min="0.05" max="1.20" step="0.01" value="0.60" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-aero-glide">
+                  <span>滑翔轉彎力</span>
+                  <strong id="val-aero-glide">0.80</strong>
+                </label>
+                <input id="in-aero-glide" type="range" min="0.00" max="2.50" step="0.05" value="0.80" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-aero-spin">
+                  <span>旋轉吸力強度</span>
+                  <strong id="val-aero-spin">0.015</strong>
+                </label>
+                <input id="in-aero-spin" type="range" min="0.000" max="0.400" step="0.005" value="0.015" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-aero-air">
+                  <span>空氣濃稠度</span>
+                  <strong id="val-aero-air">1.20</strong>
+                </label>
+                <input id="in-aero-air" type="range" min="0.50" max="2.00" step="0.02" value="1.20" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-aero-mass">
+                  <span>瓶蓋重量</span>
+                  <strong id="val-aero-mass">2.2 g</strong>
+                </label>
+                <input id="in-aero-mass" type="range" min="1.2" max="4.5" step="0.1" value="2.2" />
+              </div>
+              <div class="ctrl-group">
+                <label for="in-aero-ret">
+                  <span>旋轉維持力</span>
+                  <strong id="val-aero-ret">80%</strong>
+                </label>
+                <input id="in-aero-ret" type="range" min="0" max="100" step="5" value="80" />
+              </div>
+            </div>
+          </details>
         </section>
 
         <section class="dock-section">

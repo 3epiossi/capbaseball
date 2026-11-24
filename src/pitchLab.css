@@ -135,7 +135,7 @@ code,
 
 .preset-row {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.3rem;
 }
 
@@ -165,30 +165,28 @@ code,
   font-size: 0.72rem;
 }
 
-.locked-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.3rem 0.4rem;
-}
-
-.locked-item {
-  background: rgba(15, 21, 35, 0.9);
+.aero-details {
+  margin-top: 0.25rem;
   border: 1px solid #1d2840;
-  border-radius: 5px;
-  padding: 0.24rem 0.42rem;
+  border-radius: 6px;
+  background: rgba(15, 21, 35, 0.72);
+  padding: 0.25rem 0.48rem;
+}
+
+.aero-details summary {
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--sky);
+  user-select: none;
+  padding: 0.14rem 0;
+}
+
+.aero-sliders {
+  margin-top: 0.45rem;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.7rem;
-}
-
-.locked-item span {
-  color: var(--muted);
-}
-
-.locked-item strong {
-  font-family: var(--font-mono);
-  color: #cbd5e1;
+  flex-direction: column;
+  gap: 0.2rem;
 }
 
 .ctrl-group {

@@ -1733,8 +1733,9 @@ describe('Online Multiplayer Server Integration', () => {
 
       const htmlRes = await fetchPath('/capbaseball/analytics');
       expect(htmlRes.status).toBe(200);
-      expect(htmlRes.body).toContain('線上對戰數據分析面板');
-      expect(htmlRes.body).toContain('./analytics.js');
+      expect(htmlRes.body).toContain('伺服器監控與數據中心');
+      expect(htmlRes.body).toContain('data-tab="overview"');
+      expect(htmlRes.body).toContain('./monitor.js');
 
       const jsRes = await fetchPath('/capbaseball/analytics.js');
       expect(jsRes.status).toBe(200);
@@ -1746,7 +1747,7 @@ describe('Online Multiplayer Server Integration', () => {
       expect(report.window.maxMatches).toBe(100);
       expect(report.window.maxPitches).toBe(2000);
       expect(report.window.retainedMaxMatches).toBe(5000);
-      expect(report.window.retainedMaxPitches).toBe(50000);
+      expect(report.window.retainedMaxPitches).toBe(25000);
       expect(report.matchesSummary.total).toBe(1);
       expect(report.matchesSummary.friend).toBe(1);
       expect(report.matchesSummary.avgPitchesPerMatch).toBe(1);
@@ -1857,7 +1858,7 @@ describe('Online Multiplayer Server Integration', () => {
             type: 'pitch_submit',
             pitchSeq: seq,
             pitchId: 'straight',
-            speedKmh: 70,
+            speedKmh: 66,
             targetX: 0,
             targetY: 0.72,
             errorX: 0,
@@ -2090,6 +2091,122 @@ describe('Online Multiplayer Server Integration', () => {
       expect((absH.match as { half: string }).half).toBe('top');
       expect(room.turnState).toBe('awaiting_pitch');
       expect(room.recorded).toBe(false);
+    } finally {
+      await Promise.all([host.close(), guest.close()]);
+      await srv.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('38. Extended /analytics.json tracks low-frequency device profiles, cross-platform fairness, handedness, spring mechanics, and 9-zone grid', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-ext-analytics-'));
+    const matchLogPath = path.join(tmpDir, 'matches.jsonl');
+    const pitchLogPath = path.join(tmpDir, 'pitches.jsonl');
+    const sessionLogPath = path.join(tmpDir, 'sessions.jsonl');
+    const srv = await startServer(0, {
+      matchLogPath,
+      pitchLogPath,
+      sessionLogPath,
+      randomizeFriendSides: false,
+      pitchClockScale: 0,
+      absWindowMs: 0,
+    });
+    const host = await connectClient(srv.port, 'DeskHost');
+    const guest = await connectClient(srv.port, 'MobGuest');
+    try {
+      // 1. Send hello with zero-PII deviceProfile (1x desktop/mouse, 1x mobile/touch/LINE, + 1x throttled reconnect nr:1)
+      host.send({
+        type: 'hello',
+        name: 'DeskHost',
+        d: { dv: 'desktop', os: 'macos', br: 'chrome', in: 'mouse', or: 'landscape', pw: 0, lc: 'zh-TW' },
+      });
+      await host.nextMsg((m) => m.type === 'welcome');
+
+      guest.send({
+        type: 'hello',
+        name: 'MobGuest',
+        d: { dv: 'mobile', os: 'ios', br: 'line', in: 'touch', or: 'portrait', pw: 1, lc: 'zh-TW' },
+      });
+      await guest.nextMsg((m) => m.type === 'welcome');
+
+      // Reconnect with nr: 1 must NOT duplicate session log
+      guest.send({
+        type: 'hello',
+        name: 'MobGuest',
+        d: { dv: 'mobile', os: 'ios', br: 'line', in: 'touch', or: 'portrait', pw: 1, lc: 'zh-TW', nr: 1 },
+      });
+      await guest.nextMsg((m) => m.type === 'welcome');
+
+      // 2. Start friend match (host = home/mouse, guest = away/touch) and throw a BEST-spring shuuto down the middle vs LHB
+      host.send({ type: 'create', mode: 'quick3', name: 'DeskHost' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      guest.send({ type: 'join', code: String(created.code), name: 'MobGuest' });
+      await guest.nextMsg((m) => m.type === 'room_joined');
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'match_start'),
+        guest.nextMsg((m) => m.type === 'match_start'),
+      ]);
+
+      host.send({
+        t: 'ps',
+        q: 1,
+        p: 5, // shuuto
+        v: 68,
+        x: 0,
+        y: 0.72,
+        ex: 0,
+        ey: 0,
+        sz: 1, // BEST
+      });
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'pitch_launch'),
+        guest.nextMsg((m) => m.type === 'pitch_launch'),
+      ]);
+      guest.send({ type: 'no_swing', pitchSeq: 1 });
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'pitch_result'),
+        guest.nextMsg((m) => m.type === 'pitch_result'),
+      ]);
+
+      // Host (mouse) resigns -> Guest (touch) wins cross-platform H2H match
+      host.send({ type: 'resign' });
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'match_over'),
+        guest.nextMsg((m) => m.type === 'match_over'),
+      ]);
+      await new Promise((r) => setTimeout(r, 80));
+
+      const report = await fetch(`http://127.0.0.1:${srv.port}/capbaseball/analytics.json`).then(
+        (r) => r.json() as Promise<Record<string, any>>,
+      );
+
+      // Device profile recorded exactly twice (nr:1 skipped!)
+      expect(report.devices.totalSessions).toBe(2);
+      expect(report.devices.byDevice.desktop).toBe(1);
+      expect(report.devices.byDevice.mobile).toBe(1);
+      expect(report.devices.byBrowser.line).toBe(1);
+      expect(report.devices.byBrowser.chrome).toBe(1);
+      expect(report.devices.pwaCount).toBe(1);
+
+      // Handedness matrix & shuuto pitch stats
+      const shuHand = report.handednessMatrix.find((h: { pitchId: string }) => h.pitchId === 'shuuto');
+      expect(shuHand).toBeTruthy();
+      expect(shuHand.L.pitches).toBe(1);
+
+      // Spring mechanics recorded BEST
+      const bestSpring = report.mechanics.spring.find((s: { zone: string }) => s.zone === 'BEST');
+      expect(bestSpring.count).toBe(1);
+      expect(bestSpring.pct).toBe(100);
+
+      // Strike zone 9-cell grid center cell (index 4) recorded the pitch
+      expect(report.strikeZoneGrid.cells).toHaveLength(9);
+      expect(report.strikeZoneGrid.cells[4].pitches).toBe(1);
+
+      // Cross-platform fairness: Touch beat Mouse in H2H
+      expect(report.crossPlatform.headToHead.totalMatches).toBe(1);
+      expect(report.crossPlatform.headToHead.touchWins).toBe(1);
+      expect(report.crossPlatform.headToHead.mouseWins).toBe(0);
+      expect(report.crossPlatform.mouse.bestSpringPct).toBe(100);
     } finally {
       await Promise.all([host.close(), guest.close()]);
       await srv.close();

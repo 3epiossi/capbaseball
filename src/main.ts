@@ -654,6 +654,7 @@ function getLocalizedPitchName(pitchId: PitchId): string {
     fork: 'pitchFork',
     changeup: 'pitchChangeup',
     knuckle: 'pitchKnuckle',
+    shuuto: 'pitchShuuto',
   };
   return t(map[pitchId]);
 }
@@ -1723,10 +1724,11 @@ function updateHudAndDocks(): void {
     document.getElementById(`s${i}`)?.classList.toggle('on', hud.strikes >= i);
     document.getElementById(`o${i}`)?.classList.toggle('on', hud.outs >= i);
   }
-  const absSide = isOnline && onlineSide ? onlineSide : cpuPlayerSide;
-  const absLeft = match.absChallenges[absSide];
+  const awayAbsLeft = match.absChallenges.away;
+  const homeAbsLeft = match.absChallenges.home;
   for (let i = 1; i <= 2; i++) {
-    document.getElementById(`abs-${i}`)?.classList.toggle('on', absLeft >= i);
+    document.getElementById(`abs-away-${i}`)?.classList.toggle('on', awayAbsLeft >= i);
+    document.getElementById(`abs-home-${i}`)?.classList.toggle('on', homeAbsLeft >= i);
   }
 
   const role = getCurrentRole();
@@ -2134,6 +2136,7 @@ function commitSpringPitch(peakVal: number): void {
       targetY: pitchTarget.y,
       errorX: errX,
       errorY: errY,
+      springZone: evalRes.zone,
     });
     updateHudAndDocks();
   } else {
@@ -3045,7 +3048,7 @@ window.addEventListener('keydown', (e) => {
     }
   } else if (e.code === 'KeyC') {
     triggerAbsChallenge();
-  } else if (e.code >= 'Digit1' && e.code <= 'Digit5' && getCurrentRole() === 'pitcher') {
+  } else if (e.code >= 'Digit1' && e.code <= 'Digit6' && getCurrentRole() === 'pitcher') {
     const idx = Number(e.code.replace('Digit', '')) - 1;
     if (PITCH_IDS[idx]) selectPitch(PITCH_IDS[idx]);
   }

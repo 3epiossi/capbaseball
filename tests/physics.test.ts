@@ -26,8 +26,8 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
   const TARGET_Y = 0.0;
   const TARGET_Z = 0.72; // middle of strike zone [0.42, 1.02]
 
-  it('runs all 5 signature pitch types cleanly without NaN and solves nominal target accurately', () => {
-    expect(PITCH_IDS).toEqual(['straight', 'cutter', 'fork', 'changeup', 'knuckle']);
+  it('runs all 6 signature pitch types cleanly without NaN and solves nominal target accurately', () => {
+    expect(PITCH_IDS).toEqual(['straight', 'cutter', 'fork', 'changeup', 'knuckle', 'shuuto']);
     for (const id of PITCH_IDS) {
       const spec = PITCH_SPECS[id];
       const res = solvePitchTrajectory(id, spec.defaultSpeedKmh, TARGET_Y, TARGET_Z, {
@@ -98,11 +98,12 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     expect(Math.max(...offsets) - Math.min(...offsets)).toBeGreaterThan(0.25);
   }, 15_000);
 
-  it('exhibits exact clock-face induced break directions for straight, cutter, fork, and changeup', () => {
+  it('exhibits exact clock-face induced break directions for straight, cutter, fork, changeup, and shuuto', () => {
     const straight = solvePitchTrajectory('straight', PITCH_SPECS.straight.defaultSpeedKmh, TARGET_Y, TARGET_Z);
     const cutter = solvePitchTrajectory('cutter', PITCH_SPECS.cutter.defaultSpeedKmh, TARGET_Y, TARGET_Z);
     const fork = solvePitchTrajectory('fork', PITCH_SPECS.fork.defaultSpeedKmh, TARGET_Y, TARGET_Z);
     const changeup = solvePitchTrajectory('changeup', PITCH_SPECS.changeup.defaultSpeedKmh, TARGET_Y, TARGET_Z);
+    const shuuto = solvePitchTrajectory('shuuto', PITCH_SPECS.shuuto.defaultSpeedKmh, TARGET_Y, TARGET_Z);
 
     // 1. Straight: ~12 o'clock high-spin rising hop (|dx| < 0.06m, dy > +0.50m)
     expect(Math.abs(straight.breakDelta[1])).toBeLessThan(0.06);
@@ -119,13 +120,19 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     // 4. Changeup: face-on high-drag drop & fade (dx < -0.10, dy < -0.10)
     expect(changeup.breakDelta[1]).toBeLessThan(-0.10);
     expect(changeup.breakDelta[2]).toBeLessThan(-0.10);
+
+    // 5. Shuuto: wide sharp left-breaking horizontal snap (dx <= -1.25m, near-zero vertical break)
+    expect(shuuto.breakDelta[1]).toBeLessThanOrEqual(-1.25);
+    expect(shuuto.breakDelta[1]).toBeGreaterThanOrEqual(-1.75);
+    expect(Math.abs(shuuto.breakDelta[2])).toBeLessThan(0.15);
   }, 15_000);
 
-  it('exposes authentic 3D cap orientations (normalWorld & quaternion q) at release for all 4 pitches', () => {
+  it('exposes authentic 3D cap orientations (normalWorld & quaternion q) at release for all pitches', () => {
     const straight = solvePitchTrajectory('straight', PITCH_SPECS.straight.defaultSpeedKmh, TARGET_Y, TARGET_Z);
     const cutter = solvePitchTrajectory('cutter', PITCH_SPECS.cutter.defaultSpeedKmh, TARGET_Y, TARGET_Z);
     const fork = solvePitchTrajectory('fork', PITCH_SPECS.fork.defaultSpeedKmh, TARGET_Y, TARGET_Z);
     const changeup = solvePitchTrajectory('changeup', PITCH_SPECS.changeup.defaultSpeedKmh, TARGET_Y, TARGET_Z);
+    const shuuto = solvePitchTrajectory('shuuto', PITCH_SPECS.shuuto.defaultSpeedKmh, TARGET_Y, TARGET_Z);
 
     // Exact cap-flight-sim changeup parameters
     expect(PITCH_SPECS.changeup.baseAttitude).toBe('edge_on');
@@ -138,12 +145,14 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     expect(Math.abs(straight.frames[0].normalWorld[2])).toBeGreaterThan(0.85);
     // Cutter: tilted diagonally right (normalWorld[1] > 0.45)
     expect(cutter.frames[0].normalWorld[1]).toBeGreaterThan(0.45);
+    // Shuuto: tilted strongly left for wide horizontal break (normalWorld[1] < -0.55)
+    expect(shuuto.frames[0].normalWorld[1]).toBeLessThan(-0.55);
     // Fork: 90-deg edge-on vertical disc (|normalWorld[1]| > 0.85)
     expect(Math.abs(fork.frames[0].normalWorld[1])).toBeGreaterThan(0.85);
     // Changeup: cap circular face points almost straight at the catcher (|nx| > 0.85)
     expect(Math.abs(changeup.frames[0].normalWorld[0])).toBeGreaterThan(0.85);
 
-    for (const res of [straight, cutter, fork, changeup]) {
+    for (const res of [straight, cutter, fork, changeup, shuuto]) {
       const f0 = res.frames[0];
       expect(f0.q).toEqual(f0.y.slice(6, 10));
       const qNorm = Math.hypot(f0.q[0], f0.q[1], f0.q[2], f0.q[3]);

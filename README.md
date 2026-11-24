@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.6.0`（語意化三段式版本號）
+- **目前里程碑**：`v2.7.0`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 60 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 61 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -283,3 +283,8 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **提高不死三振／暴投／捕逸機率、捕手空中反應延遲與視覺動畫組**：[src/ai/cpu.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ai/cpu.ts) 縮小捕手舒適接捕區並調高指叉低球／蝴蝶球／高球速邊角捕逸與外圍暴投機率；[src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts) 加入捕手空中反應延遲（`0.46s` 界外／`0.56s` 界內）與回追本壘後方漏接加成；[src/ui/transitions.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/transitions.ts) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 新增 `UNCAUGHT 3RD`／`WILD PITCH`／`PASSED BALL`／`WALK (BB)`／`COLD GAME`／`WALK-OFF`／「改判壞球 · 打擊繼續！」轉場橫幅、延長賽「突破僵局 · 0出局滿壘」提示、「四壞保送＋暴投／捕逸」複合播報與無瞬間回傳的 3D 漏球彈地特效（遵守瓶蓋棒球無實體跑者規則）。
   - **ABS 複合判決完整回溯與防爆雷凍結**：[src/rules/match.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/match.ts) 在 `AbsPreSnapshot` 補齊 `wildPitches`、`uncaughtThirdStrikes`、`plateAppearancesInHalf`、`runsByInning`、`mercyTriggered` 與 `endReason` 回溯並回傳結構化 `AbsOutcomeKind`（精準處理「不死三振改判壞球→暴投進壘」、「壞球改好球→不死三振或三振出局」等複合情節）；[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 開放結束比賽最後一球 ABS 挑戰（`gameOverAbsTimer`），並於 2.2 秒鷹眼重播期間凍結左上角記分板防止提前爆雷；同步將隊伍左右打視覺嚴格綁定 `visualHalf` 避免換局動畫前搶先切換。
   - **候補 5 人同時搶單、純暱稱聊天室與 `/analytics` 即時＋台北時間**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 改為一次向名單前 5 位候補發送 `match_offer`（15 秒逾時）、搶輸顯示保留優先候補通知、取消排隊送出 `waiter_cancelled` 並即時同步 `/monitor` `standbyCount`；聊天氣泡只顯示純玩家名字；[server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 全面改為台北時間（`UTC+8`）並於分析頁頂部即時列出對戰中房間（測試擴充至 **60/60** 全部通過）。
+- **v2.7.0 第 6 球種「噴射球（`shuuto`）」、雙隊 ABS 燈號、統一 `/monitor` 數據中心與實驗室白話物理滑桿（2026-11-25）**：
+  - **新增第 6 球種「噴射球（`shuuto` / `SHU`）」與 `3×2` 投手面板**：[src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 新增側投前伸出手點（`[0.80, -0.36, 1.08]`、`bankRightDeg: 70°`、`noseUpDeg: -2°`、`yawLeftDeg: -14°`、`rpm: 2900`、`62–73 km/h`），預設 `68 km/h` 可達捕手視角向左急轉 **`-142.7 cm`** 與近零垂直位移（`+0.3 cm`）；[index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html)、[src/styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css)、[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts)、[src/i18n/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/i18n/index.ts)、[src/ai/cpu.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ai/cpu.ts) 與 [src/net/protocol.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/protocol.ts) 改為 2 列 × 3 欄面板（支援鍵盤 `1`–`6`）、三語翻譯與向後相容 index `5` 編碼。
+  - **記分板同時顯示客隊與主隊 ABS 剩餘次數**：修復觀戰者及 CPU 模式下因只顯示客隊（`away`）造成主隊挑戰失敗卻看似未扣次數的顯示 Bug，於 [index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html)、[src/styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 改為上排客隊（銀白 `ABS`）＋下排主隊（金黃 `ABS`）同步呈現。
+  - **將 `/analytics` 融入 `/monitor` 統一四分頁後台與進階數據收集**：[server/monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts) 整合為「伺服器監控／對戰總覽／球路與平衡／裝置與跨平台」四大分頁（切分頁才按需輪詢 `/metrics` 或 `/analytics.json` 節省樹莓派資源，`/analytics` 路徑自動開啟對戰總覽）；[src/net/client.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/client.ts) 與 [server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 新增零 PII 單次節流裝置檔案（寫入 `data/sessions.jsonl` 並設 ~13.7 MB SD 卡自動輪替上限）與彈簧 `SOFT/BEST/OVER` 標記；[server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 新增跨平台觸控 vs 滑鼠公平性、左右打對位矩陣、好球帶 9 宮格熱區（投球量／揮棒率／安打率／誤判率）、捕手與特殊規則事件率與揮棒時機分佈（新增 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 第 38 項整合測試，全部 **61/61** 通過）。
+  - **`/pitch-lab` 開放 6 項白話非投手物理滑桿**：[pitch-lab.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/pitch-lab.html)、[src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 與 [src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 開放調整空氣煞車強度（`cdProjected`）、滑翔轉彎力（`clAlphaPerRad`）、旋轉吸力強度（`magnusCoeff`）、空氣濃稠度（`airDensityKgM3`）、瓶蓋重量（`capMassG`）與旋轉維持力（`spinDamping`），並支援快速基準切換與 JSON 匯出。

@@ -3,11 +3,72 @@ import type { AbsOutcomeKind, MatchState } from '../rules/match';
 import {
   decodeServerMsg,
   encodePitchId,
+  encodeSpringZone,
   round2,
   round3,
   type CompactMatchDecodeContext,
   type ServerLoadStatus,
+  type SpringZoneWire,
 } from './protocol';
+
+function collectCompactDeviceProfile(): Record<string, unknown> {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  const maxTouch = typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0;
+  const coarse = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(pointer: coarse)').matches
+    : false;
+  const w = typeof window !== 'undefined' ? window.innerWidth || 0 : 0;
+  const h = typeof window !== 'undefined' ? window.innerHeight || 0 : 0;
+  const minDim = Math.min(w || 9999, h || 9999);
+
+  let os: 'ios' | 'android' | 'macos' | 'windows' | 'linux' | 'other' = 'other';
+  if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && maxTouch > 1)) os = 'ios';
+  else if (/Android/i.test(ua)) os = 'android';
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macos';
+  else if (/Windows/i.test(ua)) os = 'windows';
+  else if (/Linux/i.test(ua)) os = 'linux';
+
+  let dv: 'mobile' | 'tablet' | 'desktop' = 'desktop';
+  if (/iPad|Tablet|PlayBook|Silk/i.test(ua) || (os === 'ios' && /Macintosh/i.test(ua)) || (os === 'android' && !/Mobile/i.test(ua))) {
+    dv = 'tablet';
+  } else if (/Mobile|iPhone|iPod|Android/i.test(ua) || (coarse && minDim <= 640)) {
+    dv = 'mobile';
+  }
+
+  let br: 'line' | 'ig' | 'fb' | 'safari' | 'chrome' | 'edge' | 'firefox' | 'other' = 'other';
+  if (/\bLine\//i.test(ua)) br = 'line';
+  else if (/Instagram/i.test(ua)) br = 'ig';
+  else if (/FBAN|FBAV|FB_IAB/i.test(ua)) br = 'fb';
+  else if (/EdgA?|EdgiOS/i.test(ua)) br = 'edge';
+  else if (/Firefox|FxiOS/i.test(ua)) br = 'firefox';
+  else if (/Chrome|CriOS/i.test(ua)) br = 'chrome';
+  else if (/Safari/i.test(ua)) br = 'safari';
+
+  const inp: 'touch' | 'mouse' = coarse || dv !== 'desktop' ? 'touch' : 'mouse';
+  const or: 'landscape' | 'portrait' = w >= h ? 'landscape' : 'portrait';
+  const pw =
+    typeof window !== 'undefined' &&
+    ((typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches) ||
+      Boolean((navigator as { standalone?: boolean }).standalone))
+      ? 1
+      : 0;
+  const docLang = typeof document !== 'undefined' ? document.documentElement.lang : '';
+  const lc: 'zh-TW' | 'en' | 'ja' =
+    docLang === 'ja' ? 'ja' : docLang === 'en' ? 'en' : 'zh-TW';
+
+  let nr = 0;
+  try {
+    if (window.sessionStorage.getItem('capbb_meta_logged') === '1') {
+      nr = 1;
+    } else {
+      window.sessionStorage.setItem('capbb_meta_logged', '1');
+    }
+  } catch {
+    // ignore storage errors
+  }
+
+  return { dv, os, br, in: inp, or, pw, lc, ...(nr ? { nr: 1 } : {}) };
+}
 
 export type OnlineMode = 'quick3' | 'official6';
 export type OnlineSide = 'home' | 'away';
@@ -503,8 +564,8 @@ export class OnlineClient {
         settled = true;
         this.connectPromise = null;
         this.setConnected(true);
-        // Negotiate ultra-compact v2 wire protocol
-        this.sendRaw({ t: 'hi', n: name ?? '', v: 2 });
+        // Negotiate ultra-compact v2 wire protocol (+ one-time zero-PII device profile)
+        this.sendRaw({ t: 'hi', n: name ?? '', v: 2, d: collectCompactDeviceProfile() });
         this.startPingLoop();
         resolve();
       });
@@ -642,7 +703,9 @@ export class OnlineClient {
     targetY: number;
     errorX: number;
     errorY: number;
+    springZone?: SpringZoneWire;
   }): void {
+    const sz = encodeSpringZone(payload.springZone);
     this.sendRaw({
       t: 'ps',
       q: payload.pitchSeq,
@@ -652,6 +715,7 @@ export class OnlineClient {
       y: round3(payload.targetY),
       ex: round3(payload.errorX),
       ey: round3(payload.errorY),
+      ...(sz !== undefined ? { sz } : {}),
     });
   }
 

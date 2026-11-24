@@ -1,14 +1,21 @@
 import fs from 'node:fs';
 
 export const MAX_RETAINED_MATCHES = 5000;
-export const MAX_RETAINED_PITCHES = 50000;
+export const MAX_RETAINED_PITCHES = 25000;
+export const MAX_RETAINED_SESSIONS = 5000;
 export const ANALYTICS_WINDOW_MATCHES = 100;
 export const ANALYTICS_WINDOW_PITCHES = 2000;
+export const ANALYTICS_WINDOW_SESSIONS = 1000;
+
+export const MATCH_LOG_MAX_BYTES = 2_500_000;
+export const PITCH_LOG_MAX_BYTES = 10_000_000;
+export const SESSION_LOG_MAX_BYTES = 1_500_000;
+
+const trimWriteCounters = new Map<string, number>();
 
 /**
  * Rolling disk retention cap: keeps up to `maxLines` in a JSONL file when its size exceeds
- * `byteThreshold` (e.g., ~2.5 MB for matches.jsonl / ~20 MB for pitches.jsonl), preserving
- * thousands of games for balance analysis while bounding Raspberry Pi storage forever.
+ * `byteThreshold`, bounding Raspberry Pi SD card usage forever.
  */
 export async function trimJsonlFileIfNeeded(
   logPath: string,
@@ -26,6 +33,24 @@ export async function trimJsonlFileIfNeeded(
   } catch {
     // ignore missing file or transient IO errors
   }
+}
+
+/**
+ * Throttled trim helper: only stats/trims every `checkEveryNWrites` appends to minimize SD card I/O.
+ */
+export async function maybeTrimJsonlFile(
+  logPath: string,
+  maxLines: number,
+  byteThreshold: number,
+  checkEveryNWrites = 40,
+): Promise<void> {
+  const next = (trimWriteCounters.get(logPath) ?? 0) + 1;
+  if (next < checkEveryNWrites) {
+    trimWriteCounters.set(logPath, next);
+    return;
+  }
+  trimWriteCounters.set(logPath, 0);
+  await trimJsonlFileIfNeeded(logPath, maxLines, byteThreshold);
 }
 
 /**
@@ -77,6 +102,7 @@ interface MatchRecord {
   ts?: string;
   matchId?: string;
   code?: string;
+  status?: 'live' | 'ended';
   roomKind?: 'live' | 'friend';
   mode?: string;
   durationSec?: number;
@@ -85,8 +111,14 @@ interface MatchRecord {
   winner?: 'away' | 'home' | null;
   innings?: number;
   inningsPlayed?: number;
+  half?: 'top' | 'bottom';
+  outs?: number;
   awayName?: string;
   homeName?: string;
+  awayDevice?: 'mobile' | 'tablet' | 'desktop' | null;
+  homeDevice?: 'mobile' | 'tablet' | 'desktop' | null;
+  awayInput?: 'touch' | 'mouse' | null;
+  homeInput?: 'touch' | 'mouse' | null;
   awayRuns?: number;
   homeRuns?: number;
   awayScore?: number;
@@ -112,20 +144,78 @@ interface PitchRecord {
   code?: string;
   roomKind?: 'live' | 'friend';
   event?: 'pitch' | 'ibb' | 'pitch_clock' | 'abs_challenge';
-  pitchId?: 'straight' | 'cutter' | 'fork' | 'changeup' | 'knuckle';
+  pitchId?: 'straight' | 'cutter' | 'fork' | 'changeup' | 'knuckle' | 'shuuto';
   speedKmh?: number;
   breakCm?: number;
+  plateX?: number;
+  plateY?: number;
+  batterHand?: 'L' | 'R';
+  springZone?: 'SOFT' | 'BEST' | 'OVER' | null;
+  pitcherDevice?: 'mobile' | 'tablet' | 'desktop' | null;
+  batterDevice?: 'mobile' | 'tablet' | 'desktop' | null;
+  pitcherInput?: 'touch' | 'mouse' | null;
+  batterInput?: 'touch' | 'mouse' | null;
   trueCall?: 'strike' | 'ball';
   umpireCall?: 'strike' | 'ball';
   swung?: boolean;
   powerSwing?: boolean;
+  dtTiming?: number | null;
   contact?: boolean;
   exitSpeedKmh?: number | null;
   launchAngleDeg?: number | null;
   distanceM?: number | null;
   outcome?: string;
+  catchKind?: 'caught' | 'wild_pitch' | 'passed_ball' | null;
+  droppedThirdStrike?: boolean;
   isFoulFlyOut?: boolean;
+  caughtBy?: 'LF' | 'RF' | 'P' | 'C' | null;
+  bobbledBy?: 'LF' | 'RF' | 'P' | 'C' | null;
+  blockedBy?: 'LF' | 'RF' | 'P' | 'C' | null;
   overturned?: boolean;
+}
+
+interface SessionRecord {
+  ts?: string;
+  device?: 'mobile' | 'tablet' | 'desktop';
+  os?: 'ios' | 'android' | 'macos' | 'windows' | 'linux' | 'other';
+  browser?: 'line' | 'ig' | 'fb' | 'safari' | 'chrome' | 'edge' | 'firefox' | 'other';
+  input?: 'touch' | 'mouse';
+  orient?: 'landscape' | 'portrait';
+  pwa?: boolean;
+  locale?: 'zh-TW' | 'en' | 'ja';
+}
+
+const ALL_PITCH_IDS = ['straight', 'cutter', 'fork', 'changeup', 'knuckle', 'shuuto'] as const;
+
+// Strike zone bounds matching src/rules/field.ts: PLATE_WIDTH = 0.43, STRIKE_ZONE_LO = 0.42, STRIKE_ZONE_HI = 1.02
+const ZONE_HALF_W = 0.215;
+const ZONE_LO = 0.42;
+const ZONE_HI = 1.02;
+
+function classifyZoneCell(plateX: number, plateY: number): number {
+  if (
+    !Number.isFinite(plateX) ||
+    !Number.isFinite(plateY) ||
+    plateX < -ZONE_HALF_W ||
+    plateX > ZONE_HALF_W ||
+    plateY < ZONE_LO ||
+    plateY > ZONE_HI
+  ) {
+    return -1; // outside strike zone
+  }
+  const col = Math.min(2, Math.max(0, Math.floor(((plateX + ZONE_HALF_W) / (ZONE_HALF_W * 2)) * 3)));
+  // row 0 = high, row 1 = mid, row 2 = low
+  const rowFromBottom = Math.min(2, Math.max(0, Math.floor(((plateY - ZONE_LO) / (ZONE_HI - ZONE_LO)) * 3)));
+  const row = 2 - rowFromBottom;
+  return row * 3 + col;
+}
+
+function classifyTimingBucket(dt: number): 'very_early' | 'early' | 'perfect' | 'late' | 'very_late' {
+  if (dt < -0.06) return 'very_early';
+  if (dt < -0.025) return 'early';
+  if (dt <= 0.025) return 'perfect';
+  if (dt <= 0.06) return 'late';
+  return 'very_late';
 }
 
 export function buildAnalyticsReport(
@@ -133,12 +223,17 @@ export function buildAnalyticsReport(
   pitchLogPath: string,
   liveGameplay?: Record<string, unknown>,
   inProgressMatches: MatchRecord[] = [],
+  sessionLogPath?: string,
 ) {
   const matchTail = readJsonlTail<MatchRecord>(matchLogPath, ANALYTICS_WINDOW_MATCHES, 192 * 1024);
-  const pitchTail = readJsonlTail<PitchRecord>(pitchLogPath, ANALYTICS_WINDOW_PITCHES, 1280 * 1024);
+  const pitchTail = readJsonlTail<PitchRecord>(pitchLogPath, ANALYTICS_WINDOW_PITCHES, 1536 * 1024);
+  const sessionTail = sessionLogPath
+    ? readJsonlTail<SessionRecord>(sessionLogPath, ANALYTICS_WINDOW_SESSIONS, 256 * 1024)
+    : { rows: [], fileBytes: 0 };
 
   const matches = matchTail.rows;
   const events = pitchTail.rows;
+  const sessions = sessionTail.rows;
 
   let liveMatches = 0;
   let friendMatches = 0;
@@ -154,6 +249,39 @@ export function buildAnalyticsReport(
   let highInningMatches = 0;
   let extremeRunDiffMatches = 0;
   const reasons: Record<string, number> = {};
+
+  // Cross-platform match win tracking (touch vs mouse)
+  const cpPlatform = {
+    touch: {
+      matches: 0,
+      wins: 0,
+      pitchesThrown: 0,
+      springRecorded: 0,
+      springBest: 0,
+      pitchesFaced: 0,
+      swings: 0,
+      contacts: 0,
+      hits: 0,
+      powerSwings: 0,
+      evSum: 0,
+    },
+    mouse: {
+      matches: 0,
+      wins: 0,
+      pitchesThrown: 0,
+      springRecorded: 0,
+      springBest: 0,
+      pitchesFaced: 0,
+      swings: 0,
+      contacts: 0,
+      hits: 0,
+      powerSwings: 0,
+      evSum: 0,
+    },
+  };
+  let h2hMatches = 0;
+  let h2hTouchWins = 0;
+  let h2hMouseWins = 0;
 
   for (const m of matches) {
     if (m.roomKind === 'friend') friendMatches += 1;
@@ -174,28 +302,91 @@ export function buildAnalyticsReport(
     totalStrikeouts += (Number(m.awayStrikeouts) || 0) + (Number(m.homeStrikeouts) || 0);
     const r = String(m.reason || m.endReason || 'normal');
     reasons[r] = (reasons[r] || 0) + 1;
+
+    const aIn = m.awayInput;
+    const hIn = m.homeInput;
+    if (aIn === 'touch' || aIn === 'mouse') {
+      cpPlatform[aIn].matches += 1;
+      if (m.winner === 'away') cpPlatform[aIn].wins += 1;
+    }
+    if (hIn === 'touch' || hIn === 'mouse') {
+      cpPlatform[hIn].matches += 1;
+      if (m.winner === 'home') cpPlatform[hIn].wins += 1;
+    }
+    if (aIn && hIn && aIn !== hIn && (m.winner === 'away' || m.winner === 'home')) {
+      h2hMatches += 1;
+      const winInput = m.winner === 'away' ? aIn : hIn;
+      if (winInput === 'touch') h2hTouchWins += 1;
+      else h2hMouseWins += 1;
+    }
   }
 
-  const pitchStats: Record<
-    string,
-    {
-      count: number;
-      speedSum: number;
-      breakSum: number;
-      strikes: number;
-      swings: number;
-      whiffs: number;
-      contacts: number;
-      hits: number;
-      outsInPlay: number;
-    }
-  > = {
-    straight: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
-    cutter: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
-    fork: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
-    changeup: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
-    knuckle: { count: 0, speedSum: 0, breakSum: 0, strikes: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0, outsInPlay: 0 },
+  const makePitchBucket = () => ({
+    count: 0,
+    speedSum: 0,
+    breakSum: 0,
+    strikes: 0,
+    swings: 0,
+    whiffs: 0,
+    contacts: 0,
+    hits: 0,
+    outsInPlay: 0,
+  });
+
+  const pitchStats: Record<string, ReturnType<typeof makePitchBucket>> = {
+    straight: makePitchBucket(),
+    cutter: makePitchBucket(),
+    fork: makePitchBucket(),
+    changeup: makePitchBucket(),
+    knuckle: makePitchBucket(),
+    shuuto: makePitchBucket(),
   };
+
+  const makeHandBucket = () => ({ pitches: 0, swings: 0, whiffs: 0, contacts: 0, hits: 0 });
+  const handStats: Record<string, { L: ReturnType<typeof makeHandBucket>; R: ReturnType<typeof makeHandBucket> }> = {
+    straight: { L: makeHandBucket(), R: makeHandBucket() },
+    cutter: { L: makeHandBucket(), R: makeHandBucket() },
+    fork: { L: makeHandBucket(), R: makeHandBucket() },
+    changeup: { L: makeHandBucket(), R: makeHandBucket() },
+    knuckle: { L: makeHandBucket(), R: makeHandBucket() },
+    shuuto: { L: makeHandBucket(), R: makeHandBucket() },
+  };
+
+  const springStats: Record<'SOFT' | 'BEST' | 'OVER', { count: number; speedSum: number; strikes: number }> = {
+    SOFT: { count: 0, speedSum: 0, strikes: 0 },
+    BEST: { count: 0, speedSum: 0, strikes: 0 },
+    OVER: { count: 0, speedSum: 0, strikes: 0 },
+  };
+
+  const timingOrder = ['very_early', 'early', 'perfect', 'late', 'very_late'] as const;
+  const timingLabels: Record<(typeof timingOrder)[number], string> = {
+    very_early: '極早 (< -60ms)',
+    early: '偏早 (-60~-25ms)',
+    perfect: '完美 (±25ms)',
+    late: '偏晚 (+25~+60ms)',
+    very_late: '極晚 (> +60ms)',
+  };
+  const timingStats: Record<(typeof timingOrder)[number], { count: number; contacts: number; hits: number }> = {
+    very_early: { count: 0, contacts: 0, hits: 0 },
+    early: { count: 0, contacts: 0, hits: 0 },
+    perfect: { count: 0, contacts: 0, hits: 0 },
+    late: { count: 0, contacts: 0, hits: 0 },
+    very_late: { count: 0, contacts: 0, hits: 0 },
+  };
+
+  const makeZoneCell = (id: string, row: number, col: number) => ({
+    id,
+    row,
+    col,
+    pitches: 0,
+    swings: 0,
+    contacts: 0,
+    hits: 0,
+    taken: 0,
+    umpireErrors: 0,
+  });
+  const zoneCells = Array.from({ length: 9 }, (_, idx) => makeZoneCell(`z${idx}`, Math.floor(idx / 3), idx % 3));
+  const zoneOutside = makeZoneCell('outside', -1, -1);
 
   let totalThrownPitches = 0;
   let totalSwings = 0;
@@ -210,14 +401,34 @@ export function buildAnalyticsReport(
   let triples = 0;
   let homeRuns = 0;
   let outsInPlay = 0;
-  let ibbCount = 0;
-  let clockViolations = 0;
   let absChallenges = 0;
   let absOverturned = 0;
   let umpireZoneDisagreements = 0;
   let takenPitches = 0;
+  let ibbCount = 0;
+  let clockViolations = 0;
+
+  // Special rules & fielding events
+  let nonContactPitches = 0;
+  let wildPitches = 0;
+  let passedBalls = 0;
+  let droppedThirdStrikes = 0;
+  let airCatches = 0;
+  let fielderBobbles = 0;
+  let groundBlocks = 0;
+  const byFielder: Record<'LF' | 'RF' | 'P' | 'C', { catches: number; blocks: number; bobbles: number }> = {
+    LF: { catches: 0, blocks: 0, bobbles: 0 },
+    RF: { catches: 0, blocks: 0, bobbles: 0 },
+    P: { catches: 0, blocks: 0, bobbles: 0 },
+    C: { catches: 0, blocks: 0, bobbles: 0 },
+  };
 
   for (const ev of events) {
+    if (ev.event === 'abs_challenge') {
+      absChallenges += 1;
+      if (ev.overturned) absOverturned += 1;
+      continue;
+    }
     if (ev.event === 'ibb') {
       ibbCount += 1;
       continue;
@@ -226,73 +437,182 @@ export function buildAnalyticsReport(
       clockViolations += 1;
       continue;
     }
-    if (ev.event === 'abs_challenge') {
-      absChallenges += 1;
-      if (ev.overturned) absOverturned += 1;
-      continue;
-    }
+    if (ev.event && ev.event !== 'pitch') continue;
 
     totalThrownPitches += 1;
     const pid = ev.pitchId && pitchStats[ev.pitchId] ? ev.pitchId : 'straight';
     const ps = pitchStats[pid];
     ps.count += 1;
-    ps.speedSum += Number(ev.speedKmh) || 0;
+    const spd = Number(ev.speedKmh) || 0;
+    ps.speedSum += spd;
     ps.breakSum += Number(ev.breakCm) || 0;
 
-    const out = String(ev.outcome || '');
+    const isHitOutcome = ev.outcome === '1B' || ev.outcome === '2B' || ev.outcome === '3B' || ev.outcome === 'HR';
     const isStrikeOutcome =
       ev.swung ||
-      out === 'STRIKE' ||
-      out === 'SWINGING_STRIKE' ||
-      out === 'FOUL' ||
-      out === 'UNCAUGHT_THIRD_STRIKE' ||
-      ev.umpireCall === 'strike';
+      ev.umpireCall === 'strike' ||
+      ev.outcome === 'STRIKE' ||
+      ev.outcome === 'STRIKEOUT' ||
+      ev.outcome === 'UNCAUGHT_THIRD_STRIKE' ||
+      ev.outcome === 'FOUL';
     if (isStrikeOutcome) ps.strikes += 1;
 
-    if (!ev.swung && ev.trueCall && ev.umpireCall) {
-      takenPitches += 1;
-      if (ev.trueCall !== ev.umpireCall) umpireZoneDisagreements += 1;
+    // Spring zone mechanics
+    if (ev.springZone && springStats[ev.springZone]) {
+      springStats[ev.springZone].count += 1;
+      springStats[ev.springZone].speedSum += spd;
+      if (isStrikeOutcome) springStats[ev.springZone].strikes += 1;
     }
 
-    if (ev.swung) {
+    // Cross-platform pitcher & batter stats
+    if (ev.pitcherInput === 'touch' || ev.pitcherInput === 'mouse') {
+      const cp = cpPlatform[ev.pitcherInput];
+      cp.pitchesThrown += 1;
+      if (ev.springZone) {
+        cp.springRecorded += 1;
+        if (ev.springZone === 'BEST') cp.springBest += 1;
+      }
+    }
+    if (ev.batterInput === 'touch' || ev.batterInput === 'mouse') {
+      const cp = cpPlatform[ev.batterInput];
+      cp.pitchesFaced += 1;
+      if (ev.swung) {
+        cp.swings += 1;
+        if (ev.powerSwing) cp.powerSwings += 1;
+        if (ev.contact) {
+          cp.contacts += 1;
+          cp.evSum += Number(ev.exitSpeedKmh) || 0;
+          if (isHitOutcome) cp.hits += 1;
+        }
+      }
+    }
+
+    // Handedness matchup matrix
+    const hand = ev.batterHand === 'L' || ev.batterHand === 'R' ? ev.batterHand : null;
+    const hs = hand ? handStats[pid][hand] : null;
+    if (hs) hs.pitches += 1;
+
+    // Strike zone 9-cell grid
+    let zCell: ReturnType<typeof makeZoneCell> | null = null;
+    if (typeof ev.plateX === 'number' && typeof ev.plateY === 'number') {
+      const idx = classifyZoneCell(ev.plateX, ev.plateY);
+      zCell = idx >= 0 ? zoneCells[idx] : zoneOutside;
+      zCell.pitches += 1;
+    }
+
+    if (!ev.swung) {
+      takenPitches += 1;
+      if (zCell) zCell.taken += 1;
+      if (ev.trueCall && ev.umpireCall && ev.trueCall !== ev.umpireCall) {
+        umpireZoneDisagreements += 1;
+        if (zCell) zCell.umpireErrors += 1;
+      }
+    } else {
       totalSwings += 1;
       ps.swings += 1;
+      if (hs) hs.swings += 1;
+      if (zCell) zCell.swings += 1;
+
+      if (typeof ev.dtTiming === 'number' && Number.isFinite(ev.dtTiming)) {
+        const tb = timingStats[classifyTimingBucket(ev.dtTiming)];
+        tb.count += 1;
+        if (ev.contact) {
+          tb.contacts += 1;
+          if (isHitOutcome) tb.hits += 1;
+        }
+      }
+
       if (ev.contact) {
         totalContacts += 1;
         ps.contacts += 1;
+        if (hs) hs.contacts += 1;
+        if (zCell) zCell.contacts += 1;
         evSum += Number(ev.exitSpeedKmh) || 0;
         laSum += Number(ev.launchAngleDeg) || 0;
-        if (out === '1B') {
+
+        if (ev.outcome === '1B') {
           singles += 1;
           ps.hits += 1;
-        } else if (out === '2B') {
+          if (hs) hs.hits += 1;
+          if (zCell) zCell.hits += 1;
+        } else if (ev.outcome === '2B') {
           doubles += 1;
           ps.hits += 1;
-        } else if (out === '3B') {
+          if (hs) hs.hits += 1;
+          if (zCell) zCell.hits += 1;
+        } else if (ev.outcome === '3B') {
           triples += 1;
           ps.hits += 1;
-        } else if (out === 'HR') {
+          if (hs) hs.hits += 1;
+          if (zCell) zCell.hits += 1;
+        } else if (ev.outcome === 'HR') {
           homeRuns += 1;
           ps.hits += 1;
-          const d = Number(ev.distanceM) || 0;
-          if (d > maxHrDistM) maxHrDistM = d;
-        } else if (out === 'FOUL') {
+          if (hs) hs.hits += 1;
+          if (zCell) zCell.hits += 1;
+          const dist = Number(ev.distanceM) || 0;
+          if (dist > maxHrDistM) maxHrDistM = dist;
+        } else if (ev.outcome === 'FOUL') {
           foulBalls += 1;
-        } else if (out === 'OUT') {
+        } else if (ev.outcome === 'OUT') {
           outsInPlay += 1;
           ps.outsInPlay += 1;
           if (ev.isFoulFlyOut) foulFlyOuts += 1;
         }
+
+        if (ev.caughtBy && byFielder[ev.caughtBy]) {
+          airCatches += 1;
+          byFielder[ev.caughtBy].catches += 1;
+        }
+        if (ev.bobbledBy && byFielder[ev.bobbledBy]) {
+          fielderBobbles += 1;
+          byFielder[ev.bobbledBy].bobbles += 1;
+        }
+        if (ev.blockedBy && byFielder[ev.blockedBy]) {
+          groundBlocks += 1;
+          byFielder[ev.blockedBy].blocks += 1;
+        }
       } else {
         ps.whiffs += 1;
+        if (hs) hs.whiffs += 1;
       }
     }
+
+    if (!ev.contact) {
+      nonContactPitches += 1;
+      if (ev.catchKind === 'wild_pitch') wildPitches += 1;
+      else if (ev.catchKind === 'passed_ball') passedBalls += 1;
+      if (ev.droppedThirdStrike || ev.outcome === 'UNCAUGHT_THIRD_STRIKE') {
+        droppedThirdStrikes += 1;
+      }
+    }
+  }
+
+  // Device & environment aggregations from sessions.jsonl
+  const byDevice: Record<string, number> = { mobile: 0, tablet: 0, desktop: 0 };
+  const byOs: Record<string, number> = { ios: 0, android: 0, macos: 0, windows: 0, linux: 0, other: 0 };
+  const byBrowser: Record<string, number> = { chrome: 0, safari: 0, line: 0, ig: 0, fb: 0, edge: 0, firefox: 0, other: 0 };
+  const byInput: Record<string, number> = { touch: 0, mouse: 0 };
+  const byOrient: Record<string, number> = { landscape: 0, portrait: 0 };
+  const byLocale: Record<string, number> = { 'zh-TW': 0, en: 0, ja: 0 };
+  let pwaCount = 0;
+
+  for (const s of sessions) {
+    if (s.device && s.device in byDevice) byDevice[s.device] += 1;
+    if (s.os && s.os in byOs) byOs[s.os] += 1;
+    else byOs.other += 1;
+    if (s.browser && s.browser in byBrowser) byBrowser[s.browser] += 1;
+    else byBrowser.other += 1;
+    if (s.input && s.input in byInput) byInput[s.input] += 1;
+    if (s.orient && s.orient in byOrient) byOrient[s.orient] += 1;
+    if (s.locale && s.locale in byLocale) byLocale[s.locale] += 1;
+    if (s.pwa) pwaCount += 1;
   }
 
   const pct = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 1000) / 10 : 0);
   const avg = (sum: number, den: number) => (den > 0 ? Math.round((sum / den) * 10) / 10 : 0);
 
-  const pitchRepertoire = (['straight', 'cutter', 'fork', 'changeup', 'knuckle'] as const).map((id) => {
+  const pitchRepertoire = ALL_PITCH_IDS.map((id) => {
     const s = pitchStats[id];
     return {
       pitchId: id,
@@ -307,18 +627,108 @@ export function buildAnalyticsReport(
     };
   });
 
+  const handednessMatrix = ALL_PITCH_IDS.map((id) => {
+    const L = handStats[id].L;
+    const R = handStats[id].R;
+    return {
+      pitchId: id,
+      L: {
+        pitches: L.pitches,
+        swings: L.swings,
+        whiffPct: pct(L.whiffs, L.swings),
+        hitPct: pct(L.hits, L.contacts),
+      },
+      R: {
+        pitches: R.pitches,
+        swings: R.swings,
+        whiffPct: pct(R.whiffs, R.swings),
+        hitPct: pct(R.hits, R.contacts),
+      },
+    };
+  });
+
+  const totalSpringRecorded = springStats.SOFT.count + springStats.BEST.count + springStats.OVER.count;
+  const springSummary = (['SOFT', 'BEST', 'OVER'] as const).map((zone) => {
+    const s = springStats[zone];
+    return {
+      zone,
+      count: s.count,
+      pct: pct(s.count, totalSpringRecorded),
+      avgSpeedKmh: avg(s.speedSum, s.count),
+      strikePct: pct(s.strikes, s.count),
+    };
+  });
+
+  const totalTimingRecorded = timingOrder.reduce((acc, k) => acc + timingStats[k].count, 0);
+  const timingSummary = timingOrder.map((bucket) => {
+    const t = timingStats[bucket];
+    return {
+      bucket,
+      label: timingLabels[bucket],
+      count: t.count,
+      pct: pct(t.count, totalTimingRecorded),
+      contactPct: pct(t.contacts, t.count),
+      hitPct: pct(t.hits, t.contacts),
+    };
+  });
+
+  const totalZonePitches = zoneCells.reduce((acc, c) => acc + c.pitches, 0) + zoneOutside.pitches;
+  const formatZoneCell = (c: ReturnType<typeof makeZoneCell>) => ({
+    id: c.id,
+    row: c.row,
+    col: c.col,
+    pitches: c.pitches,
+    pitchPct: pct(c.pitches, totalZonePitches),
+    swings: c.swings,
+    swingPct: pct(c.swings, c.pitches),
+    contacts: c.contacts,
+    hits: c.hits,
+    hitPct: pct(c.hits, c.contacts),
+    taken: c.taken,
+    umpireErrors: c.umpireErrors,
+    errorPct: pct(c.umpireErrors, c.taken),
+  });
+
+  const formatCp = (p: typeof cpPlatform.touch) => ({
+    matches: p.matches,
+    wins: p.wins,
+    winPct: pct(p.wins, p.matches),
+    pitchesThrown: p.pitchesThrown,
+    bestSpringPct: pct(p.springBest, p.springRecorded),
+    pitchesFaced: p.pitchesFaced,
+    swings: p.swings,
+    swingPct: pct(p.swings, p.pitchesFaced),
+    whiffPct: pct(p.swings - p.contacts, p.swings),
+    contacts: p.contacts,
+    hits: p.hits,
+    hitPct: pct(p.hits, p.contacts),
+    powerSwingPct: pct(p.powerSwings, p.swings),
+    avgExitSpeedKmh: avg(p.evSum, p.contacts),
+  });
+
+  const matchFileKb = Math.round((matchTail.fileBytes / 1024) * 10) / 10;
+  const pitchFileKb = Math.round((pitchTail.fileBytes / 1024) * 10) / 10;
+  const sessionFileKb = Math.round((sessionTail.fileBytes / 1024) * 10) / 10;
+  const totalDiskKb = Math.round((matchFileKb + pitchFileKb + sessionFileKb) * 10) / 10;
+
   return {
     ts: new Date().toISOString(),
     window: {
       maxMatches: ANALYTICS_WINDOW_MATCHES,
       maxPitches: ANALYTICS_WINDOW_PITCHES,
+      maxSessions: ANALYTICS_WINDOW_SESSIONS,
       retainedMaxMatches: MAX_RETAINED_MATCHES,
       retainedMaxPitches: MAX_RETAINED_PITCHES,
+      retainedMaxSessions: MAX_RETAINED_SESSIONS,
       matchesAnalyzed: matches.length,
       eventsAnalyzed: events.length,
       pitchesAnalyzed: totalThrownPitches,
-      matchFileKb: Math.round((matchTail.fileBytes / 1024) * 10) / 10,
-      pitchFileKb: Math.round((pitchTail.fileBytes / 1024) * 10) / 10,
+      sessionsAnalyzed: sessions.length,
+      matchFileKb,
+      pitchFileKb,
+      sessionFileKb,
+      totalDiskKb,
+      maxDiskKb: Math.round((MATCH_LOG_MAX_BYTES + PITCH_LOG_MAX_BYTES + SESSION_LOG_MAX_BYTES) / 1024),
     },
     matchesSummary: {
       total: matches.length,
@@ -368,417 +778,59 @@ export function buildAnalyticsReport(
       },
     },
     pitchRepertoire,
+    handednessMatrix,
+    specialEvents: {
+      nonContactPitches,
+      wildPitches,
+      wildPitchPct: pct(wildPitches, nonContactPitches),
+      passedBalls,
+      passedBallPct: pct(passedBalls, nonContactPitches),
+      droppedThirdStrikes,
+      droppedThirdStrikePct: pct(droppedThirdStrikes, totalThrownPitches),
+      foulFlyOuts,
+      foulFlyOutPct: pct(foulFlyOuts, foulBalls + foulFlyOuts),
+      airCatches,
+      airCatchPct: pct(airCatches, totalContacts),
+      fielderBobbles,
+      fielderBobblePct: pct(fielderBobbles, totalContacts),
+      groundBlocks,
+      groundBlockPct: pct(groundBlocks, totalContacts),
+      byFielder,
+    },
+    mechanics: {
+      springTotal: totalSpringRecorded,
+      spring: springSummary,
+      timingTotal: totalTimingRecorded,
+      timing: timingSummary,
+    },
+    strikeZoneGrid: {
+      totalPitches: totalZonePitches,
+      cells: zoneCells.map(formatZoneCell),
+      outside: formatZoneCell(zoneOutside),
+    },
+    devices: {
+      totalSessions: sessions.length,
+      byDevice,
+      byOs,
+      byBrowser,
+      byInput,
+      byOrient,
+      byLocale,
+      pwaCount,
+      pwaPct: pct(pwaCount, sessions.length),
+    },
+    crossPlatform: {
+      touch: formatCp(cpPlatform.touch),
+      mouse: formatCp(cpPlatform.mouse),
+      headToHead: {
+        totalMatches: h2hMatches,
+        touchWins: h2hTouchWins,
+        mouseWins: h2hMouseWins,
+        touchWinPct: pct(h2hTouchWins, h2hMatches),
+      },
+    },
     gameplay: liveGameplay ?? {},
     liveMatches: inProgressMatches,
     recentMatches: [...matches].reverse(),
   };
 }
-
-export const ANALYTICS_HTML = `<!doctype html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>瓶蓋棒球 · 線上對戰數據分析面板</title>
-  <style>
-    :root {
-      --bg: #070b14;
-      --card: #0e1628;
-      --border: #2a3a5c;
-      --text: #f1f5f9;
-      --muted: #94a3b8;
-      --gold: #f4c41c;
-      --cyan: #38bdf8;
-      --green: #22c55e;
-      --red: #f43f5e;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 16px;
-      background: var(--bg);
-      color: var(--text);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 13px;
-    }
-    header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 12px 16px;
-      background: var(--card);
-      border: 2px solid var(--border);
-      border-top: 3px solid var(--gold);
-      margin-bottom: 14px;
-    }
-    h1 { margin: 0; font-size: 16px; color: var(--gold); letter-spacing: 0.04em; }
-    .nav-links { display: flex; align-items: center; gap: 10px; }
-    .nav-link {
-      color: var(--cyan);
-      text-decoration: none;
-      padding: 4px 10px;
-      border: 1px solid var(--border);
-      background: #0a1020;
-      font-weight: 700;
-    }
-    .nav-link:hover { border-color: var(--cyan); }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-    .card {
-      background: var(--card);
-      border: 2px solid var(--border);
-      padding: 12px 14px;
-    }
-    .card h2 {
-      margin: 0 0 8px;
-      font-size: 12px;
-      color: var(--cyan);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      border-bottom: 1px solid #1e2d4a;
-      padding-bottom: 5px;
-    }
-    .kv { display: flex; justify-content: space-between; padding: 3px 0; }
-    .kv span { color: var(--muted); }
-    .kv strong { color: var(--text); }
-    .table-wrap {
-      overflow-x: auto;
-      margin-bottom: 14px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    th, td {
-      text-align: left;
-      padding: 7px 10px;
-      border-bottom: 1px solid #1e2d4a;
-      white-space: nowrap;
-    }
-    th {
-      color: var(--gold);
-      font-weight: 700;
-      background: #0a1020;
-    }
-    .tag {
-      display: inline-block;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-weight: 700;
-      font-size: 11px;
-    }
-    .tag-live { background: rgba(34, 197, 94, 0.18); color: #86efac; border: 1px solid var(--green); }
-    .tag-friend { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; border: 1px solid var(--cyan); }
-    .tag-playing { background: rgba(244, 196, 28, 0.22); color: var(--gold); border: 1px solid var(--gold); margin-left: 4px; }
-    .meta { color: var(--muted); font-size: 12px; }
-  </style>
-</head>
-<body>
-  <header>
-    <div>
-      <h1>瓶蓋棒球 · 線上對戰數據分析面板</h1>
-      <div class="meta" id="meta-line">載入近期統計資料中...</div>
-    </div>
-    <div class="nav-links">
-      <a class="nav-link" href="./monitor">伺服器監控</a>
-      <a class="nav-link" href="./">返回遊戲</a>
-    </div>
-  </header>
-
-  <div class="grid">
-    <div class="card">
-      <h2>近期對戰總覽（最近 100 場）</h2>
-      <div class="kv"><span>完賽場數（隨機 / 好友 / 再戰）</span><strong id="m-counts">--</strong></div>
-      <div class="kv"><span>勝場分佈（先攻黑 / 後攻黃）</span><strong id="m-wins">--</strong></div>
-      <div class="kv"><span>平均時長 / 場均球數（最高分）</span><strong id="m-dur">--</strong></div>
-      <div class="kv"><span>場均得分 / 安打 / 三振 / 四壞</span><strong id="m-hkb">--</strong></div>
-      <div class="kv"><span>延長賽(8局+) / 大比分差(15+)</span><strong id="m-extreme">--</strong></div>
-    </div>
-
-    <div class="card">
-      <h2>打擊與擊球品質（最近 2,000 球）</h2>
-      <div class="kv"><span>總投球數 / 揮棒數（揮棒率）</span><strong id="b-swings">--</strong></div>
-      <div class="kv"><span>擊中率 / 揮空率</span><strong id="b-contact">--</strong></div>
-      <div class="kv"><span>平均初速 / 仰角 / 最遠全壘打</span><strong id="b-evla">--</strong></div>
-      <div class="kv"><span>一安 / 二安 / 三安 / 全壘打</span><strong id="b-hits">--</strong></div>
-      <div class="kv"><span>場內出局 / 界外 / 界外飛球接殺</span><strong id="b-outs">--</strong></div>
-    </div>
-
-    <div class="card">
-      <h2>勝負判定、規則與 ABS 挑戰</h2>
-      <div class="kv"><span>正常完賽 / 提前結束</span><strong id="r-normal">--</strong></div>
-      <div class="kv"><span>投降 / 斷線 / 超時判負 / 候房逾時</span><strong id="r-early">--</strong></div>
-      <div class="kv"><span>故意四壞 / 投球計時違規</span><strong id="r-ibb-clock">--</strong></div>
-      <div class="kv"><span>ABS 挑戰次數（翻盤率）</span><strong id="r-abs">--</strong></div>
-      <div class="kv"><span>紀錄檔容量（對局 / 投球）</span><strong id="r-disk">--</strong></div>
-    </div>
-
-    <div class="card">
-      <h2>對局同步與異常監測</h2>
-      <div class="kv"><span>進行中對戰 / 等待房 / 最久房齡</span><strong id="a-rooms">--</strong></div>
-      <div class="kv"><span>停滯房(&gt;45秒) / 斷線等待房</span><strong id="a-stalled">--</strong></div>
-      <div class="kv"><span>投球計時超時 / 揮棒同步逾時</span><strong id="a-clocks">--</strong></div>
-      <div class="kv"><span>對戰斷線 / 重連成功 / 失敗</span><strong id="a-reconn">--</strong></div>
-      <div class="kv"><span>過期封包忽略 / 參數修正 / NaN</span><strong id="a-integrity">--</strong></div>
-    </div>
-  </div>
-
-  <div class="card table-wrap">
-    <h2>球種表現分析（最近 2,000 球）</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>球種</th>
-          <th>投球數</th>
-          <th>使用率</th>
-          <th>平均球速</th>
-          <th>平均變化量</th>
-          <th>好球率</th>
-          <th>誘揮率</th>
-          <th>揮空率</th>
-          <th>擊中安打率</th>
-        </tr>
-      </thead>
-      <tbody id="pitch-tbody"></tbody>
-    </table>
-  </div>
-
-  <div class="card table-wrap">
-    <h2>近期線上與好友對戰紀錄（最新 100 場）</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>結束時間</th>
-          <th>類型</th>
-          <th>房號</th>
-          <th>先攻（中正黑）</th>
-          <th>比數</th>
-          <th>後攻（中正黃）</th>
-          <th>局數</th>
-          <th>安打 (黑/黃)</th>
-          <th>三振 (黑/黃)</th>
-          <th>四壞 (黑/黃)</th>
-          <th>總球數</th>
-          <th>時長</th>
-          <th>結束原因</th>
-        </tr>
-      </thead>
-      <tbody id="matches-tbody"></tbody>
-    </table>
-  </div>
-
-  <script src="./analytics.js"></script>
-</body>
-</html>`;
-
-export const ANALYTICS_JS = `(() => {
-  const $ = (id) => document.getElementById(id);
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get('token') || '';
-
-  const PITCH_NAMES = {
-    straight: '直球 (4SFB)',
-    cutter: '卡特 (CUT)',
-    fork: '指叉 (FORK)',
-    changeup: '變速 (CH)',
-    knuckle: '蝴蝶 (KNU)',
-  };
-
-  const REASON_NAMES = {
-    completed: '正常完賽',
-    normal: '正常完賽',
-    mercy: '提前結束',
-    resign: '投降棄權',
-    disconnect: '斷線判負',
-    disconnect_timeout: '斷線判負',
-    pitch_clock: '超時判負',
-    pitch_clock_forfeit: '超時判負',
-    in_progress: '對戰進行中',
-  };
-
-  function fmtTaipei(isoStr, full) {
-    if (typeof isoStr !== 'string' || !isoStr) return '--';
-    const ms = Date.parse(isoStr);
-    if (!Number.isFinite(ms)) return isoStr.replace('T', ' ').slice(5, 19);
-    const tpe = new Date(ms + 8 * 3600 * 1000).toISOString();
-    return full ? tpe.slice(11, 19) : tpe.replace('T', ' ').slice(5, 19);
-  }
-
-  function setText(id, txt) {
-    const el = $(id);
-    if (el) el.textContent = String(txt);
-  }
-
-  function td(text, cls) {
-    const cell = document.createElement('td');
-    if (cls) cell.className = cls;
-    cell.textContent = String(text);
-    return cell;
-  }
-
-  async function poll() {
-    try {
-      const url = new URL('./analytics.json', window.location.href);
-      if (token) url.searchParams.set('token', token);
-      url.searchParams.set('_t', String(Date.now()));
-      const res = await fetch(url.toString(), { cache: 'no-store' });
-      if (!res.ok) {
-        setText('meta-line', '讀取失敗 HTTP ' + res.status + '（若伺服器設有 MONITOR_TOKEN 請於網址加上 ?token=...）');
-        return;
-      }
-      const d = await res.json();
-      const w = d.window;
-      const ms = d.matchesSummary;
-      const bs = d.battingSummary;
-      const out = bs.outcomes;
-      const abs = bs.abs;
-
-      setText(
-        'meta-line',
-        '統計範圍：最近 ' + w.matchesAnalyzed + '/' + w.maxMatches + ' 場已完賽（另即時進行中 ' +
-        (ms.activeLive || 0) + ' 場）、' +
-        w.pitchesAnalyzed + '/' + w.maxPitches + ' 顆投球（保留上限：' +
-        w.retainedMaxMatches + ' 場 / ' + w.retainedMaxPitches + ' 球）· 更新於 ' +
-        fmtTaipei(d.ts, true) + ' (台北時間 UTC+8)'
-      );
-
-      const gp = d.gameplay || {};
-      const rh = gp.roomsHealth || {};
-
-      setText(
-        'm-counts',
-        ms.total + ' 場（隨機 ' + ms.live + ' / 好友 ' + ms.friend + ' / 再戰 ' + (gp.rematchesStarted || 0) + '）'
-      );
-      setText('m-wins', ms.awayWins + ' 勝 / ' + ms.homeWins + ' 勝');
-      setText(
-        'm-dur',
-        ms.avgDurationSec + ' 秒 · ' + (ms.avgPitchesPerMatch || 0) + ' 球（最高 ' + (ms.maxMatchRuns || 0) + ' 分）'
-      );
-      setText(
-        'm-hkb',
-        ms.avgRunsPerMatch + ' 分 / ' + ms.avgHitsPerMatch + ' 安 / ' + ms.avgStrikeoutsPerMatch + ' K / ' + ms.avgWalksPerMatch + ' BB'
-      );
-      setText(
-        'm-extreme',
-        (ms.highInningMatches || 0) + ' 場 / ' + (ms.extremeRunDiffMatches || 0) + ' 場（目前活躍 ' +
-          (rh.highInningRooms || 0) + ' / ' + (rh.extremeRunDiffRooms || 0) + '）'
-      );
-
-      setText('b-swings', bs.totalPitches + ' 球 / ' + bs.swings + ' 揮 (' + bs.swingPct + '%)');
-      setText('b-contact', bs.contactPct + '% / ' + bs.whiffPct + '%');
-      setText('b-evla', bs.avgExitSpeedKmh + ' km/h · ' + bs.avgLaunchAngleDeg + '° · ' + bs.maxHrDistM + 'm');
-      setText('b-hits', out.singles + ' / ' + out.doubles + ' / ' + out.triples + ' / ' + out.homeRuns);
-      setText('b-outs', out.outsInPlay + ' / ' + out.foulBalls + ' / ' + out.foulFlyOuts);
-
-      const rs = ms.reasons || {};
-      setText('r-normal', ((rs.completed || 0) + (rs.normal || 0)) + ' / ' + (rs.mercy || 0));
-      setText(
-        'r-early',
-        (rs.resign || 0) + ' / ' +
-          (rs.disconnect_timeout || rs.disconnect || 0) + ' / ' +
-          (rs.pitch_clock_forfeit || rs.pitch_clock || 0) + ' / ' +
-          (gp.waitingExpired || 0)
-      );
-      setText('r-ibb-clock', out.ibbCount + ' / ' + out.clockViolations);
-      setText('r-abs', abs.challenges + ' 次（翻盤 ' + abs.overturned + ' 次 · ' + abs.overturnPct + '%）');
-      setText('r-disk', w.matchFileKb + ' KB / ' + w.pitchFileKb + ' KB');
-
-      setText(
-        'a-rooms',
-        (rh.startedRooms || 0) + ' 間 / ' + (rh.waitingRooms || 0) + ' 間 / ' + (rh.oldestRoomAgeMin || 0) + ' 分鐘'
-      );
-      setText('a-stalled', (rh.stalledRooms || 0) + ' 間 / ' + (rh.disconnectedRooms || 0) + ' 間');
-      setText('a-clocks', (gp.pitchClockViolations || out.clockViolations || 0) + ' / ' + (gp.swingTimeouts || 0));
-      setText(
-        'a-reconn',
-        (gp.disconnectsInMatch || 0) + ' / ' + (gp.reconnectsSucceeded || 0) + ' / ' + (gp.reconnectsFailed || 0)
-      );
-      setText(
-        'a-integrity',
-        (gp.staleOrOutOfTurnIgnored || 0) + ' / ' + (gp.outOfRangeInputsClamped || 0) + ' / ' + (gp.nanSanityErrors || 0)
-      );
-
-      const ptBody = $('pitch-tbody');
-      ptBody.replaceChildren();
-      for (const p of d.pitchRepertoire || []) {
-        const tr = document.createElement('tr');
-        tr.append(
-          td(PITCH_NAMES[p.pitchId] || p.pitchId),
-          td(p.count),
-          td(p.usagePct + '%'),
-          td(p.avgSpeedKmh + ' km/h'),
-          td(p.avgBreakCm + ' cm'),
-          td(p.strikePct + '%'),
-          td(p.swingPct + '%'),
-          td(p.whiffPct + '%'),
-          td(p.hitPct + '%')
-        );
-        ptBody.appendChild(tr);
-      }
-
-      const mBody = $('matches-tbody');
-      mBody.replaceChildren();
-      const liveList = Array.isArray(d.liveMatches) ? d.liveMatches : [];
-      const recent = [...liveList, ...(d.recentMatches || [])];
-      if (recent.length === 0) {
-        const tr = document.createElement('tr');
-        const cell = td('目前尚無對戰紀錄。');
-        cell.colSpan = 13;
-        tr.appendChild(cell);
-        mBody.appendChild(tr);
-      } else {
-        for (const m of recent) {
-          const tr = document.createElement('tr');
-          const typeTd = document.createElement('td');
-          const badge = document.createElement('span');
-          const isFriend = m.roomKind === 'friend';
-          badge.className = 'tag ' + (isFriend ? 'tag-friend' : 'tag-live');
-          badge.textContent = isFriend ? '好友' : '隨機';
-          typeTd.appendChild(badge);
-          if (m.status === 'live') {
-            const liveBadge = document.createElement('span');
-            liveBadge.className = 'tag tag-playing';
-            liveBadge.textContent = '進行中';
-            typeTd.appendChild(liveBadge);
-          }
-
-          const tsStr = fmtTaipei(m.ts, false);
-          const rKey = m.reason || m.endReason || 'normal';
-          const innLabel =
-            m.status === 'live'
-              ? (m.innings ?? 1) + (m.half === 'bottom' ? '下' : '上') + '·' + (m.outs ?? 0) + '出'
-              : (m.innings ?? m.inningsPlayed ?? '--');
-          tr.append(
-            td(tsStr),
-            typeTd,
-            td(m.code || '--'),
-            td(m.awayName || '--'),
-            td((m.awayRuns ?? m.awayScore ?? 0) + ' - ' + (m.homeRuns ?? m.homeScore ?? 0)),
-            td(m.homeName || '--'),
-            td(innLabel),
-            td((m.awayHits ?? 0) + '/' + (m.homeHits ?? 0)),
-            td((m.awayStrikeouts ?? 0) + '/' + (m.homeStrikeouts ?? 0)),
-            td((m.awayWalks ?? 0) + '/' + (m.homeWalks ?? 0)),
-            td(m.pitches ?? m.totalPitches ?? '--'),
-            td((m.durationSec ?? 0) + '秒'),
-            td(REASON_NAMES[rKey] || rKey)
-          );
-          mBody.appendChild(tr);
-        }
-      }
-    } catch (e) {
-      setText('meta-line', '分析資料讀取錯誤：' + String(e));
-    }
-  }
-
-  poll();
-  setInterval(poll, 5000);
-})();
-`;

@@ -24,7 +24,7 @@ import {
 } from './render/speedRibbon';
 
 const UNIFIED_LOCKED_AERO = {
-  airDensityKgM3: 1.225,
+  airDensityKgM3: 1.204,
   gravityMs2: 9.80665,
   capMassG: 2.2,
   capDiameterMm: 31.0,
@@ -36,9 +36,19 @@ const UNIFIED_LOCKED_AERO = {
   spinDamping: 0.02,
 } as const;
 
+interface AeroSettings {
+  cdProjected: number;
+  clAlphaPerRad: number;
+  magnusCoeff: number;
+  airDensityKgM3: number;
+  capMassG: number;
+  spinDamping: number;
+}
+
 interface LabState {
   presetId: PitchId;
-  aeroProfile: 'unified' | 'game_preset';
+  aeroProfile: 'unified' | 'game_preset' | 'custom';
+  aero: AeroSettings;
   controlMode: 'aim' | 'manual';
   speedKmh: number;
   baseAttitude: BaseAttitude;
@@ -68,11 +78,7 @@ interface LabSimOutput {
   launchElDeg: number;
   isStrike: boolean;
   marginCm: number;
-  activeAero: {
-    cdProjected: number;
-    clAlphaPerRad: number;
-    magnusCoeff: number;
-  };
+  activeAero: AeroSettings;
 }
 
 interface OrbitCamera {
@@ -88,7 +94,18 @@ interface OrbitCamera {
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
 const aeroProfileEl = el<HTMLSelectElement>('aero-profile');
-const lockedAeroGridEl = el<HTMLDivElement>('locked-aero-grid');
+const inAeroBrake = el<HTMLInputElement>('in-aero-brake');
+const valAeroBrake = el<HTMLElement>('val-aero-brake');
+const inAeroGlide = el<HTMLInputElement>('in-aero-glide');
+const valAeroGlide = el<HTMLElement>('val-aero-glide');
+const inAeroSpin = el<HTMLInputElement>('in-aero-spin');
+const valAeroSpin = el<HTMLElement>('val-aero-spin');
+const inAeroAir = el<HTMLInputElement>('in-aero-air');
+const valAeroAir = el<HTMLElement>('val-aero-air');
+const inAeroMass = el<HTMLInputElement>('in-aero-mass');
+const valAeroMass = el<HTMLElement>('val-aero-mass');
+const inAeroRet = el<HTMLInputElement>('in-aero-ret');
+const valAeroRet = el<HTMLElement>('val-aero-ret');
 const telemetryStripEl = el<HTMLDivElement>('telemetry-strip');
 
 const inSpeed = el<HTMLInputElement>('in-speed');
@@ -141,9 +158,32 @@ const ctx = cv3d.getContext('2d')!;
 const presetButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.preset-btn'));
 const camButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.cam-btn[data-cam]'));
 
+function getPresetAero(profile: 'unified' | 'game_preset', presetId: PitchId): AeroSettings {
+  if (profile === 'unified') {
+    return {
+      cdProjected: UNIFIED_LOCKED_AERO.cdProjected,
+      clAlphaPerRad: UNIFIED_LOCKED_AERO.clAlphaPerRad,
+      magnusCoeff: UNIFIED_LOCKED_AERO.magnusCoeff,
+      airDensityKgM3: UNIFIED_LOCKED_AERO.airDensityKgM3,
+      capMassG: UNIFIED_LOCKED_AERO.capMassG,
+      spinDamping: UNIFIED_LOCKED_AERO.spinDamping,
+    };
+  }
+  const base = PITCH_SPECS[presetId];
+  return {
+    cdProjected: base.cdProjected ?? 0.6,
+    clAlphaPerRad: base.clAlphaPerRad ?? 1.4,
+    magnusCoeff: base.magnusCoeff ?? 1.0,
+    airDensityKgM3: base.airDensityKgM3 ?? UNIFIED_LOCKED_AERO.airDensityKgM3,
+    capMassG: base.capMassG ?? UNIFIED_LOCKED_AERO.capMassG,
+    spinDamping: base.spinDamping ?? UNIFIED_LOCKED_AERO.spinDamping,
+  };
+}
+
 const state: LabState = {
   presetId: 'straight',
   aeroProfile: 'game_preset',
+  aero: getPresetAero('game_preset', 'straight'),
   controlMode: 'aim',
   speedKmh: PITCH_SPECS.straight.defaultSpeedKmh,
   baseAttitude: PITCH_SPECS.straight.baseAttitude,
@@ -220,20 +260,8 @@ function setCameraPreset(preset: string): void {
   }
 }
 
-function getActiveAero(): { cdProjected: number; clAlphaPerRad: number; magnusCoeff: number } {
-  if (state.aeroProfile === 'unified') {
-    return {
-      cdProjected: UNIFIED_LOCKED_AERO.cdProjected,
-      clAlphaPerRad: UNIFIED_LOCKED_AERO.clAlphaPerRad,
-      magnusCoeff: UNIFIED_LOCKED_AERO.magnusCoeff,
-    };
-  }
-  const base = PITCH_SPECS[state.presetId];
-  return {
-    cdProjected: base.cdProjected ?? 0.6,
-    clAlphaPerRad: base.clAlphaPerRad ?? 1.4,
-    magnusCoeff: base.magnusCoeff ?? 1.0,
-  };
+function getActiveAero(): AeroSettings {
+  return { ...state.aero };
 }
 
 function buildActiveSpec(): PitchSpec {
@@ -251,6 +279,9 @@ function buildActiveSpec(): PitchSpec {
     cdProjected: aero.cdProjected,
     clAlphaPerRad: aero.clAlphaPerRad,
     magnusCoeff: aero.magnusCoeff,
+    airDensityKgM3: aero.airDensityKgM3,
+    capMassG: aero.capMassG,
+    spinDamping: aero.spinDamping,
     envelope: {
       minFlightZ: 0.02,
       maxFlightZ: 6.0,
@@ -446,27 +477,12 @@ function buildLabSpeedRibbon(): SpeedRibbonData<V3> {
   return { curves: curvesRev };
 }
 
-function renderLockedAeroCards(aero: { cdProjected: number; clAlphaPerRad: number; magnusCoeff: number }): void {
-  const items: [string, string][] = [
-    ['空氣密度 ρ', `${UNIFIED_LOCKED_AERO.airDensityKgM3}`],
-    ['質量 / 直徑', `${UNIFIED_LOCKED_AERO.capMassG}g · ${UNIFIED_LOCKED_AERO.capDiameterMm}mm`],
-    ['阻力 cd', aero.cdProjected.toFixed(2)],
-    ['升力 cl_α', aero.clAlphaPerRad.toFixed(2)],
-    ['馬格努斯', aero.magnusCoeff.toFixed(3)],
-    ['阻尼 / 失速', `${UNIFIED_LOCKED_AERO.spinDamping} · ${UNIFIED_LOCKED_AERO.stallAngleDeg}°`],
-  ];
-  lockedAeroGridEl.replaceChildren(
-    ...items.map(([k, v]) => {
-      const div = document.createElement('div');
-      div.className = 'locked-item';
-      const s = document.createElement('span');
-      s.textContent = k;
-      const b = document.createElement('strong');
-      b.textContent = v;
-      div.append(s, b);
-      return div;
-    }),
-  );
+function spinDampingToRetentionPct(damping: number): number {
+  return Math.max(0, Math.min(100, Math.round((0.1 - damping) * 1000)));
+}
+
+function retentionPctToSpinDamping(pct: number): number {
+  return Math.max(0, Math.min(0.1, Number(((100 - pct) * 0.001).toFixed(3))));
 }
 
 function renderTelemetry(sim: LabSimOutput): void {
@@ -974,6 +990,19 @@ function render3DScene(): void {
 
 function syncInputsFromState(): void {
   aeroProfileEl.value = state.aeroProfile;
+  inAeroBrake.value = state.aero.cdProjected.toFixed(2);
+  valAeroBrake.textContent = state.aero.cdProjected.toFixed(2);
+  inAeroGlide.value = state.aero.clAlphaPerRad.toFixed(2);
+  valAeroGlide.textContent = state.aero.clAlphaPerRad.toFixed(2);
+  inAeroSpin.value = state.aero.magnusCoeff.toFixed(3);
+  valAeroSpin.textContent = state.aero.magnusCoeff.toFixed(3);
+  inAeroAir.value = state.aero.airDensityKgM3.toFixed(2);
+  valAeroAir.textContent = state.aero.airDensityKgM3.toFixed(2);
+  inAeroMass.value = state.aero.capMassG.toFixed(1);
+  valAeroMass.textContent = `${state.aero.capMassG.toFixed(1)} g`;
+  const retPct = spinDampingToRetentionPct(state.aero.spinDamping);
+  inAeroRet.value = String(retPct);
+  valAeroRet.textContent = `${retPct}%`;
   inSpeed.value = String(state.speedKmh);
   valSpeed.textContent = `${state.speedKmh} km/h`;
   inAttitude.value = state.baseAttitude;
@@ -1018,7 +1047,6 @@ function recomputeAndRender(): void {
   currentSim = runLabSimulation();
   currentRibbon = showSpeedRibbon ? buildLabSpeedRibbon() : null;
   syncInputsFromState();
-  renderLockedAeroCards(currentSim.activeAero);
   renderTelemetry(currentSim);
   render3DScene();
 }
@@ -1037,6 +1065,8 @@ function loadPreset(id: PitchId): void {
   state.targetX = 0;
   state.targetY = 0.72;
   state.releasePos = [...(spec.releasePos ?? DEFAULT_RELEASE_POS)];
+  if (state.aeroProfile === 'custom') state.aeroProfile = 'game_preset';
+  state.aero = getPresetAero(state.aeroProfile, id);
   animProgress = 0;
   recomputeAndRender();
 }
@@ -1129,9 +1159,32 @@ btnSpeedRibbon.addEventListener('click', () => {
 });
 
 aeroProfileEl.addEventListener('change', () => {
-  state.aeroProfile = aeroProfileEl.value === 'game_preset' ? 'game_preset' : 'unified';
+  const val = aeroProfileEl.value;
+  if (val === 'unified' || val === 'game_preset') {
+    state.aeroProfile = val;
+    state.aero = getPresetAero(val, state.presetId);
+  } else {
+    state.aeroProfile = 'custom';
+  }
   recomputeAndRender();
 });
+
+const onCustomAeroInput = () => {
+  state.aeroProfile = 'custom';
+  state.aero = {
+    cdProjected: Number(inAeroBrake.value),
+    clAlphaPerRad: Number(inAeroGlide.value),
+    magnusCoeff: Number(inAeroSpin.value),
+    airDensityKgM3: Number(inAeroAir.value),
+    capMassG: Number(inAeroMass.value),
+    spinDamping: retentionPctToSpinDamping(Number(inAeroRet.value)),
+  };
+  recomputeAndRender();
+};
+
+for (const slider of [inAeroBrake, inAeroGlide, inAeroSpin, inAeroAir, inAeroMass, inAeroRet]) {
+  slider.addEventListener('input', onCustomAeroInput);
+}
 
 inSpeed.addEventListener('input', () => {
   state.speedKmh = Number(inSpeed.value);
@@ -1220,7 +1273,16 @@ btnCopyJson.addEventListener('click', async () => {
       rotationSense: state.rotationSense,
       releasePos: state.releasePos,
     },
-    lockedAero: getActiveAero(),
+    environmentAndAero: {
+      profile: state.aeroProfile,
+      airBrakeStrength: Number(state.aero.cdProjected.toFixed(2)),
+      glideTurnForce: Number(state.aero.clAlphaPerRad.toFixed(2)),
+      spinSuctionStrength: Number(state.aero.magnusCoeff.toFixed(3)),
+      airThickness: Number(state.aero.airDensityKgM3.toFixed(2)),
+      capMassG: Number(state.aero.capMassG.toFixed(1)),
+      spinRetentionPct: spinDampingToRetentionPct(state.aero.spinDamping),
+      raw: getActiveAero(),
+    },
     result: currentSim
       ? {
           hitTimeMs: Math.round(currentSim.hitTimeSec * 1000),

@@ -16,7 +16,7 @@ import {
   type V3,
 } from './vector';
 
-export type PitchId = 'straight' | 'cutter' | 'fork' | 'changeup' | 'knuckle';
+export type PitchId = 'straight' | 'cutter' | 'fork' | 'changeup' | 'knuckle' | 'shuuto';
 
 export type BaseAttitude = 'flat' | 'edge_on';
 export type RotationSense = 'clockwise' | 'counterclockwise';
@@ -50,6 +50,9 @@ export interface PitchSpec {
   magnusCoeff?: number;
   magnusMaxCoeff?: number;
   cdProjected?: number;
+  airDensityKgM3?: number;
+  capMassG?: number;
+  spinDamping?: number;
   wake?: {
     force_coefficient: number;
     moment_coefficient: number;
@@ -205,9 +208,35 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     },
     description: 'High-angle 80-deg cap knuckleball with air-wall deceleration and wide lateral S-curve flutter.',
   },
+  shuuto: {
+    id: 'shuuto',
+    code: 'SHU',
+    nameEn: 'Shuuto',
+    baseAttitude: 'flat',
+    bankRightDeg: 70,
+    noseUpDeg: -2,
+    yawLeftDeg: -14,
+    rpm: 2900,
+    spinAxis: 'cap',
+    rotationSense: 'counterclockwise',
+    speedRangeKmh: [62, 73],
+    defaultSpeedKmh: 68,
+    clAlphaPerRad: 1.90,
+    magnusCoeff: 0.06,
+    releasePos: [0.80, -0.36, 1.08],
+    envelope: {
+      minFlightZ: 0.16,
+      maxFlightZ: 2.15,
+      maxAbsFlightY: 1.65,
+      minElevationDeg: -10.0,
+      maxElevationDeg: 14.0,
+      maxAbsAzimuthDeg: 18.0,
+    },
+    description: 'Sidearm-released sharp left-breaking shuuto with wide late horizontal snap.',
+  },
 };
 
-export const PITCH_IDS: PitchId[] = ['straight', 'cutter', 'fork', 'changeup', 'knuckle'];
+export const PITCH_IDS: PitchId[] = ['straight', 'cutter', 'fork', 'changeup', 'knuckle', 'shuuto'];
 
 export const DEFAULT_RELEASE_POS: V3 = [0.35, -0.22, 1.18];
 export const HIT_PLANE_X = 9.0;
@@ -265,14 +294,14 @@ export function buildPitchRawConfig(
     name: spec.id,
     label: 'game',
     cap: {
-      mass_kg: 0.0022,
+      mass_kg: (spec.capMassG ?? 2.2) / 1000,
       outer_diameter_m: 0.031,
       height_m: 0.014,
       surface_orientation: 'body_z_is_top',
       inertia_method: 'thin_walled_cup',
     },
     environment: {
-      air_density_kg_m3: 1.204,
+      air_density_kg_m3: spec.airDensityKgM3 ?? 1.204,
       gravity_m_s2: 9.80665,
     },
     field: {
@@ -315,7 +344,7 @@ export function buildPitchRawConfig(
       moments: {
         cm_pitch0: 0,
         cm_pitch_alpha_per_rad: 0,
-        spin_damping: 0.02,
+        spin_damping: spec.spinDamping ?? 0.02,
         tumble_damping: 0.05,
       },
       ...(enableWake && spec.wake
