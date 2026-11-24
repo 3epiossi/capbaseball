@@ -132,6 +132,7 @@ export function buildAnalyticsReport(
   matchLogPath: string,
   pitchLogPath: string,
   liveGameplay?: Record<string, unknown>,
+  inProgressMatches: MatchRecord[] = [],
 ) {
   const matchTail = readJsonlTail<MatchRecord>(matchLogPath, ANALYTICS_WINDOW_MATCHES, 192 * 1024);
   const pitchTail = readJsonlTail<PitchRecord>(pitchLogPath, ANALYTICS_WINDOW_PITCHES, 1280 * 1024);
@@ -321,6 +322,7 @@ export function buildAnalyticsReport(
     },
     matchesSummary: {
       total: matches.length,
+      activeLive: inProgressMatches.length,
       live: liveMatches,
       friend: friendMatches,
       awayWins,
@@ -367,6 +369,7 @@ export function buildAnalyticsReport(
     },
     pitchRepertoire,
     gameplay: liveGameplay ?? {},
+    liveMatches: inProgressMatches,
     recentMatches: [...matches].reverse(),
   };
 }
@@ -473,6 +476,7 @@ export const ANALYTICS_HTML = `<!doctype html>
     }
     .tag-live { background: rgba(34, 197, 94, 0.18); color: #86efac; border: 1px solid var(--green); }
     .tag-friend { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; border: 1px solid var(--cyan); }
+    .tag-playing { background: rgba(244, 196, 28, 0.22); color: var(--gold); border: 1px solid var(--gold); margin-left: 4px; }
     .meta { color: var(--muted); font-size: 12px; }
   </style>
 </head>
@@ -596,7 +600,16 @@ export const ANALYTICS_JS = `(() => {
     disconnect_timeout: '斷線判負',
     pitch_clock: '超時判負',
     pitch_clock_forfeit: '超時判負',
+    in_progress: '對戰進行中',
   };
+
+  function fmtTaipei(isoStr, full) {
+    if (typeof isoStr !== 'string' || !isoStr) return '--';
+    const ms = Date.parse(isoStr);
+    if (!Number.isFinite(ms)) return isoStr.replace('T', ' ').slice(5, 19);
+    const tpe = new Date(ms + 8 * 3600 * 1000).toISOString();
+    return full ? tpe.slice(11, 19) : tpe.replace('T', ' ').slice(5, 19);
+  }
 
   function setText(id, txt) {
     const el = $(id);
@@ -629,10 +642,11 @@ export const ANALYTICS_JS = `(() => {
 
       setText(
         'meta-line',
-        '統計範圍：最近 ' + w.matchesAnalyzed + '/' + w.maxMatches + ' 場對戰、' +
-        w.pitchesAnalyzed + '/' + w.maxPitches + ' 顆投球（伺服器硬碟保留上限：' +
+        '統計範圍：最近 ' + w.matchesAnalyzed + '/' + w.maxMatches + ' 場已完賽（另即時進行中 ' +
+        (ms.activeLive || 0) + ' 場）、' +
+        w.pitchesAnalyzed + '/' + w.maxPitches + ' 顆投球（保留上限：' +
         w.retainedMaxMatches + ' 場 / ' + w.retainedMaxPitches + ' 球）· 更新於 ' +
-        d.ts.slice(11, 19)
+        fmtTaipei(d.ts, true) + ' (台北時間 UTC+8)'
       );
 
       const gp = d.gameplay || {};
@@ -711,7 +725,8 @@ export const ANALYTICS_JS = `(() => {
 
       const mBody = $('matches-tbody');
       mBody.replaceChildren();
-      const recent = d.recentMatches || [];
+      const liveList = Array.isArray(d.liveMatches) ? d.liveMatches : [];
+      const recent = [...liveList, ...(d.recentMatches || [])];
       if (recent.length === 0) {
         const tr = document.createElement('tr');
         const cell = td('目前尚無對戰紀錄。');
@@ -727,9 +742,19 @@ export const ANALYTICS_JS = `(() => {
           badge.className = 'tag ' + (isFriend ? 'tag-friend' : 'tag-live');
           badge.textContent = isFriend ? '好友' : '隨機';
           typeTd.appendChild(badge);
+          if (m.status === 'live') {
+            const liveBadge = document.createElement('span');
+            liveBadge.className = 'tag tag-playing';
+            liveBadge.textContent = '進行中';
+            typeTd.appendChild(liveBadge);
+          }
 
-          const tsStr = typeof m.ts === 'string' ? m.ts.replace('T', ' ').slice(5, 19) : '--';
+          const tsStr = fmtTaipei(m.ts, false);
           const rKey = m.reason || m.endReason || 'normal';
+          const innLabel =
+            m.status === 'live'
+              ? (m.innings ?? 1) + (m.half === 'bottom' ? '下' : '上') + '·' + (m.outs ?? 0) + '出'
+              : (m.innings ?? m.inningsPlayed ?? '--');
           tr.append(
             td(tsStr),
             typeTd,
@@ -737,7 +762,7 @@ export const ANALYTICS_JS = `(() => {
             td(m.awayName || '--'),
             td((m.awayRuns ?? m.awayScore ?? 0) + ' - ' + (m.homeRuns ?? m.homeScore ?? 0)),
             td(m.homeName || '--'),
-            td(m.innings ?? m.inningsPlayed ?? '--'),
+            td(innLabel),
             td((m.awayHits ?? 0) + '/' + (m.homeHits ?? 0)),
             td((m.awayStrikeouts ?? 0) + '/' + (m.homeStrikeouts ?? 0)),
             td((m.awayWalks ?? 0) + '/' + (m.homeWalks ?? 0)),

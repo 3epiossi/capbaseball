@@ -162,6 +162,7 @@ interface Room {
   pauseTimers: Record<Side, NodeJS.Timeout | null>;
   pauseExpiresAt: Record<Side, number>;
   absWindowUntil: number;
+  gameOverAbsTimer?: NodeJS.Timeout | null;
   lastSpectatorEmoteAt: number;
   players: {
     home: RoomPlayer;
@@ -371,7 +372,7 @@ export function startServer(
   const randomizeFriendSides = opts.randomizeFriendSides ?? true;
   const menuPauseMs = opts.menuPauseMs ?? 20_000;
   const absWindowMs = opts.absWindowMs ?? 2_200;
-  const offerTimeoutMs = opts.offerTimeoutMs ?? 20_000;
+  const offerTimeoutMs = opts.offerTimeoutMs ?? 15_000;
   const maxRooms = opts.maxRooms ?? (Number(process.env.MAX_ROOMS) || 80);
   const maxClients = opts.maxClients ?? (Number(process.env.MAX_CLIENTS) || 500);
   const publicClientCap =
@@ -468,6 +469,7 @@ export function startServer(
     quick3: [],
     official6: [],
   };
+  const STANDBY_OFFER_FANOUT = 5;
   const standbyQueues: Record<OnlineMode, string[]> = {
     quick3: [],
     official6: [],
@@ -481,6 +483,23 @@ export function startServer(
     shown: boolean;
   }
   const pendingOffers = new Map<string, PendingOffer>();
+  /** Tracks sibling offerIds closed when a contender won the race, so late replies still see "taken" */
+  const recentlyTakenOffers = new Map<string, { mode: OnlineMode; takenAtMs: number }>();
+  /** Tracks offerIds cancelled because the waiting player cancelled/disconnected, so late accepts get explicit feedback */
+  const recentlyCancelledOffers = new Map<string, { mode: OnlineMode; atMs: number }>();
+
+  function pruneRecentlyTakenOffers(nowMs = Date.now()) {
+    for (const [id, info] of recentlyTakenOffers.entries()) {
+      if (nowMs - info.takenAtMs > 30_000) {
+        recentlyTakenOffers.delete(id);
+      }
+    }
+    for (const [id, info] of recentlyCancelledOffers.entries()) {
+      if (nowMs - info.atMs > 30_000) {
+        recentlyCancelledOffers.delete(id);
+      }
+    }
+  }
 
   function sampleEventLoopLag(): number {
     const rawP95 = eld.percentile(95);
@@ -927,6 +946,10 @@ export function startServer(
       clearTimeout(room.swingTimer);
       room.swingTimer = null;
     }
+    if (room.gameOverAbsTimer) {
+      clearTimeout(room.gameOverAbsTimer);
+      room.gameOverAbsTimer = null;
+    }
     for (const side of ['home', 'away'] as const) {
       const p = room.players[side];
       if (p?.disconnectTimer) {
@@ -1070,24 +1093,33 @@ export function startServer(
   }
 
   function cancelOffersForClient(clientId: string, reason: string, requeueStandby = true) {
+    let changed = false;
     for (const [offerId, offer] of [...pendingOffers.entries()]) {
       if (offer.waitingClientId === clientId) {
         if (offer.timer) clearTimeout(offer.timer);
         pendingOffers.delete(offerId);
+        changed = true;
+        if (reason === 'taken') {
+          recentlyTakenOffers.set(offerId, { mode: offer.mode, takenAtMs: Date.now() });
+        } else if (reason === 'waiter_cancelled') {
+          recentlyCancelledOffers.set(offerId, { mode: offer.mode, atMs: Date.now() });
+        }
         const sc = clients.get(offer.standbyClientId);
         if (sc && sc.ws.readyState === WebSocket.OPEN) {
           sendJson(sc.ws, { type: 'offer_cancelled', offerId, reason });
           if (requeueStandby && !sc.roomCode && !draining) {
-            enqueueStandby(sc, offer.mode, sc.standbyPriority, true);
+            enqueueStandby(sc, offer.mode, reason === 'taken' ? true : sc.standbyPriority, true);
           }
         }
       } else if (offer.standbyClientId === clientId) {
         if (offer.timer) clearTimeout(offer.timer);
         pendingOffers.delete(offerId);
+        changed = true;
         const mode = offer.mode;
         tryOfferToStandby(mode);
       }
     }
+    if (changed) scheduleStatsBroadcast();
   }
 
   function removeFromQueues(clientId: string) {
@@ -1098,7 +1130,7 @@ export function startServer(
     const c = clients.get(clientId);
     if (c) c.queuedMode = null;
     removeFromStandby(clientId);
-    cancelOffersForClient(clientId, 'expired', true);
+    cancelOffersForClient(clientId, 'waiter_cancelled', true);
   }
 
   /**
@@ -1157,6 +1189,7 @@ export function startServer(
       pitchSeq: room.pitchSeq,
       turnState: room.turnState,
       batterSide: getCurrentBatterSide(room),
+      batterSides: room.batterSides,
       match: room.match,
       names: {
         home: room.players.home.name,
@@ -1293,16 +1326,24 @@ export function startServer(
         preSnapshot: preSnap,
         caughtByCatcher,
         reachesPassLine: effectiveReachesPassLine,
+        catchKind: catchRes.kind,
       });
 
       outcomeStr = res.call;
+      const isBB = !res.isStrike && room.match.balls === 0 && room.match.lastEvent.includes('walks');
       if (res.call === 'UNCAUGHT_THIRD_STRIKE') {
         callout = { title: 'UNCAUGHT 3RD', subtitle: 'DROPPED 3RD · BATTER TO 1B', color: '#f97316', ttl: 1.7 };
       } else if (res.isWildPitch) {
         const isPb = catchRes.kind === 'passed_ball';
-        callout = isPb
-          ? { title: 'PASSED BALL', subtitle: 'PASSED BALL · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 }
-          : { title: 'WILD PITCH', subtitle: 'WILD PITCH · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 };
+        if (isBB) {
+          callout = isPb
+            ? { title: 'WALK + PASSED BALL', subtitle: 'PASSED BALL · WALK + RUNNERS ADVANCE', color: '#f97316', ttl: 1.7 }
+            : { title: 'WALK + WILD PITCH', subtitle: 'WILD PITCH · WALK + RUNNERS ADVANCE', color: '#f97316', ttl: 1.7 };
+        } else {
+          callout = isPb
+            ? { title: 'PASSED BALL', subtitle: 'PASSED BALL · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 }
+            : { title: 'WILD PITCH', subtitle: 'WILD PITCH · RUNNERS ADVANCE', color: '#f97316', ttl: 1.5 };
+        }
       } else if (res.isStrike) {
         const isK = room.match.strikes === 0 && room.match.lastEvent.includes('strikes out');
         callout = {
@@ -1312,7 +1353,6 @@ export function startServer(
           ttl: 1.25,
         };
       } else {
-        const isBB = room.match.balls === 0 && room.match.lastEvent.includes('walks');
         callout = {
           title: isBB ? 'WALK (BB)' : 'BALL',
           subtitle: isBB ? 'BASE ON BALLS' : 'OUTSIDE ZONE',
@@ -1420,17 +1460,38 @@ export function startServer(
         match: room.match,
       });
       if (inningChanged && !room.match.isGameOver) {
-        sendToRoom(room, { type: 'batter_side', side: getCurrentBatterSide(room) });
+        sendToRoom(room, {
+          type: 'batter_side',
+          side: getCurrentBatterSide(room),
+          team: getBattingSide(room.match),
+        });
       }
 
+    const lc = room.match.lastChallenge;
+    const absEligible =
+      !swung &&
+      Boolean(lc && !lc.challenged && room.match.absChallenges[lc.eligibleSide] > 0);
     if (room.match.isGameOver) {
-      room.absWindowUntil = 0;
-      recordMatchEnd(room, 'completed');
+      if (room.gameOverAbsTimer) {
+        clearTimeout(room.gameOverAbsTimer);
+        room.gameOverAbsTimer = null;
+      }
+      if (absEligible && absWindowMs > 0) {
+        // Hold final match recording briefly so the losing/affected side can ABS-challenge the game-ending call!
+        const holdMs = Math.max(400, Math.round((absWindowMs + 1500) * (pitchClockScale > 0 ? Math.min(1, pitchClockScale) : 1)));
+        room.absWindowUntil = Date.now() + holdMs;
+        room.gameOverAbsTimer = setTimeout(() => {
+          room.gameOverAbsTimer = null;
+          if (rooms.get(room.code) === room && room.match.isGameOver && !room.recorded) {
+            room.absWindowUntil = 0;
+            recordMatchEnd(room, 'completed');
+          }
+        }, holdMs);
+      } else {
+        room.absWindowUntil = 0;
+        recordMatchEnd(room, 'completed');
+      }
     } else {
-      const lc = room.match.lastChallenge;
-      const absEligible =
-        !swung &&
-        Boolean(lc && !lc.challenged && room.match.absChallenges[lc.eligibleSide] > 0);
       room.absWindowUntil =
         absEligible && absWindowMs > 0
           ? Date.now() + Math.round(absWindowMs * (pitchClockScale > 0 ? Math.min(1, pitchClockScale) : 1))
@@ -1461,6 +1522,10 @@ export function startServer(
     if (room.swingTimer) {
       clearTimeout(room.swingTimer);
       room.swingTimer = null;
+    }
+    if (room.gameOverAbsTimer) {
+      clearTimeout(room.gameOverAbsTimer);
+      room.gameOverAbsTimer = null;
     }
 
     if (!swung || !swingData) {
@@ -1723,6 +1788,7 @@ export function startServer(
         pitchSeq: room.pitchSeq,
         turnState: room.turnState,
         batterSide: getCurrentBatterSide(room),
+        batterSides: room.batterSides,
         match: room.match,
         names,
         spectators: room.spectators.size,
@@ -1811,29 +1877,33 @@ export function startServer(
         removeFromStandby(sc.id);
         sendJson(sc.ws, { type: 'offer_cancelled', offerId: offer.offerId, reason: 'timeout' });
       }
+      scheduleStatsBroadcast();
       tryOfferToStandby(offer.mode);
     }, ms);
   }
 
   function tryOfferToStandby(mode: OnlineMode) {
     if (draining) return;
+    pruneRecentlyTakenOffers();
     const q = queues[mode];
     const sq = standbyQueues[mode];
     if (q.length === 0 || sq.length === 0) return;
 
-    const busyWaiting = new Set<string>();
+    const offersPerWaiter = new Map<string, number>();
     const busyStandby = new Set<string>();
     for (const o of pendingOffers.values()) {
-      busyWaiting.add(o.waitingClientId);
+      offersPerWaiter.set(o.waitingClientId, (offersPerWaiter.get(o.waitingClientId) ?? 0) + 1);
       busyStandby.add(o.standbyClientId);
     }
 
+    let sentAny = false;
     for (const waitingId of q) {
-      if (busyWaiting.has(waitingId)) continue;
+      let openCount = offersPerWaiter.get(waitingId) ?? 0;
+      if (openCount >= STANDBY_OFFER_FANOUT) continue;
       const wc = clients.get(waitingId);
       if (!wc || wc.ws.readyState !== WebSocket.OPEN || wc.roomCode) continue;
 
-      while (sq.length > 0) {
+      while (sq.length > 0 && openCount < STANDBY_OFFER_FANOUT) {
         const standbyId = sq.shift()!;
         if (standbyId === waitingId || busyStandby.has(standbyId)) continue;
         const sc = clients.get(standbyId);
@@ -1852,8 +1922,10 @@ export function startServer(
           shown: false,
         };
         pendingOffers.set(offerId, offer);
-        busyWaiting.add(wc.id);
         busyStandby.add(sc.id);
+        openCount += 1;
+        offersPerWaiter.set(wc.id, openCount);
+        sentAny = true;
         // Delivery cushion until client finishes current pitch and reports `offer_shown`
         armOfferTimer(offer, offerTimeoutMs + 12_000);
         sendJson(sc.ws, {
@@ -1863,9 +1935,9 @@ export function startServer(
           mode,
           timeoutSec: Math.max(1, Math.round(offerTimeoutMs / 1000)),
         });
-        break;
       }
     }
+    if (sentAny) scheduleStatsBroadcast();
   }
 
   function tryPairQueue(mode: OnlineMode) {
@@ -2063,10 +2135,37 @@ export function startServer(
         }
       }
       const monReport = monitor.buildReport(buildMonitorSnapshot());
+      const nowMs = Date.now();
+      const liveMatches = Array.from(rooms.values())
+        .filter((rm) => rm.players.away && rm.turnState !== 'game_over')
+        .sort((a, b) => (b.startedAtMs ?? b.createdAt) - (a.startedAtMs ?? a.createdAt))
+        .map((rm) => ({
+          ts: new Date(rm.startedAtMs ?? rm.createdAt).toISOString(),
+          status: 'live',
+          code: rm.code,
+          roomKind: rm.isMatchmaking ? ('live' as const) : ('friend' as const),
+          awayName: rm.match.away.name,
+          homeName: rm.match.home.name,
+          awayRuns: rm.match.away.totalRuns,
+          homeRuns: rm.match.home.totalRuns,
+          innings: rm.match.inning,
+          half: rm.match.half,
+          outs: rm.match.outs,
+          awayHits: rm.match.away.hits,
+          homeHits: rm.match.home.hits,
+          awayStrikeouts: rm.match.away.strikeouts,
+          homeStrikeouts: rm.match.home.strikeouts,
+          awayWalks: rm.match.away.walks,
+          homeWalks: rm.match.home.walks,
+          pitches: rm.match.stats.totalPitches,
+          durationSec: Math.max(0, Math.round((nowMs - (rm.startedAtMs ?? rm.createdAt)) / 1000)),
+          reason: 'in_progress',
+        }));
       const report = buildAnalyticsReport(
         getMatchLogPath(opts.matchLogPath),
         getPitchLogPath(opts.pitchLogPath),
         monReport.gameplay,
+        liveMatches,
       );
       const payload = JSON.stringify(report);
       const bytes = req.method === 'HEAD' ? 0 : Buffer.byteLength(payload, 'utf8');
@@ -2351,6 +2450,7 @@ export function startServer(
           const priority = Boolean(msg.priority);
           removeFromQueues(clientId);
           enqueueStandby(client, mode, priority, false);
+          scheduleStatsBroadcast();
           tryOfferToStandby(mode);
           break;
         }
@@ -2358,6 +2458,7 @@ export function startServer(
         case 'standby_leave': {
           removeFromStandby(clientId);
           cancelOffersForClient(clientId, 'declined', false);
+          scheduleStatsBroadcast();
           break;
         }
 
@@ -2381,25 +2482,54 @@ export function startServer(
         case 'offer_reply': {
           const offerId = typeof msg.offerId === 'string' ? msg.offerId : '';
           const offer = pendingOffers.get(offerId);
-          if (!offer || offer.standbyClientId !== clientId) return;
+          if (!offer || offer.standbyClientId !== clientId) {
+            if (msg.accept) {
+              pruneRecentlyTakenOffers();
+              const takenInfo = recentlyTakenOffers.get(offerId);
+              if (takenInfo) {
+                recentlyTakenOffers.delete(offerId);
+                if (!draining && !client.roomCode) {
+                  enqueueStandby(client, takenInfo.mode, true, true);
+                  scheduleStatsBroadcast();
+                }
+                sendJson(ws, { type: 'offer_cancelled', offerId, reason: 'taken' });
+                return;
+              }
+              const cancelledInfo = recentlyCancelledOffers.get(offerId);
+              if (cancelledInfo) {
+                recentlyCancelledOffers.delete(offerId);
+                if (!draining && !client.roomCode) {
+                  enqueueStandby(client, cancelledInfo.mode, client.standbyPriority, true);
+                  scheduleStatsBroadcast();
+                }
+                sendJson(ws, { type: 'offer_cancelled', offerId, reason: 'waiter_cancelled' });
+              }
+            }
+            return;
+          }
           if (offer.timer) clearTimeout(offer.timer);
           pendingOffers.delete(offerId);
 
           if (!msg.accept) {
             removeFromStandby(clientId);
+            scheduleStatsBroadcast();
             tryOfferToStandby(offer.mode);
             break;
           }
 
           if (draining || client.roomCode) {
             sendJson(ws, { type: 'offer_cancelled', offerId, reason: 'expired' });
+            scheduleStatsBroadcast();
             break;
           }
           const wc = clients.get(offer.waitingClientId);
           if (!wc || wc.ws.readyState !== WebSocket.OPEN || wc.roomCode || wc.queuedMode !== offer.mode) {
             sendJson(ws, { type: 'offer_cancelled', offerId, reason: 'expired' });
+            scheduleStatsBroadcast();
             break;
           }
+          // Winner claimed this waiting opponent: notify sibling contenders with reason 'taken' and preserve priority!
+          cancelOffersForClient(wc.id, 'taken', true);
           createMatchmakingRoom(offer.mode, wc, client);
           break;
         }
@@ -2787,9 +2917,7 @@ export function startServer(
           if (!room || room.turnState === 'game_over') return;
           const sideVal = msg.side === 'L' || msg.side === 'left' ? 'L' : 'R';
           room.batterSides[client.side] = sideVal;
-          if (client.side === getBattingSide(room.match)) {
-            sendToRoom(room, { type: 'batter_side', side: sideVal });
-          }
+          sendToRoom(room, { type: 'batter_side', side: sideVal, team: client.side });
           break;
         }
 
@@ -3092,6 +3220,7 @@ export function startServer(
             pitchSeq: room.pitchSeq,
             turnState: room.turnState,
             batterSide: getCurrentBatterSide(room),
+            batterSides: room.batterSides,
             activePitch: room.activePitch
               ? {
                   pitchSeq: room.activePitch.pitchSeq,
@@ -3128,7 +3257,14 @@ export function startServer(
         case 'abs_challenge': {
           if (!client.roomCode || !client.side) return;
           const room = rooms.get(client.roomCode);
-          if (!room || room.turnState !== 'awaiting_pitch') {
+          const allowGameOverAbs = Boolean(
+            room &&
+              room.turnState === 'game_over' &&
+              !room.recorded &&
+              room.match.lastChallenge &&
+              !room.match.lastChallenge.challenged,
+          );
+          if (!room || (room.turnState !== 'awaiting_pitch' && !allowGameOverAbs)) {
             if (room && room.turnState !== 'game_over') monitor.staleOrOutOfTurnIgnored += 1;
             return;
           }
@@ -3139,6 +3275,10 @@ export function startServer(
           ) {
             monitor.staleOrOutOfTurnIgnored += 1;
             return;
+          }
+          if (room.gameOverAbsTimer) {
+            clearTimeout(room.gameOverAbsTimer);
+            room.gameOverAbsTimer = null;
           }
           const prevAbsHalf = room.match.half;
           const res = applyAbsChallenge(room.match, client.side);
@@ -3172,11 +3312,17 @@ export function startServer(
             plateX: res.plateX,
             plateY: res.plateY,
             challengerSide: res.challengerSide,
+            outcome: res.outcome,
+            wildKind: res.wildKind,
             match: room.match,
             pitchSeq: room.pitchSeq,
           });
           if (room.match.half !== prevAbsHalf && !room.match.isGameOver) {
-            sendToRoom(room, { type: 'batter_side', side: getCurrentBatterSide(room) });
+            sendToRoom(room, {
+              type: 'batter_side',
+              side: getCurrentBatterSide(room),
+              team: getBattingSide(room.match),
+            });
           }
           if (room.match.isGameOver) {
             clearPitchClock(room);
@@ -3237,7 +3383,7 @@ export function startServer(
             type: 'emote',
             side: senderSide,
             id: emoteId,
-            ...(senderSide === 'spectator' ? { senderName: client.name } : {}),
+            senderName: client.name,
           });
           break;
         }

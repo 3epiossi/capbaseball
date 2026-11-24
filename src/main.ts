@@ -100,6 +100,7 @@ import {
   getFieldingTeam,
   getPitchClockSeconds,
   recordChallengeableCall,
+  type AbsOutcomeKind,
   type GameMode,
   type MatchState,
   type PlayerSlot,
@@ -270,7 +271,11 @@ type PresentationStep =
     }
   | { kind: 'big_hit'; title: string; sub: string; isWalkOff: boolean; started?: boolean }
   | { kind: 'strikeout'; batterName: string; started?: boolean }
-  | { kind: 'inning_change'; inning: number; half: 'top' | 'bottom'; awayRuns: number; homeRuns: number; started?: boolean }
+  | { kind: 'wild_play'; badge: string; title: string; sub: string; started?: boolean }
+  | { kind: 'walk'; badge: string; title: string; sub: string; started?: boolean }
+  | { kind: 'overturned_continue'; badge: string; title: string; sub: string; started?: boolean }
+  | { kind: 'inning_change'; inning: number; half: 'top' | 'bottom'; awayRuns: number; homeRuns: number; isTieBreaker?: boolean; started?: boolean }
+  | { kind: 'game_set'; title: string; scoreLine: string; isColdGame: boolean; started?: boolean }
   | { kind: 'game_over' }
   | { kind: 'next_batter'; orderNum: number; batterName: string };
 
@@ -441,17 +446,76 @@ function stepPresentationQueue(rawDt: number): void {
       }
       break;
     }
+    if (head.kind === 'wild_play') {
+      if (!head.started) {
+        head.started = true;
+        transitionDirector.playWildPlay(head.badge, head.title, head.sub);
+        changed = true;
+      }
+      if (!transitionDirector.isActive()) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'walk') {
+      if (!head.started) {
+        head.started = true;
+        transitionDirector.playWalk(head.badge, head.title, head.sub);
+        changed = true;
+      }
+      if (!transitionDirector.isActive()) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'overturned_continue') {
+      if (!head.started) {
+        head.started = true;
+        transitionDirector.playOverturnedContinue(head.badge, head.title, head.sub);
+        changed = true;
+      }
+      if (!transitionDirector.isActive()) {
+        presentationQueue.shift();
+        changed = true;
+        continue;
+      }
+      break;
+    }
     if (head.kind === 'inning_change') {
       if (!head.started) {
         head.started = true;
         sfx.playInningChange();
-        transitionDirector.playInningChange(head.inning, head.half, head.awayRuns, head.homeRuns);
+        transitionDirector.playInningChange(
+          head.inning,
+          head.half,
+          head.awayRuns,
+          head.homeRuns,
+          Boolean(head.isTieBreaker),
+        );
         changed = true;
       }
       if (!transitionDirector.isActive()) {
         presentationQueue.shift();
         visualInning = head.inning;
         visualHalf = head.half;
+        syncVisualBatterHandedness();
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (head.kind === 'game_set') {
+      if (!head.started) {
+        head.started = true;
+        transitionDirector.playGameSet(head.title, head.scoreLine, head.isColdGame);
+        changed = true;
+      }
+      if (!transitionDirector.isActive()) {
+        presentationQueue.shift();
         changed = true;
         continue;
       }
@@ -477,6 +541,7 @@ function stepPresentationQueue(rawDt: number): void {
   ) {
     visualInning = match.inning;
     visualHalf = match.half;
+    syncVisualBatterHandedness();
     changed = true;
   }
   if (changed) {
@@ -626,6 +691,7 @@ function applyLocaleToDom(): void {
   transitionDirector.setLabels({
     playBall: t('transPlayBall'),
     changeSides: t('transChangeSides'),
+    tieBreakerBadge: t('transTieBreaker'),
     out: t('transOut'),
     strikeOut: t('callStrikeOut'),
     walkOffBadge: t('transWalkOff'),
@@ -831,7 +897,174 @@ let lastPreviewPitchId: PitchId | null = null;
 let batCursor = { x: 0, y: 0.72 };
 let batterHandedness: 'left' | 'right' = 'left';
 let myBatterHandedness: 'left' | 'right' = 'left';
+let teamBatterHandedness: Record<'away' | 'home', 'left' | 'right'> = { away: 'left', home: 'left' };
 let powerSwing = false;
+
+function syncVisualBatterHandedness(): void {
+  if (isOnline || spectating) {
+    const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
+    batterHandedness = teamBatterHandedness[activeVisualSide];
+  } else {
+    const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
+    batterHandedness = teamBatterHandedness[activeVisualSide];
+  }
+}
+
+const wildCapRoll = {
+  active: false,
+  elapsedSec: 0,
+  durationSec: 1.15,
+  pos: [0, 0.2, 0.4] as [number, number, number],
+  vel: [1.6, 1.4, 0.9] as [number, number, number],
+  bounces: 0,
+};
+
+function startWildCapVisuals(plateX: number, plateY: number, isUncaughtThird: boolean, isPassedBall: boolean): void {
+  catcherReturn.active = false;
+  // Never teleport a cap backward to z=0.28m once the pitched trajectory has already sailed past home plate / off-screen!
+  if (!capVisible || capPos[2] > 1.25) {
+    wildCapRoll.active = false;
+    capVisible = false;
+    capTrail = [];
+    return;
+  }
+  wildCapRoll.active = true;
+  wildCapRoll.elapsedSec = 0;
+  wildCapRoll.durationSec = isUncaughtThird ? 1.15 : 0.95;
+  wildCapRoll.bounces = 0;
+  const sideDir = Math.abs(plateX) > 0.08 ? Math.sign(plateX) : (isPassedBall ? -1 : 1);
+  wildCapRoll.pos = [capPos[0], Math.max(0.04, capPos[1]), capPos[2]];
+  // Continue seamlessly forward & downward onto visible foreground floor (zero backward jump)
+  wildCapRoll.vel = [
+    sideDir * (1.05 + Math.min(0.65, Math.abs(plateX))),
+    plateY < 0.22 ? 1.4 : -1.5,
+    0.55,
+  ];
+  capVisible = true;
+}
+
+function enqueueWildPlayBanner(
+  kind: 'uncaught_3rd' | 'wild_pitch' | 'passed_ball',
+  batterName: string,
+  customSub?: string,
+): void {
+  if (match.isGameOver) return;
+  if (kind === 'uncaught_3rd') {
+    presentationQueue.push({
+      kind: 'wild_play',
+      badge: t('transWildPlay'),
+      title: t('callUncaught3rd'),
+      sub: customSub ?? `${batterName} · ${t('callDropped3rd')}`,
+    });
+  } else if (kind === 'passed_ball') {
+    presentationQueue.push({
+      kind: 'wild_play',
+      badge: t('transWildPlay'),
+      title: t('callPassedBall'),
+      sub: customSub ?? t('callPassedBallSub'),
+    });
+  } else {
+    presentationQueue.push({
+      kind: 'wild_play',
+      badge: t('transWildPlay'),
+      title: t('callWildPitch'),
+      sub: customSub ?? t('callWildPitchSub'),
+    });
+  }
+}
+
+function enqueueGameOverPresentation(walkOffSub?: string): void {
+  if (match.mercyTriggered) {
+    const winTeam = match.winner === 'away' ? match.away.name : match.home.name;
+    presentationQueue.push({
+      kind: 'game_set',
+      title: winTeam,
+      scoreLine: `${match.away.totalRuns} — ${match.home.totalRuns}`,
+      isColdGame: true,
+    });
+  } else if (walkOffSub) {
+    presentationQueue.push({
+      kind: 'big_hit',
+      title: t('callWalkOff'),
+      sub: walkOffSub,
+      isWalkOff: true,
+    });
+  }
+  presentationQueue.push({ kind: 'game_over' });
+}
+
+function enqueuePostAbsOutcome(opts: {
+  overturned: boolean;
+  outcome: AbsOutcomeKind;
+  wildKind: 'wild_pitch' | 'passed_ball' | null;
+  prevBatterIdx: number;
+  prevBatterName: string;
+}): void {
+  const { overturned, outcome, wildKind, prevBatterIdx, prevBatterName } = opts;
+  let walkOffSub: string | undefined;
+
+  if (outcome === 'UNCAUGHT_THIRD_STRIKE') {
+    if (match.isGameOver && !match.mercyTriggered) {
+      walkOffSub = `${prevBatterName} · ${t('callUncaught3rd')}`;
+    } else {
+      enqueueWildPlayBanner('uncaught_3rd', prevBatterName);
+    }
+  } else if (outcome === 'STRIKEOUT') {
+    if (!match.isGameOver) {
+      presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
+    }
+  } else if (outcome === 'WALK') {
+    if (match.isGameOver && !match.mercyTriggered) {
+      walkOffSub = wildKind ? t('callAbsWalkWildSub') : `${prevBatterName} · ${t('callWalk')}`;
+    } else if (!match.isGameOver) {
+      presentationQueue.push({
+        kind: 'walk',
+        badge: t('transWalkBadge'),
+        title: t('callWalk'),
+        sub: wildKind ? t('callAbsWalkWildSub') : `${prevBatterName} · ${t('callBaseOnBalls')}`,
+      });
+    }
+  } else if (outcome === 'PASSED_BALL') {
+    if (match.isGameOver && !match.mercyTriggered) {
+      walkOffSub = overturned ? t('callAbsPassedBallSub') : t('callPassedBall');
+    } else {
+      enqueueWildPlayBanner('passed_ball', prevBatterName, overturned ? t('callAbsPassedBallSub') : undefined);
+    }
+  } else if (outcome === 'WILD_PITCH') {
+    if (match.isGameOver && !match.mercyTriggered) {
+      walkOffSub = overturned ? t('callAbsWildPitchSub') : t('callWildPitch');
+    } else {
+      enqueueWildPlayBanner('wild_pitch', prevBatterName, overturned ? t('callAbsWildPitchSub') : undefined);
+    }
+  } else if (outcome === 'OUT_OVERTURNED' && !match.isGameOver) {
+    presentationQueue.push({
+      kind: 'overturned_continue',
+      badge: t('transOverturnBadge'),
+      title: t('callOverturnedContinueTitle'),
+      sub: t('callOverturnedContinueSub'),
+    });
+  }
+
+  const inningChanged = match.inning !== visualInning || match.half !== visualHalf;
+  if (inningChanged && !match.isGameOver) {
+    presentationQueue.push({
+      kind: 'inning_change',
+      inning: match.inning,
+      half: match.half,
+      awayRuns: match.away.totalRuns,
+      homeRuns: match.home.totalRuns,
+      isTieBreaker: match.inning > match.regulationInnings,
+    });
+  } else if (match.isGameOver) {
+    enqueueGameOverPresentation(walkOffSub);
+  } else {
+    const curBatting = match.half === 'top' ? match.away : match.home;
+    if (curBatting.batterIndex !== prevBatterIdx) {
+      const nextB = getCurrentBatter(match);
+      presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
+    }
+  }
+}
 
 type SpringZone = 'SOFT' | 'BEST' | 'OVER';
 type SpringStage = 'idle' | 'charging' | 'rebounding' | 'locked';
@@ -1329,12 +1562,12 @@ function startAbsPromptWindow(): void {
 }
 
 function isAbsChallengeEligibleForPlayer(): boolean {
-  if (onTitleScreen || spectating || match.isGameOver) return false;
+  if (onTitleScreen || spectating) return false;
   if (!match.lastChallenge || match.lastChallenge.challenged) return false;
   const side = match.lastChallenge.eligibleSide;
   if (match.absChallenges[side] <= 0) return false;
   if (isOnline) {
-    return onlineSide === side && onlineTurnState === 'awaiting_pitch';
+    return onlineSide === side && (onlineTurnState === 'awaiting_pitch' || onlineTurnState === 'game_over');
   }
   if (match.mode === 'hotseat2p') return true;
   if (match.mode === 'practice_bat') return side === cpuPlayerSide;
@@ -1379,32 +1612,14 @@ function triggerAbsChallenge(): void {
   sfx.playUmpireTone(res.overturned ? 'ball' : 'strike');
 
   // Queue post-ABS transitions cleanly after Hawk-Eye replay completes.
-  // Compare against (visualInning, visualHalf) so an overturned 3rd-out call returning to the
-  // original half NEVER triggers a bogus change-sides banner, while an upheld or newly-called
-  // 3rd out plays inning_change right after ABS replay finishes.
   presentationQueue.push({ kind: 'wait_abs_replay' });
-  const inningChanged = match.inning !== visualInning || match.half !== visualHalf;
-  const struckOut = match.strikes === 0 && match.lastEvent.includes('strikes out');
-  if (struckOut && !match.isGameOver) {
-    presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
-  }
-  if (inningChanged && !match.isGameOver) {
-    presentationQueue.push({
-      kind: 'inning_change',
-      inning: match.inning,
-      half: match.half,
-      awayRuns: match.away.totalRuns,
-      homeRuns: match.home.totalRuns,
-    });
-  } else if (match.isGameOver) {
-    presentationQueue.push({ kind: 'game_over' });
-  } else {
-    const curBatting = match.half === 'top' ? match.away : match.home;
-    if (curBatting.batterIndex !== prevBatterIdx) {
-      const nextB = getCurrentBatter(match);
-      presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
-    }
-  }
+  enqueuePostAbsOutcome({
+    overturned: res.overturned,
+    outcome: res.outcome,
+    wildKind: res.wildKind,
+    prevBatterIdx,
+    prevBatterName,
+  });
   updateHudAndDocks();
 }
 
@@ -1416,6 +1631,8 @@ function formatScorebugTeamName(raw: string): string {
 }
 
 interface FrozenHudSnapshot {
+  awayRuns: number;
+  homeRuns: number;
   bases: boolean[];
   balls: number;
   strikes: number;
@@ -1428,12 +1645,13 @@ interface FrozenHudSnapshot {
 let lastLiveHud: FrozenHudSnapshot | null = null;
 
 /**
- * True while the live match has already advanced to the next half-inning (3rd out) but the
- * inning-change transition has not finished sweeping across yet. Scoreboard, jerseys, roles and
- * controls stay frozen on the finishing half-inning until (visualInning, visualHalf) catch up.
+ * True while the live match has already advanced to the next half-inning (3rd out) or while
+ * a 2.2s ABS Hawk-Eye replay is revealing the verdict. Scoreboard stays frozen to prevent spoilers.
  */
 function isHudFrozen(): boolean {
-  return !onTitleScreen && !match.derby.active && (match.inning !== visualInning || match.half !== visualHalf);
+  if (onTitleScreen || match.derby.active) return false;
+  if (absReplay && absReplay.active) return true;
+  return match.inning !== visualInning || match.half !== visualHalf;
 }
 
 function updateHudAndDocks(): void {
@@ -1448,14 +1666,14 @@ function updateHudAndDocks(): void {
     homeNameEl.textContent = homeDisp;
     fitNameLabel(homeNameEl, homeDisp, 7, 10);
   }
-  awayScoreEl.textContent = String(match.away.totalRuns);
-  homeScoreEl.textContent = String(match.home.totalRuns);
   sbInningEl.textContent = `${visualHalf === 'top' ? '▲' : '▼'}${visualInning}`;
 
   const batter = getCurrentBatter(match);
   const fielding = getFieldingTeam(match);
   const pitcherSlot = fielding.lineup.find((p) => p.position === 'P') ?? fielding.lineup[0];
   const liveHud: FrozenHudSnapshot = {
+    awayRuns: match.away.totalRuns,
+    homeRuns: match.home.totalRuns,
     bases: match.bases.map((b) => b !== null),
     balls: match.balls,
     strikes: match.strikes,
@@ -1464,12 +1682,17 @@ function updateHudAndDocks(): void {
     pitcherName: pitcherSlot?.name ?? '--',
   };
   let hud = liveHud;
-  if (isHudFrozen() && lastLiveHud) {
+  if (absReplay && absReplay.active && lastLiveHud) {
+    // Hold exact pre-ABS scoreboard (runs, bases, balls, strikes, outs) during 2.2s Hawk-Eye replay!
+    hud = lastLiveHud;
+  } else if (isHudFrozen() && lastLiveHud) {
     // Hold the finishing half-inning on screen (3rd out lit) until the inning-change sweep completes
     hud = { ...lastLiveHud, outs: 3 };
   } else {
     lastLiveHud = liveHud;
   }
+  awayScoreEl.textContent = String(hud.awayRuns);
+  homeScoreEl.textContent = String(hud.homeRuns);
   sbBatterEl.textContent = hud.batterName;
   sbPitcherEl.textContent = hud.pitcherName;
 
@@ -1508,7 +1731,8 @@ function updateHudAndDocks(): void {
 
   const role = getCurrentRole();
   if (isOnline && !spectating && !onTitleScreen && role === 'batter') {
-    batterHandedness = myBatterHandedness;
+    if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
+    syncVisualBatterHandedness();
     btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
   }
   const canPitchUi =
@@ -1613,6 +1837,9 @@ function startMode(mode: GameMode, suppressStandbyNotice = false): void {
   }
   visualInning = match.inning;
   visualHalf = match.half;
+  teamBatterHandedness = { away: myBatterHandedness, home: myBatterHandedness };
+  syncVisualBatterHandedness();
+  wildCapRoll.active = false;
   onTitleScreen = false;
   titleScreen.hidden = true;
   scoreboardEl.hidden = false;
@@ -1742,6 +1969,7 @@ function launchPitch(
   clearPresentationQueue();
   transitionDirector.clear();
   catcherReturn.active = false;
+  wildCapRoll.active = false;
   activePitch = solvePitchTrajectory(pitchId, spdKmh, targetX, targetY, {
     errorY: errorX,
     errorZ: errorY,
@@ -2087,6 +2315,8 @@ function finishPitchWithoutContact(): void {
   const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
   const prevBatterName = getCurrentBatter(match).name;
   let struckOut = false;
+  let walkedOnBall4 = false;
+  let wildPlayKind: 'uncaught_3rd' | 'wild_pitch' | 'passed_ball' | null = null;
 
   if (!batterSwungThisPitch) {
     const preSnap = captureAbsPreSnapshot(match);
@@ -2124,22 +2354,34 @@ function finishPitchWithoutContact(): void {
       preSnapshot: preSnap,
       caughtByCatcher,
       reachesPassLine: effectiveReachesPassLine,
+      catchKind: catchRes.kind,
     });
 
     let callLbl = res.isStrike ? 'STRIKE' : 'BALL';
     let callCol = res.isStrike ? '#f4c41c' : '#4ade80';
     let callDetail = '';
 
+    const isBB = !res.isStrike && match.balls === 0 && match.lastEvent.includes('walks');
+    walkedOnBall4 = isBB;
+
     if (res.call === 'UNCAUGHT_THIRD_STRIKE') {
       callLbl = 'UNCAUGHT 3RD';
       callCol = '#f97316';
       callDetail = 'DROPPED 3RD · BATTER TO 1B';
+      wildPlayKind = 'uncaught_3rd';
+      startWildCapVisuals(plateField[0], plateField[1], true, catchRes.kind === 'passed_ball');
       sfx.playUmpireTone('out');
     } else if (res.isWildPitch) {
       const isPb = catchRes.kind === 'passed_ball';
-      callLbl = isPb ? 'PASSED BALL' : 'WILD PITCH';
+      callLbl = isBB
+        ? (isPb ? 'WALK + PASSED BALL' : 'WALK + WILD PITCH')
+        : (isPb ? 'PASSED BALL' : 'WILD PITCH');
       callCol = '#f97316';
-      callDetail = isPb ? 'PASSED BALL · RUNNERS ADVANCE' : 'WILD PITCH · RUNNERS ADVANCE';
+      callDetail = isBB
+        ? (isPb ? 'PASSED BALL · WALK + RUNNERS ADVANCE' : 'WILD PITCH · WALK + RUNNERS ADVANCE')
+        : (isPb ? 'PASSED BALL · RUNNERS ADVANCE' : 'WILD PITCH · RUNNERS ADVANCE');
+      wildPlayKind = isPb ? 'passed_ball' : 'wild_pitch';
+      startWildCapVisuals(plateField[0], plateField[1], false, isPb);
       sfx.playUmpireTone('ball');
     } else if (res.isStrike) {
       const isK = match.strikes === 0 && match.lastEvent.includes('strikes out');
@@ -2151,7 +2393,6 @@ function finishPitchWithoutContact(): void {
       }
       sfx.playUmpireTone(isK ? 'out' : 'strike');
     } else {
-      const isBB = match.balls === 0 && match.lastEvent.includes('walks');
       if (isBB) {
         callLbl = 'WALK (BB)';
         callDetail = 'BASE ON BALLS';
@@ -2179,8 +2420,12 @@ function finishPitchWithoutContact(): void {
       showOnZoneFeedback(takePayload, getFeedbackDurationSec(), true);
       startAbsPromptWindow();
       presentationQueue.push({ kind: 'wait_abs' });
+      presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
+      if (wildPlayKind) enqueueWildPlayBanner(wildPlayKind, prevBatterName);
+    } else {
+      if (wildPlayKind) enqueueWildPlayBanner(wildPlayKind, prevBatterName);
+      presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
     }
-    presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
   } else {
     match.lastChallenge = null;
     const res = judgePitch({
@@ -2215,12 +2460,16 @@ function finishPitchWithoutContact(): void {
       missLbl = 'UNCAUGHT 3RD';
       missCol = '#f97316';
       missDetail = 'DROPPED 3RD · BATTER TO 1B';
+      wildPlayKind = 'uncaught_3rd';
+      startWildCapVisuals(plateField[0], plateField[1], true, catchRes.kind === 'passed_ball');
       sfx.playUmpireTone('out');
     } else if (res.isWildPitch) {
       const isPb = catchRes.kind === 'passed_ball';
       missLbl = isPb ? 'PASSED BALL' : 'WILD PITCH';
       missCol = '#f97316';
       missDetail = isPb ? 'PASSED BALL · RUNNERS ADVANCE' : 'WILD PITCH · RUNNERS ADVANCE';
+      wildPlayKind = isPb ? 'passed_ball' : 'wild_pitch';
+      startWildCapVisuals(plateField[0], plateField[1], false, isPb);
       sfx.playUmpireTone('ball');
     } else {
       const isK = match.strikes === 0 && match.lastEvent.includes('strikes out');
@@ -2253,6 +2502,7 @@ function finishPitchWithoutContact(): void {
       resultDetail: missDetail || undefined,
     };
     pendingMissFeedback = null;
+    if (wildPlayKind) enqueueWildPlayBanner(wildPlayKind, prevBatterName);
     presentationQueue.push({ kind: 'show_feedback', payload: missPayload, durationSec: getFeedbackDurationSec() });
   }
 
@@ -2267,9 +2517,18 @@ function finishPitchWithoutContact(): void {
       half: match.half,
       awayRuns: match.away.totalRuns,
       homeRuns: match.home.totalRuns,
+      isTieBreaker: match.inning > match.regulationInnings,
     });
   } else if (match.isGameOver) {
-    presentationQueue.push({ kind: 'game_over' });
+    let walkOffSub: string | undefined;
+    if (!match.mercyTriggered && !struckOut) {
+      if (wildPlayKind === 'uncaught_3rd') walkOffSub = `${prevBatterName} · ${t('callUncaught3rd')}`;
+      else if (wildPlayKind && walkedOnBall4) walkOffSub = t('callAbsWalkWildSub');
+      else if (wildPlayKind === 'passed_ball') walkOffSub = t('callPassedBall');
+      else if (wildPlayKind === 'wild_pitch') walkOffSub = t('callWildPitch');
+      else if (walkedOnBall4) walkOffSub = `${prevBatterName} · ${t('callWalk')}`;
+    }
+    enqueueGameOverPresentation(walkOffSub);
   } else {
     const curBatting = match.half === 'top' ? match.away : match.home;
     if (curBatting.batterIndex !== prevBatterIdx) {
@@ -2339,9 +2598,10 @@ function finishBattedPlay(): void {
         half: match.half,
         awayRuns: match.away.totalRuns,
         homeRuns: match.home.totalRuns,
+        isTieBreaker: match.inning > match.regulationInnings,
       });
     } else if (match.isGameOver) {
-      presentationQueue.push({ kind: 'game_over' });
+      enqueueGameOverPresentation();
     } else if (outcome !== 'FOUL') {
       const curBatting = match.half === 'top' ? match.away : match.home;
       if (curBatting.batterIndex !== prevBatterIdx) {
@@ -2449,9 +2709,10 @@ function finishBattedPlay(): void {
       half: match.half,
       awayRuns: match.away.totalRuns,
       homeRuns: match.home.totalRuns,
+      isTieBreaker: match.inning > match.regulationInnings,
     });
   } else if (match.isGameOver) {
-    presentationQueue.push({ kind: 'game_over' });
+    enqueueGameOverPresentation();
   } else if (outcome !== 'FOUL') {
     const curBatting = match.half === 'top' ? match.away : match.home;
     if (curBatting.batterIndex !== prevBatterIdx) {
@@ -2868,15 +3129,19 @@ btnIbb.addEventListener('click', () => {
 btnHand.addEventListener('click', () => {
   if (isOnline && !spectating) {
     myBatterHandedness = myBatterHandedness === 'right' ? 'left' : 'right';
+    if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
     if (getCurrentRole() === 'batter') {
-      batterHandedness = myBatterHandedness;
+      syncVisualBatterHandedness();
     }
     btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
     onlineClient.setBatterSide(myBatterHandedness === 'right' ? 'R' : 'L');
     return;
   }
-  batterHandedness = batterHandedness === 'right' ? 'left' : 'right';
-  myBatterHandedness = batterHandedness;
+  const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
+  const nextHand: 'left' | 'right' = batterHandedness === 'right' ? 'left' : 'right';
+  teamBatterHandedness[activeVisualSide] = nextHand;
+  batterHandedness = nextHand;
+  myBatterHandedness = nextHand;
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 });
 
@@ -3039,6 +3304,7 @@ function autoFallbackToCpu(title: string, detail: string, registerStandby = fals
     standbyPriorityMode = true;
     standbyEntryNoticeShown = true;
   } else {
+    standbyOptedOut = true;
     standbyPriorityMode = false;
   }
   if (onlineClient.connected) {
@@ -3162,7 +3428,7 @@ btnQueueCancel.addEventListener('click', () => {
   updateHudAndDocks();
 });
 
-btnQueueCpu.addEventListener('click', () => cancelQueueToCpu());
+btnQueueCpu.addEventListener('click', () => cancelQueueToCpu(false));
 
 btnHubCpu.addEventListener('click', () => {
   sfx.unlock();
@@ -3347,12 +3613,25 @@ function enterOnlineMatch(
   match = msg.match;
   visualInning = match.inning;
   visualHalf = match.half;
-  batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
+  const activeBatchSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
+  const curServerHand: 'left' | 'right' = msg.batterSide === 'L' ? 'left' : 'right';
+  if (msg.batterSides) {
+    teamBatterHandedness = {
+      away: msg.batterSides.away === 'L' ? 'left' : 'right',
+      home: msg.batterSides.home === 'L' ? 'left' : 'right',
+    };
+  } else {
+    teamBatterHandedness = { away: 'left', home: 'left' };
+    teamBatterHandedness[activeBatchSide] = curServerHand;
+  }
   if (msg.type === 'match_start') {
     myBatterHandedness = 'left';
-  } else if (onlineSide && onlineSide !== (visualHalf === 'top' ? 'home' : 'away')) {
-    myBatterHandedness = batterHandedness;
+    if (onlineSide) teamBatterHandedness[onlineSide] = 'left';
+  } else if (onlineSide) {
+    myBatterHandedness = teamBatterHandedness[onlineSide];
   }
+  syncVisualBatterHandedness();
+  wildCapRoll.active = false;
   btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
   onTitleScreen = false;
@@ -3415,7 +3694,18 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   match = msg.match;
   visualInning = match.inning;
   visualHalf = match.half;
-  batterHandedness = msg.batterSide === 'L' ? 'left' : 'right';
+  const specActiveSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
+  if (msg.batterSides) {
+    teamBatterHandedness = {
+      away: msg.batterSides.away === 'L' ? 'left' : 'right',
+      home: msg.batterSides.home === 'L' ? 'left' : 'right',
+    };
+  } else {
+    teamBatterHandedness = { away: 'left', home: 'left' };
+    teamBatterHandedness[specActiveSide] = msg.batterSide === 'L' ? 'left' : 'right';
+  }
+  syncVisualBatterHandedness();
+  wildCapRoll.active = false;
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
   onTitleScreen = false;
@@ -3589,22 +3879,37 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
     batterAnimTime = 0;
     batterSwungThisPitch = true;
   }
-  const isCatcherReturnable =
-    msg.outcome !== 'UNCAUGHT_THIRD_STRIKE' && msg.outcome !== 'WILD_PITCH';
+  const coTitle = msg.callout.title;
+  const onlineWildKind: 'uncaught_3rd' | 'wild_pitch' | 'passed_ball' | null =
+    msg.outcome === 'UNCAUGHT_THIRD_STRIKE' || coTitle === 'UNCAUGHT 3RD'
+      ? 'uncaught_3rd'
+      : coTitle === 'PASSED BALL' || coTitle === 'WALK + PASSED BALL'
+        ? 'passed_ball'
+        : msg.outcome === 'WILD_PITCH' || coTitle === 'WILD PITCH' || coTitle === 'WALK + WILD PITCH'
+          ? 'wild_pitch'
+          : null;
+  const isCatcherReturnable = onlineWildKind === null;
   if (isCatcherReturnable) {
     startCatcherReturn(catcherReturn, getPitchingTeamColor(), transitionDirector.config.speed === 'compact');
+  } else {
+    startWildCapVisuals(
+      plateX,
+      plateY,
+      onlineWildKind === 'uncaught_3rd',
+      onlineWildKind === 'passed_ball',
+    );
   }
   if (msg.outcome === 'BALL') {
     sfx.playUmpireTone('ball');
-  } else if (msg.outcome === 'UNCAUGHT_THIRD_STRIKE') {
+  } else if (onlineWildKind === 'uncaught_3rd') {
     sfx.playUmpireTone('out');
   } else {
     sfx.playUmpireTone('strike');
   }
 
   const isStrikeout =
-    match.strikes === 0 &&
-    match.lastEvent.includes('strikes out');
+    coTitle === 'STRIKE OUT!' ||
+    (match.strikes === 0 && match.lastEvent.includes('strikes out'));
 
   if (msg.swung) {
     const swingMissDot = msg.resolution?.hitField
@@ -3629,6 +3934,7 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       powerSwing: msg.swingData ? msg.swingData.swingMode === 'power' : powerSwing,
       contact: false,
     };
+    if (onlineWildKind) enqueueWildPlayBanner(onlineWildKind, prevBatterName);
     presentationQueue.push({ kind: 'show_feedback', payload: missPayload, durationSec: getFeedbackDurationSec() });
   } else {
     const takePayload: SwingFeedbackPayload = {
@@ -3652,6 +3958,7 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       startAbsPromptWindow();
       presentationQueue.push({ kind: 'wait_abs' });
       presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
+      if (onlineWildKind) enqueueWildPlayBanner(onlineWildKind, prevBatterName);
     } else if (
       match.lastChallenge &&
       !match.lastChallenge.challenged &&
@@ -3662,7 +3969,9 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       oppAbsWaitTimer = 2.2;
       presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
       presentationQueue.push({ kind: 'wait_opp_abs' });
+      if (onlineWildKind) enqueueWildPlayBanner(onlineWildKind, prevBatterName);
     } else {
+      if (onlineWildKind) enqueueWildPlayBanner(onlineWildKind, prevBatterName);
       presentationQueue.push({ kind: 'show_feedback', payload: takePayload, durationSec: getFeedbackDurationSec() });
     }
   }
@@ -3677,9 +3986,19 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       half: match.half,
       awayRuns: match.away.totalRuns,
       homeRuns: match.home.totalRuns,
+      isTieBreaker: match.inning > match.regulationInnings,
     });
   } else if (match.isGameOver) {
-    presentationQueue.push({ kind: 'game_over' });
+    let onlineWalkOffSub: string | undefined;
+    if (!match.mercyTriggered && !isStrikeout) {
+      const title = msg.callout.title;
+      if (onlineWildKind === 'uncaught_3rd') onlineWalkOffSub = `${prevBatterName} · ${t('callUncaught3rd')}`;
+      else if (title === 'WALK + WILD PITCH' || title === 'WALK + PASSED BALL') onlineWalkOffSub = t('callAbsWalkWildSub');
+      else if (onlineWildKind === 'passed_ball') onlineWalkOffSub = t('callPassedBall');
+      else if (onlineWildKind === 'wild_pitch') onlineWalkOffSub = t('callWildPitch');
+      else if (title === 'WALK (BB)' || msg.clockViolation) onlineWalkOffSub = `${prevBatterName} · ${t('callWalk')}`;
+    }
+    enqueueGameOverPresentation(onlineWalkOffSub);
   } else {
     const curBatting = match.half === 'top' ? match.away : match.home;
     if (curBatting.batterIndex !== prevBatterIdx) {
@@ -3758,9 +4077,16 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'batter_side': {
-      // Only updates on-field batter stance for pitcher/spectator; never overwrites our own batting preference
-      if (spectating || getCurrentRole() !== 'batter') {
-        batterHandedness = msg.side === 'L' ? 'left' : 'right';
+      const nextHand: 'left' | 'right' = msg.side === 'L' ? 'left' : 'right';
+      const targetTeam: 'away' | 'home' = msg.team ?? (match.half === 'top' ? 'away' : 'home');
+      // Always record into the team slot; only update visible batter stance if that team is CURRENTLY
+      // shown at the plate (visualHalf), never before the inning-change transition completes!
+      if (spectating || targetTeam !== onlineSide) {
+        teamBatterHandedness[targetTeam] = nextHand;
+      }
+      const visibleTeam: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
+      if (targetTeam === visibleTeam && (spectating || getCurrentRole() !== 'batter')) {
+        syncVisualBatterHandedness();
       }
       break;
     }
@@ -3776,10 +4102,13 @@ onlineClient.onMessage((msg) => {
         visualHalf = match.half;
         updateHudAndDocks();
       }
+      const serverBattingTeam: 'away' | 'home' = match.half === 'top' ? 'away' : 'home';
       if (spectating || getCurrentRole() !== 'batter') {
-        batterHandedness = p.batterSide === 'L' ? 'left' : 'right';
+        teamBatterHandedness[serverBattingTeam] = p.batterSide === 'L' ? 'left' : 'right';
+        syncVisualBatterHandedness();
       } else {
-        batterHandedness = myBatterHandedness;
+        if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
+        syncVisualBatterHandedness();
         btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
       }
       launchPitch(p.pitchId, p.speedKmh, p.targetX, p.targetY, p.errorX, p.errorY, p.seed);
@@ -3836,31 +4165,14 @@ onlineClient.onMessage((msg) => {
       else resetPitchClock();
 
       // Queue post-ABS transitions cleanly after Hawk-Eye replay finishes.
-      // Compare against (visualInning, visualHalf) so overturning a 3rd-out call back to the
-      // original half never triggers a bogus change-sides banner.
       presentationQueue.push({ kind: 'wait_abs_replay' });
-      const inningChanged = match.inning !== visualInning || match.half !== visualHalf;
-      const struckOut = match.strikes === 0 && match.lastEvent.includes('strikes out');
-      if (struckOut && !match.isGameOver) {
-        presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
-      }
-      if (inningChanged && !match.isGameOver) {
-        presentationQueue.push({
-          kind: 'inning_change',
-          inning: match.inning,
-          half: match.half,
-          awayRuns: match.away.totalRuns,
-          homeRuns: match.home.totalRuns,
-        });
-      } else if (match.isGameOver) {
-        presentationQueue.push({ kind: 'game_over' });
-      } else {
-        const curBatting = match.half === 'top' ? match.away : match.home;
-        if (curBatting.batterIndex !== prevBatterIdx) {
-          const nextB = getCurrentBatter(match);
-          presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
-        }
-      }
+      enqueuePostAbsOutcome({
+        overturned: msg.overturned,
+        outcome: msg.outcome ?? (msg.trueCall === 'strike' ? 'STRIKE' : 'BALL'),
+        wildKind: msg.wildKind ?? null,
+        prevBatterIdx,
+        prevBatterName,
+      });
       updateHudAndDocks();
       break;
     }
@@ -3929,14 +4241,16 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'emote': {
+      const stripTeam = (s: string) => s.replace(/^(?:中正黑|中正黃)\s+/, '').trim();
+      const teamFallback =
+        msg.side === 'away' ? stripTeam(match.away.name) : msg.side === 'home' ? stripTeam(match.home.name) : '';
+      const displayName = (msg.senderName && msg.senderName.trim()) || teamFallback;
       if (msg.side === 'spectator') {
-        const specTag = msg.senderName ? `${t('watchPrefix')} · ${msg.senderName}` : t('watchPrefix');
         const isOwnSpec = spectating && msg.senderName === getOnlinePlayerName();
-        emoteCtrl.showBubble(msg.id, specTag, !isOwnSpec, true);
+        emoteCtrl.showBubble(msg.id, displayName || t('watchPrefix'), !isOwnSpec, true);
       } else {
-        const senderTeam = msg.side === 'away' ? match.away.name : match.home.name;
         const isOpp = !spectating && onlineSide !== null && msg.side !== onlineSide;
-        emoteCtrl.showBubble(msg.id, senderTeam, isOpp, false);
+        emoteCtrl.showBubble(msg.id, displayName, isOpp, false);
       }
       break;
     }
@@ -3949,7 +4263,7 @@ onlineClient.onMessage((msg) => {
         offerId: msg.offerId,
         opponentName: msg.opponentName,
         mode: msg.mode,
-        timeoutSec: msg.timeoutSec || 20,
+        timeoutSec: msg.timeoutSec || 15,
         visible: false,
         shownAtMs: 0,
         expiresAtMs: 0,
@@ -3957,15 +4271,28 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'offer_cancelled': {
-      if (pendingMatchOffer && pendingMatchOffer.offerId === msg.offerId) {
-        const wasVisible = pendingMatchOffer.visible;
+      const matchedPending = pendingMatchOffer && pendingMatchOffer.offerId === msg.offerId;
+      const wasVisible = Boolean(matchedPending && pendingMatchOffer!.visible);
+      if (matchedPending) {
         hideMatchOfferToast();
-        if (msg.reason === 'timeout') {
-          standbyOptedOut = true;
-          updateStandbyToggleBtn();
-        } else if (wasVisible && msg.reason === 'expired') {
-          emoteCtrl.showSystem(t('offerExpired'), t('offerExpiredSub'), '#94a3b8', 2600);
+      }
+      if (msg.reason === 'timeout') {
+        standbyOptedOut = true;
+        updateStandbyToggleBtn();
+      } else if (msg.reason === 'taken') {
+        // Race lost: keep contender in priority standby and notify!
+        standbyOptedOut = false;
+        standbyPriorityMode = true;
+        updateStandbyToggleBtn();
+        if (wasVisible || !matchedPending) {
+          emoteCtrl.showSystem(t('offerTakenTitle'), t('offerTakenSub'), '#f97316', 3200);
         }
+      } else if (msg.reason === 'waiter_cancelled') {
+        if (wasVisible || !matchedPending) {
+          emoteCtrl.showSystem(t('offerCancelledTitle'), t('offerCancelledSub'), '#94a3b8', 2600);
+        }
+      } else if (wasVisible && msg.reason === 'expired') {
+        emoteCtrl.showSystem(t('offerExpired'), t('offerExpiredSub'), '#94a3b8', 2600);
       }
       break;
     }
@@ -4160,13 +4487,13 @@ function step(now: number): void {
 
   resizeCanvases();
 
-  // Matchmaking 40s fallback timer (enters CPU + joins priority standby matchmaking queue)
+  // Matchmaking 40s fallback timer (enters CPU without re-inflating standby if timed out)
   if (onTitleScreen && onlineWaitingQueue) {
     queueElapsedSec += rawDt;
     const secs = Math.floor(queueElapsedSec);
     queueStatusText.textContent = `${t('queueFinding')} 0:${String(secs).padStart(2, '0')}...`;
     if (queueElapsedSec >= 40) {
-      cancelQueueToCpu(true);
+      cancelQueueToCpu(false);
     }
   }
 
@@ -4373,7 +4700,7 @@ function step(now: number): void {
             emoteCtrl.showBroadcast(t('callPitchClock'), detailTxt, '#f97316', 2400);
             presentationQueue.push({ kind: 'brief_pause', remainingSec: 0.9 });
             if (match.isGameOver) {
-              presentationQueue.push({ kind: 'game_over' });
+              enqueueGameOverPresentation(res.walked && !match.mercyTriggered ? `${t('callPitchClock')} · ${t('callAutoWalk')}` : undefined);
             } else {
               const curBatting = match.half === 'top' ? match.away : match.home;
               if (curBatting.batterIndex !== prevBatterIdx) {
@@ -4798,6 +5125,36 @@ function step(now: number): void {
         finishBattedPlay();
       }
       } else if (phase === 'result') {
+        if (wildCapRoll.active) {
+          wildCapRoll.elapsedSec += dt;
+          wildCapRoll.vel[1] -= 9.81 * dt;
+          wildCapRoll.pos[0] += wildCapRoll.vel[0] * dt;
+          wildCapRoll.pos[1] += wildCapRoll.vel[1] * dt;
+          wildCapRoll.pos[2] = Math.min(1.85, wildCapRoll.pos[2] + wildCapRoll.vel[2] * dt);
+          if (wildCapRoll.pos[1] <= 0.03) {
+            wildCapRoll.pos[1] = 0.03;
+            wildCapRoll.vel[1] = Math.abs(wildCapRoll.vel[1]) * 0.42;
+            wildCapRoll.vel[0] *= 0.84;
+            wildCapRoll.vel[2] *= 0.72;
+            if (wildCapRoll.bounces < 3) {
+              wildCapRoll.bounces += 1;
+              sfx.playFloorBounce();
+              bounceRings.push({
+                pos: [wildCapRoll.pos[0], 0.015, wildCapRoll.pos[2]],
+                ageSec: 0,
+                maxAgeSec: 0.45,
+                infield: true,
+              });
+            }
+          }
+          const spinAng = wildCapRoll.elapsedSec * 14;
+          capNormalField = [Math.cos(spinAng) * 0.7, 0.7, Math.sin(spinAng) * 0.7];
+          capPos = [wildCapRoll.pos[0], wildCapRoll.pos[1], wildCapRoll.pos[2]];
+          capTrail.push(capPos);
+          if (capTrail.length > 8) capTrail.shift();
+          capVisible = wildCapRoll.elapsedSec < wildCapRoll.durationSec;
+          if (!capVisible) wildCapRoll.active = false;
+        }
         batterAnimTime += dt;
         if (batterSwungThisPitch) {
           if (batterAnim === 'load' && batterAnimTime >= 0.06) {
@@ -4821,6 +5178,7 @@ function step(now: number): void {
           batCursor = { x: 0, y: 0.72 };
           capVisible = false;
           capTrail = [];
+          wildCapRoll.active = false;
           resetOutfielders(allFielders);
           if (isOnline && !spectating) {
             lastPitchTelemetry =
@@ -4892,8 +5250,8 @@ function step(now: number): void {
       normalField: capNormalField,
       teamColor: getPitchingTeamColor(),
       trail: capTrail,
-      // Pitched cap renders razor-sharp on overlayCanvas; batted cap depth-sorts in world entities!
-      visible: capVisible && phase === 'batted_flight',
+      // Pitched cap renders razor-sharp on overlayCanvas; batted / wild-roll cap depth-sorts in world entities!
+      visible: capVisible && (phase === 'batted_flight' || wildCapRoll.active),
       isFlyBall: phase === 'batted_flight',
     },
     hitFx,

@@ -1907,4 +1907,193 @@ describe('Online Multiplayer Server Integration', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('36. Standby top-5 race (taken vs decline), pure senderName emotes, team batterSides, and live matches in /analytics.json', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-v253-'));
+    const srv = await startServer(0, {
+      pitchClockScale: 0,
+      offerTimeoutMs: 1200,
+      matchLogPath: path.join(tmpDir, 'm.jsonl'),
+      pitchLogPath: path.join(tmpDir, 'p.jsonl'),
+    });
+    const s1 = await connectClient(srv.port, 'AceOne');
+    const s2 = await connectClient(srv.port, 'BeeTwo');
+    const s3 = await connectClient(srv.port, 'CatThree');
+    const waiter = await connectClient(srv.port, 'QueueStar');
+    try {
+      s1.send({ t: 'sj', m: 0 });
+      s2.send({ t: 'sj', m: 0 });
+      s3.send({ t: 'sj', m: 0 });
+      await new Promise((r) => setTimeout(r, 40));
+
+      waiter.send({ type: 'queue', mode: 'quick3', name: 'QueueStar' });
+      const [o1, o2, o3] = await Promise.all([
+        s1.nextMsg((m) => m.type === 'match_offer'),
+        s2.nextMsg((m) => m.type === 'match_offer'),
+        s3.nextMsg((m) => m.type === 'match_offer'),
+      ]);
+      expect(o1.opponentName).toBe('QueueStar');
+      expect(o2.opponentName).toBe('QueueStar');
+      expect(o3.opponentName).toBe('QueueStar');
+
+      // s3 declines -> immediately removed from standby
+      s3.send({ type: 'offer_reply', offerId: o3.offerId, accept: false });
+      await new Promise((r) => setTimeout(r, 30));
+
+      // s1 wins the race; s2 sends accept right after and receives reason:'taken' while keeping priority standby
+      s1.send({ type: 'offer_reply', offerId: o1.offerId, accept: true });
+      const [ms1, msWaiter] = await Promise.all([
+        s1.nextMsg((m) => m.type === 'match_start'),
+        waiter.nextMsg((m) => m.type === 'match_start'),
+      ]);
+      expect(ms1.batterSides).toEqual({ away: 'L', home: 'L' });
+      expect(msWaiter.batterSides).toEqual({ away: 'L', home: 'L' });
+
+      const lostMsg = await s2.nextMsg((m) => m.type === 'offer_cancelled');
+      expect(lostMsg.reason).toBe('taken');
+      // Even a slightly delayed click on o2 still resolves cleanly as 'taken'
+      s2.send({ type: 'offer_reply', offerId: o2.offerId, accept: true });
+      const lateReply = await s2.nextMsg((m) => m.type === 'offer_cancelled', 1000);
+      expect(lateReply.reason).toBe('taken');
+
+      // Verify /metrics standbyCount dropped: s1 matched (0), s3 declined (0), s2 kept in priority standby (1)
+      const metricsRes = await fetch(`http://127.0.0.1:${srv.port}/capbaseball/metrics`).then((r) => r.json() as Promise<Record<string, any>>);
+      expect(metricsRes.connections.standbyCount).toBe(1);
+
+      // Verify /analytics.json already shows this active LIVE match while in progress
+      const analyticsRes = await fetch(`http://127.0.0.1:${srv.port}/capbaseball/analytics.json`).then((r) => r.json() as Promise<Record<string, any>>);
+      expect(analyticsRes.matchesSummary.activeLive).toBe(1);
+      expect(analyticsRes.liveMatches[0].code).toBe(ms1.code);
+      expect(analyticsRes.liveMatches[0].status).toBe('live');
+
+      // Verify player emote carries pure senderName (no team prefix)
+      s1.send({ type: 'emote', id: 'nice' });
+      const emWaiter = await waiter.nextMsg((m) => m.type === 'emote');
+      expect(emWaiter.senderName).toBe('AceOne');
+
+      // Verify set_batter_side tags the exact team ('away' vs 'home')
+      s1.send({ type: 'set_batter_side', side: 'R' });
+      const bsMsg = await waiter.nextMsg((m) => m.type === 'batter_side');
+      expect(bsMsg.side).toBe('R');
+      expect(bsMsg.team).toBe(ms1.side);
+
+      // Waiter2 queues -> s2 receives offer -> Waiter2 immediately cancels -> s2 receives reason:'waiter_cancelled' & stays standby
+      const waiter2 = await connectClient(srv.port, 'QuickCancel');
+      waiter2.send({ type: 'queue', mode: 'quick3', name: 'QuickCancel' });
+      const oCancel = await s2.nextMsg((m) => m.type === 'match_offer');
+      waiter2.send({ type: 'unqueue' });
+      const cancelNote = await s2.nextMsg((m) => m.type === 'offer_cancelled');
+      expect(cancelNote.reason).toBe('waiter_cancelled');
+      // Even a late click on Accept right around cancel still returns reason:'waiter_cancelled' & keeps standby
+      s2.send({ type: 'offer_reply', offerId: oCancel.offerId, accept: true });
+      const lateCancelReply = await s2.nextMsg((m) => m.type === 'offer_cancelled', 1000);
+      expect(lateCancelReply.reason).toBe('waiter_cancelled');
+      const mAfterCancel = await fetch(`http://127.0.0.1:${srv.port}/capbaseball/metrics`).then((r) => r.json() as Promise<Record<string, any>>);
+      expect(mAfterCancel.connections.standbyCount).toBe(1);
+      await waiter2.close();
+    } finally {
+      await Promise.all([s1.close(), s2.close(), s3.close(), waiter.close()]);
+      await srv.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('37. Game-ending ABS challenge overturns final out/walk-off and resumes match, and abs_result carries structured outcome', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-abs-end-'));
+    const srv = await startServer(0, {
+      pitchClockScale: 0,
+      absWindowMs: 1200,
+      randomizeFriendSides: false,
+      matchLogPath: path.join(tmpDir, 'm.jsonl'),
+      pitchLogPath: path.join(tmpDir, 'p.jsonl'),
+    });
+    const host = await connectClient(srv.port, 'HomeP');
+    const guest = await connectClient(srv.port, 'AwayB');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'HomeP' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      guest.send({ type: 'join', code: created.code, name: 'AwayB' });
+      await Promise.all([
+        host.nextMsg((m) => m.type === 'match_start'),
+        guest.nextMsg((m) => m.type === 'match_start'),
+      ]);
+
+      // Set up bottom of 3rd, tied 1-1, bases loaded, 3-2 count (Home batting, Away pitching):
+      // simulate a blown ball call that caused a walk-off walk (isGameOver=true, recorded=false)
+      const room = srv.rooms.get(created.code as string)!;
+      room.match.inning = 3;
+      room.match.half = 'bottom';
+      room.match.away.totalRuns = 1;
+      room.match.home.totalRuns = 1;
+      room.match.balls = 3;
+      room.match.strikes = 2;
+      room.match.outs = 2;
+      room.match.bases = ['home-1', 'home-2', 'home-3'];
+      room.match.lastChallenge = {
+        pitchSeq: room.pitchSeq,
+        plateX: 0.14,
+        plateY: 0.72,
+        trueCall: 'strike',
+        umpireCall: 'ball',
+        marginCm: -1.5,
+        challenged: false,
+        eligibleSide: 'away',
+        caughtByCatcher: true,
+        reachesPassLine: false,
+        catchKind: 'caught',
+        preOutcome: 'WALK',
+        preWildKind: null,
+        preSnapshot: {
+          balls: 3,
+          strikes: 2,
+          outs: 2,
+          inning: 3,
+          half: 'bottom',
+          bases: ['home-1', 'home-2', 'home-3'],
+          awayRuns: 1,
+          homeRuns: 1,
+          awayRunsByInning: [1, 0, 0],
+          homeRunsByInning: [1, 0, 0],
+          awayBatterIdx: 0,
+          homeBatterIdx: 0,
+          awayWalks: 0,
+          homeWalks: 0,
+          awayStrikeouts: 0,
+          homeStrikeouts: 0,
+          wildPitches: 0,
+          uncaughtThirdStrikes: 0,
+          plateAppearancesInHalf: 3,
+          mercyTriggered: false,
+          endReason: undefined,
+          isGameOver: false,
+          winner: null,
+        },
+      };
+      // Emulate game-over state held open during the ABS window
+      room.match.home.totalRuns = 2;
+      room.match.home.walks = 1;
+      room.match.isGameOver = true;
+      room.match.winner = 'home';
+      room.turnState = 'game_over';
+
+      // Away (pitching team) challenges the game-ending walk-off ball -> overturned to 3rd-out STRIKEOUT -> Extra inning 4!
+      guest.send({ type: 'abs_challenge', pitchSeq: room.pitchSeq });
+      const [absH, absA] = await Promise.all([
+        host.nextMsg((m) => m.type === 'abs_result'),
+        guest.nextMsg((m) => m.type === 'abs_result'),
+      ]);
+      expect(absH.overturned).toBe(true);
+      expect(absH.outcome).toBe('STRIKEOUT');
+      expect(absA.outcome).toBe('STRIKEOUT');
+      expect((absH.match as { isGameOver: boolean }).isGameOver).toBe(false);
+      expect((absH.match as { inning: number }).inning).toBe(4);
+      expect((absH.match as { half: string }).half).toBe('top');
+      expect(room.turnState).toBe('awaiting_pitch');
+      expect(room.recorded).toBe(false);
+    } finally {
+      await Promise.all([host.close(), guest.close()]);
+      await srv.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

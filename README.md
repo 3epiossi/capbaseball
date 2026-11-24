@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.5.2`（語意化三段式版本號）
+- **目前里程碑**：`v2.6.0`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 58 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 60 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -278,3 +278,8 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **線上對戰 `☰` 選單隱藏「回主畫面」**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 在線上對戰進行中（`isOnline && !spectating && !onTitleScreen && !match.isGameOver`）隱藏 `#btn-menu-title`，僅保留「返回比賽」與「認輸棄賽」（`#btn-resign`），消除誤按回主畫面造成假 `disconnect_timeout` 與對手空等 30 秒。
   - **觀戰／大廳自動重連＋`sw.js` 阻擋 Cloudflare 4 小時快取**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 的 `resumeSession()` 改支援觀戰斷線自動重連並補送 `watchRoom(onlineRoomCode)`（若該局已結束則退回主畫面維持在線），大廳／單人模式斷線亦自動靜默重連；[src/net/client.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/client.ts) 於 `setConnected(true)` 預設 `netQuality = 'good'` 避免灰點殘留；[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 對 `/sw.js`、`/version.json`、`/index.html`、`/pitch-lab.html` 與 `/manifest.webmanifest` 強制回傳 `Cache-Control: no-store, no-cache, must-revalidate`。
   - **兩隊獨立左右打設定**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 將單一 `room.batterSide` 改為 `batterSides: { away, home }` 並在換局（含 ABS 改判第 3 出局換局）與 `pitch_launch` 切換為當半局進攻方設定；[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 拆出己方設定 `myBatterHandedness`，防止對手切換左右打覆寫我方按鈕與下個半局打席（新增 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 第 34 項整合測試，全部 **58/58** 通過）。
+- **v2.6.0 直球前伸與 40° 仰角、ABS 複合判決／動畫完整連動、候補 5 人搶單、捕手守備調校與 `/analytics` 即時＋台北時間升級（2026-11-24）**：
+  - **直球出手前伸 `+150 cm` 與仰角 `40°`**：[src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 為 `PitchSpec` 新增選用 `releasePos`，將 `straight` 的 `releasePos` 前移至 `[1.85, -0.22, 1.18]`、`noseUpDeg: 40°` 並放寬 `minElevationDeg: -18°` 以確保低角度好球帶入帶；[src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 同步載入球種預設出手點。
+  - **提高不死三振／暴投／捕逸機率、捕手空中反應延遲與視覺動畫組**：[src/ai/cpu.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ai/cpu.ts) 縮小捕手舒適接捕區並調高指叉低球／蝴蝶球／高球速邊角捕逸與外圍暴投機率；[src/physics/contact.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/contact.ts) 加入捕手空中反應延遲（`0.46s` 界外／`0.56s` 界內）與回追本壘後方漏接加成；[src/ui/transitions.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/ui/transitions.ts) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 新增 `UNCAUGHT 3RD`／`WILD PITCH`／`PASSED BALL`／`WALK (BB)`／`COLD GAME`／`WALK-OFF`／「改判壞球 · 打擊繼續！」轉場橫幅、延長賽「突破僵局 · 0出局滿壘」提示、「四壞保送＋暴投／捕逸」複合播報與無瞬間回傳的 3D 漏球彈地特效（遵守瓶蓋棒球無實體跑者規則）。
+  - **ABS 複合判決完整回溯與防爆雷凍結**：[src/rules/match.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/rules/match.ts) 在 `AbsPreSnapshot` 補齊 `wildPitches`、`uncaughtThirdStrikes`、`plateAppearancesInHalf`、`runsByInning`、`mercyTriggered` 與 `endReason` 回溯並回傳結構化 `AbsOutcomeKind`（精準處理「不死三振改判壞球→暴投進壘」、「壞球改好球→不死三振或三振出局」等複合情節）；[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 開放結束比賽最後一球 ABS 挑戰（`gameOverAbsTimer`），並於 2.2 秒鷹眼重播期間凍結左上角記分板防止提前爆雷；同步將隊伍左右打視覺嚴格綁定 `visualHalf` 避免換局動畫前搶先切換。
+  - **候補 5 人同時搶單、純暱稱聊天室與 `/analytics` 即時＋台北時間**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 改為一次向名單前 5 位候補發送 `match_offer`（15 秒逾時）、搶輸顯示保留優先候補通知、取消排隊送出 `waiter_cancelled` 並即時同步 `/monitor` `standbyCount`；聊天氣泡只顯示純玩家名字；[server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 全面改為台北時間（`UTC+8`）並於分析頁頂部即時列出對戰中房間（測試擴充至 **60/60** 全部通過）。

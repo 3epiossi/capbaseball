@@ -8,6 +8,7 @@ export interface TransitionConfig {
 export interface TransitionLabels {
   playBall: string;
   changeSides: string;
+  tieBreakerBadge: string;
   out: string;
   strikeOut: string;
   walkOffBadge: string;
@@ -21,6 +22,7 @@ export interface TransitionLabels {
 const DEFAULT_TRANS_LABELS: TransitionLabels = {
   playBall: 'PLAY BALL',
   changeSides: 'CHANGE SIDES',
+  tieBreakerBadge: 'TIE-BREAKER · 0 OUTS, BASES LOADED',
   out: 'OUT',
   strikeOut: 'STRIKE OUT!',
   walkOffBadge: 'WALK-OFF VICTORY',
@@ -131,14 +133,20 @@ export class TransitionDirector {
     });
   }
 
-  playInningChange(inning: number, half: 'top' | 'bottom', awayRuns: number, homeRuns: number): void {
+  playInningChange(
+    inning: number,
+    half: 'top' | 'bottom',
+    awayRuns: number,
+    homeRuns: number,
+    isTieBreaker = false,
+  ): void {
     const label = this.labels.formatInning(half, inning);
     this.showBanner({
       variant: 'wipe',
-      badge: this.labels.changeSides,
+      badge: isTieBreaker ? this.labels.tieBreakerBadge : this.labels.changeSides,
       title: label,
       sub: `${awayRuns} — ${homeRuns}`,
-      ms: this.dur(1200),
+      ms: this.dur(isTieBreaker ? 1500 : 1200),
     });
   }
 
@@ -164,6 +172,39 @@ export class TransitionDirector {
       title,
       sub,
       ms: this.dur(isWalkOff ? 1850 : 1450),
+    });
+  }
+
+  playWildPlay(badge: string, title: string, sub: string): void {
+    this.triggerHitStop(0.032);
+    this.triggerShake(0.24, 5.5);
+    this.showBanner({
+      variant: 'wildplay',
+      badge,
+      title,
+      sub,
+      ms: this.dur(1400),
+      wildPlayArt: true,
+    });
+  }
+
+  playWalk(badge: string, title: string, sub: string): void {
+    this.showBanner({
+      variant: 'walk',
+      badge,
+      title,
+      sub,
+      ms: this.dur(1250),
+    });
+  }
+
+  playOverturnedContinue(badge: string, title: string, sub: string): void {
+    this.showBanner({
+      variant: 'overturned',
+      badge,
+      title,
+      sub,
+      ms: this.dur(1100),
     });
   }
 
@@ -194,12 +235,13 @@ export class TransitionDirector {
   }
 
   private showBanner(opts: {
-    variant: 'matchup' | 'wipe' | 'strikeout' | 'homerun' | 'walkoff' | 'gameset';
+    variant: 'matchup' | 'wipe' | 'strikeout' | 'homerun' | 'walkoff' | 'gameset' | 'wildplay' | 'walk' | 'overturned';
     badge: string;
     title: string;
     sub: string;
     ms: number;
     umpirePunchOut?: boolean;
+    wildPlayArt?: boolean;
   }): void {
     if (this.activeTimer !== null) {
       window.clearTimeout(this.activeTimer);
@@ -213,6 +255,9 @@ export class TransitionDirector {
     this.art.replaceChildren();
     if (opts.umpirePunchOut) {
       this.art.appendChild(createUmpirePunchOutSvg());
+      this.art.hidden = false;
+    } else if (opts.wildPlayArt) {
+      this.art.appendChild(createWildPlaySvg());
       this.art.hidden = false;
     } else {
       this.art.hidden = true;
@@ -250,6 +295,33 @@ function createUmpirePunchOutSvg(): SVGSVGElement {
     [4, 10, 3, 4, '#0f172a'], // left arm
     [8, 16, 3, 6, '#334155'], // left leg
     [13, 16, 3, 6, '#334155'], // right leg
+  ];
+  for (const [x, y, w, h, fill] of rects) {
+    const r = document.createElementNS(ns, 'rect');
+    r.setAttribute('x', String(x));
+    r.setAttribute('y', String(y));
+    r.setAttribute('width', String(w));
+    r.setAttribute('height', String(h));
+    r.setAttribute('fill', fill);
+    svg.appendChild(r);
+  }
+  return svg;
+}
+
+/** 16-bit pixel dropped bottle-cap graphic for wild pitch / passed ball / uncaught 3rd strike. */
+function createWildPlaySvg(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '44');
+  svg.setAttribute('height', '44');
+  svg.setAttribute('aria-hidden', 'true');
+  const rects: Array<[number, number, number, number, string]> = [
+    [3, 12, 3, 1, '#fb923c'],  // speed lines
+    [2, 15, 5, 1, '#f97316'],
+    [9, 9, 8, 5, '#f43f5e'],   // escaping cap body
+    [8, 14, 10, 2, '#f4c41c'], // cap rim
+    [17, 7, 4, 2, '#38bdf8'],  // deflection spark
   ];
   for (const [x, y, w, h, fill] of rects) {
     const r = document.createElementNS(ns, 'rect');

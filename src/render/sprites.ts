@@ -175,6 +175,7 @@ export interface DrawEntityListParams {
     anim: BatterAnim;
     animTime: number;
     alpha: number;
+    posOffset?: readonly [number, number, number];
   };
   cap: {
     pos: FieldV3;
@@ -617,7 +618,8 @@ export function drawWorldEntities(
     // Natural orientation is left-handed ('left') in RIGHT box (+0.76, z=0.14);
     // right-handed ('right') mirrors around anchor_x in LEFT box (-0.76, z=0.14).
     const bx = params.batter.handedness === 'right' ? -0.76 : 0.76;
-    const bPos: FieldV3 = [bx, 0, 0.14];
+    const off = params.batter.posOffset;
+    const bPos: FieldV3 = off ? [bx + off[0], off[1], 0.14 + off[2]] : [bx, 0, 0.14];
     const pr = cam.project(bPos);
     if (pr.visible && pr.depth > 0.2) {
       items.push({

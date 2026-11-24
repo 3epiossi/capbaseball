@@ -157,7 +157,7 @@ const state: LabState = {
   targetY: 0.72,
   launchAzimuthDeg: 0,
   launchElevationDeg: 0,
-  releasePos: [...DEFAULT_RELEASE_POS],
+  releasePos: [...(PITCH_SPECS.straight.releasePos ?? DEFAULT_RELEASE_POS)],
 };
 
 // Default 3D oblique view mirroring cap-flight-sim
@@ -1036,7 +1036,7 @@ function loadPreset(id: PitchId): void {
   state.spinAxis = spec.spinAxis;
   state.targetX = 0;
   state.targetY = 0.72;
-  state.releasePos = [...DEFAULT_RELEASE_POS];
+  state.releasePos = [...(spec.releasePos ?? DEFAULT_RELEASE_POS)];
   animProgress = 0;
   recomputeAndRender();
 }

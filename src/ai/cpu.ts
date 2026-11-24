@@ -132,10 +132,10 @@ function deterministicCatchUnit(seed?: number): number {
 
 /**
  * Evaluates catcher reception of a non-contacted pitch:
- * - Wild Pitch: pitch misses outside catcher comfort reach (|x| > 0.42m or y < 0.18m or y > 1.35m)
- *   and eludes diving block (harder to block at higher velocity).
- * - Passed Ball: pitch is inside comfort reach, but unpredictable knuckleball flutter, sharp low
- *   vertical drop, or blazing velocity (>= 72 km/h) near edges slips past the catcher.
+ * - Wild Pitch: pitch misses outside tightened catcher comfort reach (|x| > 0.34m or y < 0.24m or y > 1.28m)
+ *   and eludes diving block (~24% base block chance, harder at higher velocity / knuckleball).
+ * - Passed Ball: pitch is inside comfort reach, but unpredictable knuckleball flutter (16-22%),
+ *   sharp low vertical drop (14-18%), or blazing velocity (>= 70 km/h) near edges slips past.
  */
 export function evaluateCatcherCatch(
   plateX: number,
@@ -154,27 +154,31 @@ export function evaluateCatcherCatch(
   const brk = opts.breakCm ?? 0;
   const r = deterministicCatchUnit(opts.seed);
 
-  // 1. Inside catcher comfort box (|x| <= 0.42m, y in [0.18m, 1.35m])
-  const inComfort = dx <= 0.42 && plateY >= 0.18 && plateY <= 1.35;
+  // 1. Inside tightened catcher comfort box (|x| <= 0.34m, y in [0.24m, 1.28m])
+  const inComfort = dx <= 0.34 && plateY >= 0.24 && plateY <= 1.28;
   if (inComfort) {
     let pbProb = 0;
-    const nearEdge = dx > 0.24 || plateY < 0.34 || plateY > 1.12;
+    const nearEdge = dx > 0.20 || plateY < 0.38 || plateY > 1.10;
 
-    // Knuckleball late unsteady wake flutter can fool even a ready catcher
+    // Knuckleball late unsteady wake flutter frequently fools the catcher
     if (opts.pitchId === 'knuckle') {
-      pbProb += nearEdge ? 0.105 : 0.072;
+      pbProb += nearEdge ? 0.22 : 0.16;
     }
-    // Blazing fastball / cutter velocity reduces catcher reaction margin near edges
-    if (spd >= 72) {
-      const spdFactor = Math.min(1, (spd - 72) / 6); // 72 -> 78+ km/h
-      pbProb += nearEdge ? 0.035 + 0.055 * spdFactor : 0.012 + 0.022 * spdFactor;
+    // High fastball / cutter velocity pressures catcher framing near edges
+    if (spd >= 70) {
+      const spdFactor = Math.min(1, (spd - 70) / 8); // 70 -> 78+ km/h
+      pbProb += nearEdge ? 0.08 + 0.07 * spdFactor : 0.03 + 0.04 * spdFactor;
     }
-    // Sharp low vertical drop (e.g. diving forkball near dirt)
-    if ((opts.pitchId === 'fork' || brk >= 75) && plateY < 0.34) {
-      pbProb += 0.048;
+    // Sharp low vertical drop (e.g. diving forkball / big breaking drop)
+    if ((opts.pitchId === 'fork' || brk >= 65) && plateY < 0.38) {
+      pbProb += plateY < 0.30 ? 0.18 : 0.14;
+    }
+    // Subtle rim bobble even on ordinary pitches hugging the edge of comfort reach
+    if (pbProb === 0 && nearEdge) {
+      pbProb += 0.025;
     }
 
-    if (pbProb > 0 && r < Math.min(0.18, pbProb)) {
+    if (pbProb > 0 && r < Math.min(0.32, pbProb)) {
       return { caught: false, kind: 'passed_ball' };
     }
     return { caught: true, kind: 'caught' };
@@ -182,9 +186,10 @@ export function evaluateCatcherCatch(
 
   // 2. Outer diving block zone (|x| <= 0.62m, y in [0.06m, 1.56m]) -> Wild Pitch if missed
   if (dx <= 0.62 && plateY >= 0.06 && plateY <= 1.56) {
-    const speedPenalty = spd >= 70 ? Math.min(0.24, ((spd - 70) / 8) * 0.24) : 0;
-    const knucklePenalty = opts.pitchId === 'knuckle' ? 0.12 : 0;
-    const blockProb = Math.max(0.12, 0.46 - speedPenalty - knucklePenalty);
+    const speedPenalty = spd >= 70 ? Math.min(0.14, ((spd - 70) / 8) * 0.14) : 0;
+    const knucklePenalty = opts.pitchId === 'knuckle' ? 0.08 : 0;
+    const dirtPenalty = plateY < 0.14 ? 0.06 : 0;
+    const blockProb = Math.max(0.06, 0.24 - speedPenalty - knucklePenalty - dirtPenalty);
     if (r < blockProb) {
       return { caught: true, kind: 'caught' };
     }

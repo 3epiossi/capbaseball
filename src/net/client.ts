@@ -1,5 +1,5 @@
 import type { PitchId } from '../physics/pitches';
-import type { MatchState } from '../rules/match';
+import type { AbsOutcomeKind, MatchState } from '../rules/match';
 import {
   decodeServerMsg,
   encodePitchId,
@@ -150,6 +150,7 @@ export type ServerMessage =
       pitchSeq: number;
       turnState: TurnState;
       batterSide: 'R' | 'L';
+      batterSides?: { away: 'R' | 'L'; home: 'R' | 'L' };
       match: MatchState;
       names: { home: string; away: string };
       spectators?: number;
@@ -163,6 +164,7 @@ export type ServerMessage =
       pitchSeq: number;
       turnState: TurnState;
       batterSide: 'R' | 'L';
+      batterSides?: { away: 'R' | 'L'; home: 'R' | 'L' };
       match: MatchState;
       names: { home: string; away: string };
       activePitch: Omit<PitchLaunchMsg, 'type' | 'batterSide'> | null;
@@ -170,7 +172,7 @@ export type ServerMessage =
       spectators?: number;
     }
   | PitchLaunchMsg
-  | { type: 'batter_side'; side: 'R' | 'L' }
+  | { type: 'batter_side'; side: 'R' | 'L'; team?: OnlineSide }
   | PitchResultMsg
   | { type: 'opponent_disconnected'; graceSec: number }
   | { type: 'opponent_reconnected' }
@@ -187,6 +189,7 @@ export type ServerMessage =
       pitchSeq: number;
       turnState: TurnState;
       batterSide: 'R' | 'L';
+      batterSides?: { away: 'R' | 'L'; home: 'R' | 'L' };
       activePitch: Omit<PitchLaunchMsg, 'type' | 'batterSide'> | null;
       spectators: number;
     }
@@ -202,6 +205,8 @@ export type ServerMessage =
       challengerSide: OnlineSide;
       match: MatchState;
       pitchSeq: number;
+      outcome?: AbsOutcomeKind;
+      wildKind?: 'wild_pitch' | 'passed_ball' | null;
     }
   | { type: 'emote'; side: OnlineSide | 'spectator'; id: string; senderName?: string }
   | { type: 'pause_state'; pausedSides: OnlineSide[]; remainingSec: number }

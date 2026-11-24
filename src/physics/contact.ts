@@ -43,6 +43,15 @@ export const CATCHER_BLOCK_SPRINT_SPEED = 3.8;
 export const CATCHER_BLOCK_RADIUS = 0.60;
 export const CATCHER_BLOCK_MAX_CHASE = 3.4;
 
+// Aerial catch (catcher must stand up, locate the pop-up in the air, and turn around)
+export const CATCHER_CATCH_REACTION_DELAY_FOUL = 0.46;
+export const CATCHER_CATCH_REACTION_DELAY_FAIR = 0.56;
+export const CATCHER_CATCH_SPRINT_SPEED_FOUL = 3.7;
+export const CATCHER_CATCH_SPRINT_SPEED_FAIR = 3.2;
+export const CATCHER_CATCH_MAX_CHASE_FOUL = 3.5;
+export const CATCHER_CATCH_MAX_CHASE_FAIR = 2.6;
+export const CATCHER_CATCH_RADIUS = 0.45;
+
 export type FielderId = 'LF' | 'RF' | 'P' | 'C';
 
 export type SwingMode = 'normal' | 'power';
@@ -321,22 +330,22 @@ export function simulateDeterministicCatch(
         f.id === 'P'
           ? isFoulFly ? 0.50 : 0.62
           : f.id === 'C'
-            ? isFoulFly ? 0.26 : 0.34
+            ? isFoulFly ? CATCHER_CATCH_REACTION_DELAY_FOUL : CATCHER_CATCH_REACTION_DELAY_FAIR
             : isFoulFly ? 0.36 : OUTFIELDER_REACTION_DELAY;
       const sprintSpd =
         f.id === 'P'
           ? isFoulFly ? 3.7 : 3.5
           : f.id === 'C'
-            ? isFoulFly ? 3.9 : 3.4
+            ? isFoulFly ? CATCHER_CATCH_SPRINT_SPEED_FOUL : CATCHER_CATCH_SPRINT_SPEED_FAIR
             : isFoulFly ? 3.6 : OUTFIELDER_SPRINT_SPEED;
       const maxChase =
         f.id === 'P'
           ? isFoulFly ? 3.8 : 2.8
           : f.id === 'C'
-            ? isFoulFly ? 4.8 : 3.2
+            ? isFoulFly ? CATCHER_CATCH_MAX_CHASE_FOUL : CATCHER_CATCH_MAX_CHASE_FAIR
             : isFoulFly ? 4.5 : OUTFIELDER_MAX_CHASE_DIST;
       const catchRad =
-        f.id === 'P' || f.id === 'C' ? (isFoulFly ? 0.56 : 0.50) : isFoulFly ? 0.54 : OUTFIELDER_CATCH_RADIUS;
+        f.id === 'P' ? (isFoulFly ? 0.56 : 0.50) : f.id === 'C' ? CATCHER_CATCH_RADIUS : isFoulFly ? 0.54 : OUTFIELDER_CATCH_RADIUS;
 
       // 3. Reaction delay + ramp-up acceleration over first 0.35s of running
       if (frame.t >= reactDelay && dt > 0) {
@@ -350,14 +359,14 @@ export function simulateDeterministicCatch(
             landingTarget[2] >= -11.5 &&
             landingTarget[2] <= (isFoulFly ? -3.6 : -4.5)) ||
           (f.id === 'C' &&
-            Math.abs(landingTarget[0]) <= (isFoulFly ? 5.2 : 3.4) &&
-            landingTarget[2] >= (isFoulFly ? -5.2 : -4.2) &&
-            landingTarget[2] <= (isFoulFly ? 3.4 : 2.6));
+            Math.abs(landingTarget[0]) <= 3.6 &&
+            landingTarget[2] >= -3.6 &&
+            landingTarget[2] <= 3.0);
 
         const tx = isMySide ? landingTarget[0] : f.id === 'LF' || f.id === 'RF' ? f.homePos[0] * 0.65 : f.homePos[0];
         const tz = isMySide
           ? f.id === 'C'
-            ? Math.max(isFoulFly ? -5.2 : -4.2, Math.min(isFoulFly ? 3.4 : 2.4, landingTarget[2]))
+            ? Math.max(-3.6, Math.min(3.0, landingTarget[2]))
             : f.id === 'P'
               ? Math.max(-11.5, Math.min(isFoulFly ? -3.6 : -4.5, landingTarget[2]))
               : Math.max(-MAX_FIELDER_RADIUS_M, Math.min(isFoulFly ? 2.2 : 1.5, landingTarget[2]))
@@ -403,10 +412,12 @@ export function simulateDeterministicCatch(
         //    Lower line drives (20..28 deg) are harder to squeeze (12%..28%), while scorching liners already shoot past.
         const speedFactor = Math.max(0, Math.min(1, (exitSpeedMs - 9) / 7.5));
         const diveFactor = distFromStart > 1.8 ? Math.min(1, (distFromStart - 1.8) / 2.2) : 0;
+        // Catcher turning backward to track a high pop-up over the mask has extra drop risk
+        const catcherBackTurnPenalty = f.id === 'C' && capPos[2] > CATCHER_HOME_POS[2] ? 0.16 : 0;
         const dropProb =
           launchAngleDeg >= 28
-            ? Math.min(0.12, 0.04 + diveFactor * 0.08)
-            : Math.min(0.28, 0.12 + speedFactor * 0.08 + diveFactor * 0.08);
+            ? Math.min(0.28, 0.04 + diveFactor * 0.08 + catcherBackTurnPenalty)
+            : Math.min(0.36, 0.12 + speedFactor * 0.08 + diveFactor * 0.08 + catcherBackTurnPenalty);
         const bobbleRoll = seededFloat(((options?.seed ?? 1) ^ 0x517cc1b7) >>> 0)();
 
         if (bobbleRoll < dropProb) {

@@ -531,6 +531,88 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     expect(upheld.ok).toBe(true);
     expect(upheld.overturned).toBe(false);
     expect(match.absChallenges.home).toBe(1);
+
+    // Compound ABS outcome classification & full stat rollback:
+    // Case A: 0-2 blown BALL -> ABS STRIKEOUT
+    const mA = createMatch('quick3');
+    mA.strikes = 2;
+    const snapA = captureAbsPreSnapshot(mA);
+    applyPitchResult(mA, { plateX: 0.14, plateY: 0.72, swung: false, contacted: false, caughtByCatcher: true, reachesPassLine: false, forceCall: 'ball' });
+    recordChallengeableCall(mA, { pitchSeq: 1, plateX: 0.14, plateY: 0.72, trueCall: 'strike', umpireCall: 'ball', marginM: -0.01, preSnapshot: snapA, caughtByCatcher: true, reachesPassLine: false, catchKind: 'caught' });
+    const resA = applyAbsChallenge(mA, 'home');
+    expect(resA.overturned).toBe(true);
+    expect(resA.outcome).toBe('STRIKEOUT');
+    expect(mA.outs).toBe(1);
+    expect(mA.away.strikeouts).toBe(1);
+
+    // Case B: 3-0 blown STRIKE -> ABS WALK
+    const mB = createMatch('quick3');
+    mB.balls = 3;
+    const snapB = captureAbsPreSnapshot(mB);
+    applyPitchResult(mB, { plateX: 0.18, plateY: 0.72, swung: false, contacted: false, caughtByCatcher: true, reachesPassLine: false, forceCall: 'strike' });
+    recordChallengeableCall(mB, { pitchSeq: 2, plateX: 0.18, plateY: 0.72, trueCall: 'ball', umpireCall: 'strike', marginM: 0.02, preSnapshot: snapB, caughtByCatcher: true, reachesPassLine: false, catchKind: 'caught' });
+    const resB = applyAbsChallenge(mB, 'away');
+    expect(resB.overturned).toBe(true);
+    expect(resB.outcome).toBe('WALK');
+    expect(mB.away.walks).toBe(1);
+    expect(mB.bases[0]).not.toBeNull();
+
+    // Case C: 1-2 runner on 2B + catcher miss + blown STRIKE (originally Uncaught 3rd) -> ABS overturns to BALL -> WILD_PITCH (batter stays, runner advances to 3B, uncaughtThirdStrikes rolled back!)
+    const mC = createMatch('quick3');
+    mC.balls = 1;
+    mC.strikes = 2;
+    mC.bases = [null, 'away-1', null];
+    const snapC = captureAbsPreSnapshot(mC);
+    applyPitchResult(mC, { plateX: 0.18, plateY: 0.20, swung: false, contacted: false, caughtByCatcher: false, reachesPassLine: true, forceCall: 'strike' });
+    expect(mC.stats.uncaughtThirdStrikes).toBe(1);
+    expect(mC.bases).toEqual(['away-1', 'away-1', null]);
+    recordChallengeableCall(mC, { pitchSeq: 3, plateX: 0.18, plateY: 0.20, trueCall: 'ball', umpireCall: 'strike', marginM: 0.03, preSnapshot: snapC, caughtByCatcher: false, reachesPassLine: true, catchKind: 'wild_pitch' });
+    const resC = applyAbsChallenge(mC, 'away');
+    expect(resC.overturned).toBe(true);
+    expect(resC.outcome).toBe('WILD_PITCH');
+    expect(mC.stats.uncaughtThirdStrikes).toBe(0);
+    expect(mC.away.strikeouts).toBe(0);
+    expect(mC.stats.wildPitches).toBe(1);
+    expect(mC.away.batterIndex).toBe(0);
+    expect(mC.bases).toEqual([null, null, 'away-1']);
+    expect(mC.balls).toBe(2);
+
+    // Case D: 0-2 bases empty + catcher miss + blown STRIKE (Uncaught 3rd) -> ABS overturns to BALL -> OUT_OVERTURNED (batter stays at plate)
+    const mD = createMatch('quick3');
+    mD.strikes = 2;
+    const snapD = captureAbsPreSnapshot(mD);
+    applyPitchResult(mD, { plateX: 0.18, plateY: 0.20, swung: false, contacted: false, caughtByCatcher: false, reachesPassLine: true, forceCall: 'strike' });
+    recordChallengeableCall(mD, { pitchSeq: 4, plateX: 0.18, plateY: 0.20, trueCall: 'ball', umpireCall: 'strike', marginM: 0.03, preSnapshot: snapD, caughtByCatcher: false, reachesPassLine: true, catchKind: 'wild_pitch' });
+    const resD = applyAbsChallenge(mD, 'away');
+    expect(resD.overturned).toBe(true);
+    expect(resD.outcome).toBe('OUT_OVERTURNED');
+    expect(mD.stats.uncaughtThirdStrikes).toBe(0);
+    expect(mD.stats.wildPitches).toBe(0);
+    expect(mD.bases).toEqual([null, null, null]);
+    expect(mD.balls).toBe(1);
+    expect(mD.strikes).toBe(2);
+
+    // Case E: 0-2 bases empty + catcher miss + blown BALL -> Defense challenges -> ABS UNCAUGHT_THIRD_STRIKE
+    const mE = createMatch('quick3');
+    mE.strikes = 2;
+    const snapE = captureAbsPreSnapshot(mE);
+    applyPitchResult(mE, { plateX: 0.14, plateY: 0.25, swung: false, contacted: false, caughtByCatcher: false, reachesPassLine: true, forceCall: 'ball' });
+    recordChallengeableCall(mE, { pitchSeq: 5, plateX: 0.14, plateY: 0.25, trueCall: 'strike', umpireCall: 'ball', marginM: -0.01, preSnapshot: snapE, caughtByCatcher: false, reachesPassLine: true, catchKind: 'passed_ball' });
+    const resE = applyAbsChallenge(mE, 'home');
+    expect(resE.overturned).toBe(true);
+    expect(resE.outcome).toBe('UNCAUGHT_THIRD_STRIKE');
+    expect(mE.stats.uncaughtThirdStrikes).toBe(1);
+    expect(mE.bases[0]).toBe('away-1');
+
+    // Case F: UPHELD strikeout preserves preOutcome === 'STRIKEOUT'
+    const mF = createMatch('quick3');
+    mF.strikes = 2;
+    const snapF = captureAbsPreSnapshot(mF);
+    applyPitchResult(mF, { plateX: 0.12, plateY: 0.72, swung: false, contacted: false, caughtByCatcher: true, reachesPassLine: false, forceCall: 'strike' });
+    recordChallengeableCall(mF, { pitchSeq: 6, plateX: 0.12, plateY: 0.72, trueCall: 'strike', umpireCall: 'strike', marginM: -0.02, preSnapshot: snapF, caughtByCatcher: true, reachesPassLine: false, catchKind: 'caught' });
+    const resF = applyAbsChallenge(mF, 'away');
+    expect(resF.overturned).toBe(false);
+    expect(resF.outcome).toBe('STRIKEOUT');
   });
 
   it('continues quick3 extra innings with 0 outs & bases loaded (no HR Derby) until a winner is decided', () => {
@@ -677,7 +759,7 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     expect(dirtSkip.caught).toBe(false);
     expect(dirtSkip.kind).toBe('wild_pitch');
 
-    // 3. Knuckleball inside comfort box triggers deterministic passed_ball ~7-11% of the time
+    // 3. Knuckleball inside comfort box triggers higher deterministic passed_ball (~16-22% of the time)
     let knuPassed = 0;
     for (let s = 1; s <= 200; s++) {
       const r = evaluateCatcherCatch(0.12, 0.72, true, {
@@ -690,13 +772,13 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
         knuPassed++;
       }
     }
-    expect(knuPassed).toBeGreaterThanOrEqual(5);
-    expect(knuPassed).toBeLessThanOrEqual(35);
+    expect(knuPassed).toBeGreaterThanOrEqual(15);
+    expect(knuPassed).toBeLessThanOrEqual(65);
 
-    // 4. Blazing 76 km/h fastball on edge of comfort box triggers occasional passed_ball
+    // 4. Blazing 76 km/h fastball near edge of tightened comfort box (|x| <= 0.34m) triggers passed_ball (~8-15%)
     let velPassed = 0;
     for (let s = 1; s <= 200; s++) {
-      const r = evaluateCatcherCatch(0.36, 0.95, true, {
+      const r = evaluateCatcherCatch(0.30, 0.95, true, {
         pitchId: 'straight',
         speedKmh: 76,
         seed: s * 4099,
@@ -706,7 +788,7 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
         velPassed++;
       }
     }
-    expect(velPassed).toBeGreaterThanOrEqual(4);
-    expect(velPassed).toBeLessThanOrEqual(40);
+    expect(velPassed).toBeGreaterThanOrEqual(10);
+    expect(velPassed).toBeLessThanOrEqual(55);
   });
 });

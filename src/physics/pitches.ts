@@ -58,6 +58,8 @@ export interface PitchSpec {
     reduced_frequencies?: number[];
     weights?: number[];
   };
+  /** Optional per-pitch release point [x, y, z] in sim coordinates (defaults to DEFAULT_RELEASE_POS) */
+  releasePos?: V3;
   /** Inherent aerodynamic wake flutter radius (m) shown as minimum scatter floor on aim preview */
   wakeScatterRadiusM?: number;
   envelope: PitchEnvelope;
@@ -71,7 +73,7 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     nameEn: 'Fastball',
     baseAttitude: 'flat',
     bankRightDeg: 0,
-    noseUpDeg: 20,
+    noseUpDeg: 40,
     yawLeftDeg: 0,
     rpm: 3000,
     spinAxis: 'cap',
@@ -80,12 +82,13 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     defaultSpeedKmh: 70,
     clAlphaPerRad: 0.8,
     magnusCoeff: 0.015,
+    releasePos: [1.85, -0.22, 1.18],
     envelope: {
       minFlightZ: 0.24,
-      maxFlightZ: 1.85,
+      maxFlightZ: 2.20,
       maxAbsFlightY: 0.64,
-      minElevationDeg: -7.5,
-      maxElevationDeg: 7.5,
+      minElevationDeg: -18.0,
+      maxElevationDeg: 9.0,
       maxAbsAzimuthDeg: 8.0,
     },
     description: '12 o\'clock high-spin rising hop.',
@@ -473,7 +476,7 @@ export function solvePitchTrajectoryForSpec(
   options?: PitchTrajectoryOptions,
 ): PitchTrajectoryResult {
   const pitchId = spec.id;
-  const releasePos: V3 = options?.releasePos ?? DEFAULT_RELEASE_POS;
+  const releasePos: V3 = options?.releasePos ?? spec.releasePos ?? DEFAULT_RELEASE_POS;
   const goalY = targetPlateY + (options?.errorY ?? 0);
   const goalZ = targetPlateZ + (options?.errorZ ?? 0);
   const dx = HIT_PLANE_X - releasePos[0];

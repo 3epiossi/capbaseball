@@ -565,6 +565,10 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
       };
       if (msg.token) out.k = msg.token;
       if (msg.names) out.nm = msg.names;
+      if (msg.batterSides && typeof msg.batterSides === 'object') {
+        const bss = msg.batterSides as { away?: string; home?: string };
+        out.bss = [bss.away === 'R' ? 1 : 0, bss.home === 'R' ? 1 : 0];
+      }
       if (typeof msg.rtt === 'number') out.rt = msg.rtt;
       if (typeof msg.spectators === 'number') out.sc = msg.spectators;
       if (msg.activePitch) {
@@ -594,6 +598,14 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         bs: msg.batterSide === 'R' ? 1 : 0,
         cm: packMatch(msg.match as MatchState),
         sc: msg.spectators,
+        ...(msg.batterSides && typeof msg.batterSides === 'object'
+          ? {
+              bss: [
+                (msg.batterSides as { away?: string }).away === 'R' ? 1 : 0,
+                (msg.batterSides as { home?: string }).home === 'R' ? 1 : 0,
+              ],
+            }
+          : {}),
       };
       if (msg.activePitch) {
         const ap = msg.activePitch as Record<string, unknown>;
@@ -622,6 +634,8 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         py: round3(Number(msg.plateY)),
         cs: msg.challengerSide === 'home' ? 1 : 0,
         q: msg.pitchSeq,
+        ...(msg.outcome ? { ao: msg.outcome } : {}),
+        ...(msg.wildKind ? { awk: msg.wildKind === 'passed_ball' ? 2 : 1 } : {}),
         cm: packMatch(msg.match as MatchState, { delta: true }),
       };
     case 'match_over':
@@ -860,6 +874,7 @@ export function decodeServerMsg(
     case 'ms':
     case 'ss': {
       const match = unpackMatch(raw.cm as CompactMatch, ctx);
+      const bss = Array.isArray(raw.bss) ? (raw.bss as number[]) : null;
       return {
         type: raw.t === 'ms' ? 'match_start' : 'state_sync',
         code: raw.c,
@@ -870,6 +885,9 @@ export function decodeServerMsg(
         pitchSeq: raw.q,
         turnState: decodeTurn(raw.ts),
         batterSide: raw.bs === 1 ? 'R' : 'L',
+        ...(bss
+          ? { batterSides: { away: bss[0] === 1 ? 'R' : 'L', home: bss[1] === 1 ? 'R' : 'L' } }
+          : {}),
         match,
         names: raw.nm ?? { home: match.home.name, away: match.away.name },
         activePitch: decodeAp(raw.ap),
@@ -879,6 +897,7 @@ export function decodeServerMsg(
     }
     case 'sp': {
       const match = unpackMatch(raw.cm as CompactMatch, ctx);
+      const bss = Array.isArray(raw.bss) ? (raw.bss as number[]) : null;
       return {
         type: 'spectate_sync',
         code: raw.c,
@@ -890,6 +909,9 @@ export function decodeServerMsg(
         pitchSeq: raw.q,
         turnState: decodeTurn(raw.ts),
         batterSide: raw.bs === 1 ? 'R' : 'L',
+        ...(bss
+          ? { batterSides: { away: bss[0] === 1 ? 'R' : 'L', home: bss[1] === 1 ? 'R' : 'L' } }
+          : {}),
         activePitch: decodeAp(raw.ap),
         spectators: raw.sc ?? 0,
       };
@@ -905,6 +927,8 @@ export function decodeServerMsg(
         plateY: raw.py,
         challengerSide: raw.cs === 1 ? 'home' : 'away',
         pitchSeq: raw.q,
+        ...(raw.ao ? { outcome: raw.ao } : {}),
+        ...(raw.awk ? { wildKind: raw.awk === 2 ? 'passed_ball' : 'wild_pitch' } : {}),
         match: unpackMatch(raw.cm as CompactMatch, ctx),
       };
     case 'mo':

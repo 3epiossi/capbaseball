@@ -3125,6 +3125,45 @@ dialog.reconnect-dialog {
   border-bottom-color: #f97316;
 }
 
+.v2-transition-layer[data-variant="wildplay"] .v2-trans-card {
+  background: linear-gradient(135deg, rgba(28, 12, 10, 0.96), rgba(45, 22, 10, 0.94));
+  border-top-color: #f97316;
+  border-bottom-color: #f43f5e;
+  box-shadow: 0 14px 40px rgba(249, 115, 22, 0.35), 0 0 28px rgba(244, 63, 94, 0.25);
+}
+
+.v2-transition-layer[data-variant="wildplay"] .v2-trans-badge {
+  color: #fb923c;
+}
+
+.v2-transition-layer[data-variant="walk"] .v2-trans-card {
+  background: linear-gradient(135deg, rgba(10, 20, 38, 0.96), rgba(14, 38, 56, 0.94));
+  border-top-color: #4ade80;
+  border-bottom-color: #38bdf8;
+  box-shadow: 0 14px 36px rgba(56, 189, 248, 0.25);
+}
+
+.v2-transition-layer[data-variant="walk"] .v2-trans-badge {
+  color: #4ade80;
+}
+
+.v2-transition-layer[data-variant="overturned"] .v2-trans-card {
+  min-width: min(76vw, 290px);
+  padding: 0.7rem 1.25rem;
+  background: linear-gradient(135deg, rgba(8, 26, 20, 0.96), rgba(14, 42, 30, 0.94));
+  border-top-color: #4ade80;
+  border-bottom-color: #86efac;
+  box-shadow: 0 12px 30px rgba(34, 197, 94, 0.28);
+}
+
+.v2-transition-layer[data-variant="overturned"] .v2-trans-badge {
+  color: #86efac;
+}
+
+.v2-transition-layer[data-variant="overturned"] .v2-trans-title {
+  font-size: clamp(1.1rem, 3.2vw, 1.55rem);
+}
+
 .v2-trans-badge {
   font-family: var(--font-broadcast);
   font-size: 0.72rem;

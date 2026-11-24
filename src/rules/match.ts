@@ -45,6 +45,16 @@ export interface MatchStats {
   uncaughtThirdStrikes: number;
 }
 
+export type AbsOutcomeKind =
+  | 'STRIKEOUT'
+  | 'UNCAUGHT_THIRD_STRIKE'
+  | 'WALK'
+  | 'WILD_PITCH'
+  | 'PASSED_BALL'
+  | 'OUT_OVERTURNED'
+  | 'BALL'
+  | 'STRIKE';
+
 export interface AbsPreSnapshot {
   balls: number;
   strikes: number;
@@ -54,12 +64,19 @@ export interface AbsPreSnapshot {
   bases: [string | null, string | null, string | null];
   awayRuns: number;
   homeRuns: number;
+  awayRunsByInning?: number[];
+  homeRunsByInning?: number[];
   awayBatterIdx: number;
   homeBatterIdx: number;
   awayWalks: number;
   homeWalks: number;
   awayStrikeouts: number;
   homeStrikeouts: number;
+  wildPitches?: number;
+  uncaughtThirdStrikes?: number;
+  plateAppearancesInHalf?: number;
+  mercyTriggered?: boolean;
+  endReason?: MatchEndReason;
   isGameOver: boolean;
   winner: 'away' | 'home' | 'tie' | null;
 }
@@ -75,6 +92,9 @@ export interface AbsChallengeRecord {
   eligibleSide: 'away' | 'home';
   caughtByCatcher?: boolean;
   reachesPassLine?: boolean;
+  catchKind?: 'caught' | 'wild_pitch' | 'passed_ball';
+  preOutcome?: AbsOutcomeKind;
+  preWildKind?: 'wild_pitch' | 'passed_ball' | null;
   preSnapshot: AbsPreSnapshot;
 }
 
@@ -599,15 +619,64 @@ export function captureAbsPreSnapshot(state: MatchState): AbsPreSnapshot {
     bases: [...state.bases] as [string | null, string | null, string | null],
     awayRuns: state.away.totalRuns,
     homeRuns: state.home.totalRuns,
+    awayRunsByInning: [...state.away.runsByInning],
+    homeRunsByInning: [...state.home.runsByInning],
     awayBatterIdx: state.away.batterIndex,
     homeBatterIdx: state.home.batterIndex,
     awayWalks: state.away.walks,
     homeWalks: state.home.walks,
     awayStrikeouts: state.away.strikeouts,
     homeStrikeouts: state.home.strikeouts,
+    wildPitches: state.stats.wildPitches,
+    uncaughtThirdStrikes: state.stats.uncaughtThirdStrikes,
+    plateAppearancesInHalf: state.plateAppearancesInHalf,
+    mercyTriggered: Boolean(state.mercyTriggered),
+    endReason: state.endReason,
     isGameOver: state.isGameOver,
     winner: state.winner,
   };
+}
+
+function classifyAbsPitchTransition(
+  snap: AbsPreSnapshot,
+  cur: MatchState,
+  opts: {
+    finalCall: 'strike' | 'ball';
+    isUncaughtThird: boolean;
+    isWildPitch: boolean;
+    catchKind?: 'caught' | 'wild_pitch' | 'passed_ball';
+    wasStrikeout?: boolean;
+  },
+): { outcome: AbsOutcomeKind; wildKind: 'wild_pitch' | 'passed_ball' | null } {
+  const preK = snap.half === 'top' ? snap.awayStrikeouts : snap.homeStrikeouts;
+  const curK = snap.half === 'top' ? cur.away.strikeouts : cur.home.strikeouts;
+  const preBB = snap.half === 'top' ? snap.awayWalks : snap.homeWalks;
+  const curBB = snap.half === 'top' ? cur.away.walks : cur.home.walks;
+  const preU3 = snap.uncaughtThirdStrikes ?? cur.stats.uncaughtThirdStrikes;
+
+  const wildKind: 'wild_pitch' | 'passed_ball' | null = opts.isWildPitch
+    ? (opts.catchKind === 'passed_ball' ? 'passed_ball' : 'wild_pitch')
+    : null;
+
+  if (opts.isUncaughtThird || cur.stats.uncaughtThirdStrikes > preU3) {
+    return { outcome: 'UNCAUGHT_THIRD_STRIKE', wildKind: null };
+  }
+  if (curK > preK) {
+    return { outcome: 'STRIKEOUT', wildKind: null };
+  }
+  if (curBB > preBB) {
+    return { outcome: 'WALK', wildKind };
+  }
+  if (wildKind === 'passed_ball') {
+    return { outcome: 'PASSED_BALL', wildKind };
+  }
+  if (wildKind === 'wild_pitch') {
+    return { outcome: 'WILD_PITCH', wildKind };
+  }
+  if (opts.wasStrikeout && opts.finalCall === 'ball') {
+    return { outcome: 'OUT_OVERTURNED', wildKind: null };
+  }
+  return { outcome: opts.finalCall === 'strike' ? 'STRIKE' : 'BALL', wildKind: null };
 }
 
 export function recordChallengeableCall(
@@ -622,11 +691,20 @@ export function recordChallengeableCall(
     preSnapshot: AbsPreSnapshot;
     caughtByCatcher?: boolean;
     reachesPassLine?: boolean;
+    catchKind?: 'caught' | 'wild_pitch' | 'passed_ball';
   },
 ): void {
   const battingSide: 'away' | 'home' = info.preSnapshot.half === 'top' ? 'away' : 'home';
   const pitchingSide: 'away' | 'home' = info.preSnapshot.half === 'top' ? 'home' : 'away';
   const eligibleSide = info.umpireCall === 'strike' ? battingSide : pitchingSide;
+  const preUncaught = (state.stats.uncaughtThirdStrikes > (info.preSnapshot.uncaughtThirdStrikes ?? 0));
+  const preWp = state.stats.wildPitches > (info.preSnapshot.wildPitches ?? 0);
+  const classifiedPre = classifyAbsPitchTransition(info.preSnapshot, state, {
+    finalCall: info.umpireCall,
+    isUncaughtThird: preUncaught,
+    isWildPitch: preWp,
+    catchKind: info.catchKind,
+  });
   state.lastChallenge = {
     pitchSeq: info.pitchSeq,
     plateX: info.plateX,
@@ -638,6 +716,9 @@ export function recordChallengeableCall(
     eligibleSide,
     caughtByCatcher: info.caughtByCatcher,
     reachesPassLine: info.reachesPassLine,
+    catchKind: info.catchKind,
+    preOutcome: classifiedPre.outcome,
+    preWildKind: classifiedPre.wildKind,
     preSnapshot: info.preSnapshot,
   };
 }
@@ -651,6 +732,8 @@ export interface AbsChallengeResult {
   plateX: number;
   plateY: number;
   challengerSide: 'away' | 'home';
+  outcome: AbsOutcomeKind;
+  wildKind: 'wild_pitch' | 'passed_ball' | null;
 }
 
 export function applyAbsChallenge(
@@ -673,14 +756,22 @@ export function applyAbsChallenge(
       plateX: lc?.plateX ?? 0,
       plateY: lc?.plateY ?? 0,
       challengerSide,
+      outcome: 'BALL',
+      wildKind: null,
     };
   }
 
   lc.challenged = true;
   const overturned = lc.trueCall !== lc.umpireCall;
+  let postOutcome: AbsOutcomeKind = lc.preOutcome ?? (lc.umpireCall === 'strike' ? 'STRIKE' : 'BALL');
+  let postWildKind: 'wild_pitch' | 'passed_ball' | null = lc.preWildKind ?? null;
 
   if (overturned) {
     const snap = lc.preSnapshot;
+    const preKBeforeRollback = snap.half === 'top' ? state.away.strikeouts : state.home.strikeouts;
+    const snapK = snap.half === 'top' ? snap.awayStrikeouts : snap.homeStrikeouts;
+    const wasStrikeout = preKBeforeRollback > snapK;
+
     const awayDelta = state.away.totalRuns - snap.awayRuns;
     const homeDelta = state.home.totalRuns - snap.homeRuns;
 
@@ -692,13 +783,17 @@ export function applyAbsChallenge(
     state.bases = [...snap.bases] as [string | null, string | null, string | null];
     state.away.totalRuns = snap.awayRuns;
     state.home.totalRuns = snap.homeRuns;
-    if (awayDelta > 0 && state.away.runsByInning.length >= snap.inning) {
+    if (snap.awayRunsByInning) {
+      state.away.runsByInning = [...snap.awayRunsByInning];
+    } else if (awayDelta > 0 && state.away.runsByInning.length >= snap.inning) {
       state.away.runsByInning[snap.inning - 1] = Math.max(
         0,
         state.away.runsByInning[snap.inning - 1] - awayDelta,
       );
     }
-    if (homeDelta > 0 && state.home.runsByInning.length >= snap.inning) {
+    if (snap.homeRunsByInning) {
+      state.home.runsByInning = [...snap.homeRunsByInning];
+    } else if (homeDelta > 0 && state.home.runsByInning.length >= snap.inning) {
       state.home.runsByInning[snap.inning - 1] = Math.max(
         0,
         state.home.runsByInning[snap.inning - 1] - homeDelta,
@@ -710,6 +805,15 @@ export function applyAbsChallenge(
     state.home.walks = snap.homeWalks;
     state.away.strikeouts = snap.awayStrikeouts;
     state.home.strikeouts = snap.homeStrikeouts;
+    if (typeof snap.wildPitches === 'number') state.stats.wildPitches = snap.wildPitches;
+    if (typeof snap.uncaughtThirdStrikes === 'number') {
+      state.stats.uncaughtThirdStrikes = snap.uncaughtThirdStrikes;
+    }
+    if (typeof snap.plateAppearancesInHalf === 'number') {
+      state.plateAppearancesInHalf = snap.plateAppearancesInHalf;
+    }
+    state.mercyTriggered = Boolean(snap.mercyTriggered);
+    state.endReason = snap.endReason;
     state.isGameOver = snap.isGameOver;
     state.winner = snap.winner;
 
@@ -717,6 +821,18 @@ export function applyAbsChallenge(
     state.stats.totalPitches = Math.max(0, state.stats.totalPitches - 1);
     const fieldingTeam = getFieldingTeam(state);
     fieldingTeam.pitchesThrown = Math.max(0, fieldingTeam.pitchesThrown - 1);
+
+    const postJudge = judgePitch({
+      plateX: lc.plateX,
+      plateY: lc.plateY,
+      swung: false,
+      contacted: false,
+      caughtByCatcher: lc.caughtByCatcher ?? true,
+      reachesPassLine: lc.reachesPassLine ?? false,
+      currentStrikes: snap.strikes,
+      runnersOnBase: snap.bases.some((b) => b !== null),
+      forceCall: lc.trueCall,
+    });
 
     applyPitchResult(state, {
       plateX: lc.plateX,
@@ -727,6 +843,16 @@ export function applyAbsChallenge(
       reachesPassLine: lc.reachesPassLine ?? false,
       forceCall: lc.trueCall,
     });
+
+    const classifiedPost = classifyAbsPitchTransition(snap, state, {
+      finalCall: lc.trueCall,
+      isUncaughtThird: postJudge.isUncaughtThirdStrike,
+      isWildPitch: postJudge.isWildPitch,
+      catchKind: lc.catchKind,
+      wasStrikeout,
+    });
+    postOutcome = classifiedPost.outcome;
+    postWildKind = classifiedPost.wildKind;
     state.lastEvent = `ABS Challenge OVERTURNED! Call changed to ${lc.trueCall.toUpperCase()}`;
   } else {
     state.absChallenges[challengerSide] = Math.max(0, state.absChallenges[challengerSide] - 1);
@@ -742,6 +868,8 @@ export function applyAbsChallenge(
     plateX: lc.plateX,
     plateY: lc.plateY,
     challengerSide,
+    outcome: postOutcome,
+    wildKind: postWildKind,
   };
 }
 
