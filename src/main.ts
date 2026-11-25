@@ -2150,6 +2150,7 @@ function commitSpringPitch(peakVal: number): void {
       errorX: errX,
       errorY: errY,
       springZone: evalRes.zone,
+      u: Math.max(0, Math.min(1, peakVal)),
     });
     updateHudAndDocks();
   } else {

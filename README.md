@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.7.2`（語意化三段式版本號）
+- **目前里程碑**：`v2.7.3`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -295,3 +295,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
 - **v2.7.2 修正兩出局飛球空中提前切換左右打與全域動作／狀態／動畫順序保護（2026-11-25）**：
   - **補齊接觸出局換局推播的 `batter_side.team` 欄位**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 於兩出局安打／接殺出局觸發換局時同步附帶 `team: getBattingSide(room.match)`，根治球還在飛行中即因缺欄被套用到場上現任打者、導致左打者空中瞬變右打者的問題。
   - **新增 `isActivePlayMotion()` 動畫鎖定守衛與全面時序審計**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 在投球揮臂（`windup`）、投球飛行（`pitch_flight`）、擊球飛行（`batted_flight`）、待結算／ABS 重播／漏球滾動期間統一鎖住打者左右打外觀、HUD 與操作面板（並防止 `match_over` 提前中斷飛行中全壘打／再見安打，及於 `result -> idle` 同步重整視覺打席），同步擴充 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 第 34 項測試驗證接觸出局與三振換局皆帶正確 `team`（`61/61` 測試通過）。
+- **v2.7.3 對局紀錄補欄位：逐球亂數種子、彈簧蓄力值與配對佇列紀錄（2026-11-26）**：
+  - **`pitches.jsonl` 每球新增 `seed`、`u`（彈簧蓄力值 0–1，選填）與 `version`**：[server/index.ts](server/index.ts) 的 `pitch_submit` 解析選填的 `u`，[src/net/protocol.ts](src/net/protocol.ts)、[src/net/client.ts](src/net/client.ts) 與 [src/main.ts](src/main.ts) 一併送出；舊客戶端不送 `u` 照常運作。有了種子與蓄力值，每一球都能離線重跑。
+  - **新增 `queue.jsonl`**：記錄 `queue_enter`、`queue_leave`（含原因 `cancel`／`disconnect`／`matched`／`drain` 與等待毫秒數）與 `match_made`，用來分析隨機配對的等待時間（路徑由 `QUEUE_LOG` 指定，預設與逐球紀錄同資料夾，保留上限 50,000 筆或 5 MB）；[deploy/capbaseball.service](deploy/capbaseball.service) 補上 `QUEUE_LOG`。
+  - 測試新增第 39、40 項，全部 **63/63** 通過。

@@ -424,6 +424,7 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
         errorX: raw.ex ?? 0,
         errorY: raw.ey ?? 0,
         ...(raw.sz !== undefined ? { springZone: decodeSpringZone(raw.sz) } : {}),
+        ...(raw.u !== undefined ? { u: raw.u } : {}),
       };
     case 'sw':
       return {

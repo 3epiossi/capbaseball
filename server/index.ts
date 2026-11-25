@@ -111,6 +111,7 @@ interface ClientMeta {
   side: Side | null;
   watchingCode: string | null;
   queuedMode: OnlineMode | null;
+  queuedAtMs: number;
   standbyMode: OnlineMode | null;
   standbyPriority: boolean;
   pageActivity: 'title' | 'cpu_match' | 'practice_bat' | 'practice_pitch' | 'pitch_lab';
@@ -137,6 +138,8 @@ interface RoomPlayer {
 interface ActivePitchData {
   pitchSeq: number;
   seed: number;
+  /** Spring charge 0..1 reported by the pitcher's client; absent for old clients. Logging only. */
+  u?: number;
   pitchId: PitchId;
   speedKmh: number;
   targetX: number;
@@ -189,6 +192,7 @@ export interface ServerOptions {
   matchLogPath?: string;
   pitchLogPath?: string;
   sessionLogPath?: string;
+  queueLogPath?: string;
   pingIntervalMs?: number;
   deadSocketTimeoutMs?: number;
   graceMs?: number;
@@ -296,6 +300,9 @@ function getBattingSide(match: MatchState): Side {
   return match.half === 'top' ? 'away' : 'home';
 }
 
+const MAX_RETAINED_QUEUE = 50000;
+const QUEUE_LOG_MAX_BYTES = 5_000_000;
+
 function getMatchLogPath(override?: string): string {
   const target = override || process.env.MATCH_LOG || 'data/matches.jsonl';
   return path.resolve(process.cwd(), target);
@@ -303,6 +310,13 @@ function getMatchLogPath(override?: string): string {
 
 function getPitchLogPath(override?: string): string {
   const target = override || process.env.PITCH_LOG || 'data/pitches.jsonl';
+  return path.resolve(process.cwd(), target);
+}
+
+// Default sits next to the pitch log so a deploy that only sets PITCH_LOG still gets a queue log.
+function getQueueLogPath(override?: string, pitchOverride?: string): string {
+  const target =
+    override || process.env.QUEUE_LOG || path.join(path.dirname(getPitchLogPath(pitchOverride)), 'queue.jsonl');
   return path.resolve(process.cwd(), target);
 }
 
@@ -343,6 +357,10 @@ function appendMatchLog(record: unknown, override?: string): void {
 
 function appendPitchLog(record: unknown, override?: string): void {
   appendJsonlFile(getPitchLogPath(override), record, 'pitch-log', MAX_RETAINED_PITCHES, PITCH_LOG_MAX_BYTES);
+}
+
+function appendQueueLog(record: unknown, override?: string, pitchOverride?: string): void {
+  appendJsonlFile(getQueueLogPath(override, pitchOverride), record, 'queue-log', MAX_RETAINED_QUEUE, QUEUE_LOG_MAX_BYTES);
 }
 
 function appendSessionLog(record: unknown, override?: string): void {
@@ -1075,6 +1093,7 @@ export function startServer(
         code: room.code,
         roomKind: room.isMatchmaking ? 'live' : 'friend',
         mode: room.mode,
+        ...(version ? { version } : {}),
         ...data,
       },
       opts.pitchLogPath,
@@ -1146,7 +1165,21 @@ export function startServer(
     if (changed) scheduleStatsBroadcast();
   }
 
-  function removeFromQueues(clientId: string) {
+  function logQueue(record: Record<string, unknown>) {
+    appendQueueLog({ ts: new Date().toISOString(), ...record }, opts.queueLogPath, opts.pitchLogPath);
+  }
+
+  function removeFromQueues(clientId: string, reason: 'cancel' | 'disconnect' | 'matched' | 'drain' = 'cancel') {
+    const queued = clients.get(clientId);
+    if (queued?.queuedMode) {
+      logQueue({
+        event: 'queue_leave',
+        cid: clientId,
+        mode: queued.queuedMode,
+        reason,
+        waitMs: Date.now() - queued.queuedAtMs,
+      });
+    }
     for (const m of ['quick3', 'official6'] as const) {
       const idx = queues[m].indexOf(clientId);
       if (idx !== -1) queues[m].splice(idx, 1);
@@ -1453,6 +1486,8 @@ export function startServer(
       pitcherInput: room.players[pitcherSide]?.input ?? null,
       batterInput: room.players[batterSideRole]?.input ?? null,
       pitchId: activeSnap.pitchId,
+      seed: activeSnap.seed,
+      ...(activeSnap.u !== undefined ? { u: activeSnap.u } : {}),
       speedKmh: round2(activeSnap.speedKmh),
       springZone: activeSnap.springZone ?? null,
       targetX: round3(activeSnap.targetX),
@@ -1722,6 +1757,8 @@ export function startServer(
       pitcherInput: room.players[pitcherSide]?.input ?? null,
       batterInput: room.players[batterSideRole]?.input ?? null,
       pitchId: activeSnap.pitchId,
+      seed: activeSnap.seed,
+      ...(activeSnap.u !== undefined ? { u: activeSnap.u } : {}),
       speedKmh: round2(activeSnap.speedKmh),
       springZone: activeSnap.springZone ?? null,
       targetX: round3(activeSnap.targetX),
@@ -1846,8 +1883,10 @@ export function startServer(
   }
 
   function createMatchmakingRoom(mode: OnlineMode, c1: ClientMeta, c2: ClientMeta) {
-    removeFromQueues(c1.id);
-    removeFromQueues(c2.id);
+    const matchedAtMs = Date.now();
+    const waits = [c1, c2].map((c) => (c.queuedMode ? matchedAtMs - c.queuedAtMs : null));
+    removeFromQueues(c1.id, 'matched');
+    removeFromQueues(c2.id, 'matched');
 
     const code = generateRoomCode(rooms);
     const homeFirst = crypto.randomInt(0, 2) === 0;
@@ -1913,6 +1952,15 @@ export function startServer(
     homeClient.side = 'home';
     awayClient.roomCode = code;
     awayClient.side = 'away';
+    logQueue({
+      event: 'match_made',
+      mode,
+      matchId: room.matchId,
+      via: waits[0] !== null && waits[1] !== null ? 'queue' : 'standby',
+      cids: [c1.id, c2.id],
+      waitsMs: waits,
+      waitMs: Math.max(waits[0] ?? 0, waits[1] ?? 0),
+    });
 
     startMatchInRoom(room);
     scheduleStatsBroadcast();
@@ -2007,8 +2055,6 @@ export function startServer(
         q.unshift(id1);
         continue;
       }
-      c1.queuedMode = null;
-      c2.queuedMode = null;
       cancelOffersForClient(c1.id, 'expired', true);
       cancelOffersForClient(c2.id, 'expired', true);
       createMatchmakingRoom(mode, c1, c2);
@@ -2359,6 +2405,7 @@ export function startServer(
       side: null,
       watchingCode: null,
       queuedMode: null,
+      queuedAtMs: 0,
       standbyMode: null,
       standbyPriority: false,
       pageActivity: 'title',
@@ -2487,7 +2534,9 @@ export function startServer(
           const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
           removeFromQueues(clientId);
           client.queuedMode = mode;
+          client.queuedAtMs = Date.now();
           queues[mode].push(clientId);
+          logQueue({ event: 'queue_enter', cid: clientId, mode });
           sendJson(ws, { type: 'queued', mode });
           tryPairQueue(mode);
           scheduleStatsBroadcast();
@@ -3100,6 +3149,8 @@ export function startServer(
             monitor.outOfRangeInputsClamped += 1;
           }
 
+          const rawU = Number(msg.u);
+          const u = msg.u !== undefined && Number.isFinite(rawU) ? Math.max(0, Math.min(1, rawU)) : undefined;
           const springZone = decodeSpringZone(msg.springZone);
           const expectedSeq = room.pitchSeq;
           const seed = crypto.randomInt(1, 2147483647);
@@ -3139,6 +3190,7 @@ export function startServer(
               room.activePitch = {
                 pitchSeq: expectedSeq,
                 seed,
+                ...(u !== undefined ? { u } : {}),
                 pitchId,
                 speedKmh,
                 targetX,
@@ -3505,7 +3557,7 @@ export function startServer(
       const ipLeft = (ipConnCounts.get(ip) ?? 1) - 1;
       if (ipLeft <= 0) ipConnCounts.delete(ip);
       else ipConnCounts.set(ip, ipLeft);
-      removeFromQueues(clientId);
+      removeFromQueues(clientId, 'disconnect');
       if (client.watchingCode) {
         const watched = rooms.get(client.watchingCode);
         if (watched && watched.spectators.delete(client)) {
@@ -3620,6 +3672,7 @@ export function startServer(
       standbyQueues.quick3.length = 0;
       standbyQueues.official6.length = 0;
       for (const c of clients.values()) {
+        if (c.queuedMode) removeFromQueues(c.id, 'drain');
         c.queuedMode = null;
         c.standbyMode = null;
         sendJson(c.ws, { type: 'notice', kind: 'draining', countdownSec: drainSec, updateAtMs });

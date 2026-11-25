@@ -2243,4 +2243,106 @@ describe('Online Multiplayer Server Integration', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+  const readJsonl = (file: string) =>
+    fs.existsSync(file)
+      ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, any>)
+      : [];
+  const waitForRows = async (file: string, n: number) => {
+    for (let i = 0; i < 100 && readJsonl(file).length < n; i++) await new Promise((r) => setTimeout(r, 20));
+    return readJsonl(file);
+  };
+
+  it('39. pitches.jsonl logs seed + spring u (validated, optional) so a pitch can be re-simulated offline', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-replay-'));
+    const pitchLogPath = path.join(dir, 'pitches.jsonl');
+    const s2 = await startServer(0, { pitchClockScale: 0, absWindowMs: 0, pitchLogPath, randomizeFriendSides: false });
+    const host = await connectClient(s2.port, 'HostU');
+    const guest = await connectClient(s2.port, 'GuestU');
+    try {
+      host.send({ type: 'create', mode: 'quick3', name: 'HostU' });
+      const created = await host.nextMsg((m) => m.type === 'room_created');
+      guest.send({ type: 'join', code: created.code, name: 'GuestU' });
+      await host.nextMsg((m) => m.type === 'match_start');
+      await guest.nextMsg((m) => m.type === 'match_start');
+
+      const us: unknown[] = [undefined, 'abc', 5, 0.42];
+      let launch: Record<string, unknown> = {};
+      for (let i = 0; i < us.length; i++) {
+        host.send({
+          type: 'pitch_submit',
+          pitchSeq: i + 1,
+          pitchId: 'cutter',
+          speedKmh: 70,
+          targetX: 0.1,
+          targetY: 0.72,
+          errorX: 0.02,
+          errorY: -0.01,
+          ...(us[i] !== undefined ? { u: us[i] } : {}),
+        });
+        launch = await host.nextMsg((m) => m.type === 'pitch_launch');
+        await guest.nextMsg((m) => m.type === 'pitch_launch');
+        guest.send({ type: 'no_swing', pitchSeq: i + 1 });
+        await host.nextMsg((m) => m.type === 'pitch_result');
+        await guest.nextMsg((m) => m.type === 'pitch_result');
+      }
+      const rows = (await waitForRows(pitchLogPath, 4)).filter((r) => r.event === 'pitch');
+      expect(rows).toHaveLength(4);
+      expect('u' in rows[0]).toBe(false); // old client: field omitted
+      expect('u' in rows[1]).toBe(false); // NaN-ish: ignored
+      expect(rows[2].u).toBe(1); // clamped
+      expect(rows[3].u).toBe(0.42);
+      // Last row carries the exact seed the clients saw in pitch_launch
+      expect(rows[3].seed).toBe(launch.seed);
+      expect(rows[3]).toMatchObject({ pitchId: 'cutter', targetX: 0.1, targetY: 0.72, errorX: 0.02, errorY: -0.01 });
+    } finally {
+      await Promise.all([host.close(), guest.close()]);
+      await s2.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('40. queue.jsonl records queue_enter, queue_leave (cancel/disconnect/matched) and match_made with wait times', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-queue-'));
+    const queueLogPath = path.join(dir, 'queue.jsonl');
+    const s2 = await startServer(0, { pitchClockScale: 0, queueLogPath });
+    const a = await connectClient(s2.port, 'QA');
+    const b = await connectClient(s2.port, 'QB');
+    const c = await connectClient(s2.port, 'QC');
+    const d = await connectClient(s2.port, 'QD');
+    try {
+      c.send({ type: 'queue', mode: 'quick3', name: 'QC' });
+      await c.nextMsg((m) => m.type === 'queued');
+      c.send({ type: 'unqueue' });
+      await c.nextMsg((m) => m.type === 'unqueued');
+
+      d.send({ type: 'queue', mode: 'official6', name: 'QD' });
+      await d.nextMsg((m) => m.type === 'queued');
+      await d.close();
+
+      a.send({ type: 'queue', mode: 'quick3', name: 'QA' });
+      await a.nextMsg((m) => m.type === 'queued');
+      await new Promise((r) => setTimeout(r, 60));
+      b.send({ type: 'queue', mode: 'quick3', name: 'QB' });
+      await a.nextMsg((m) => m.type === 'match_start');
+
+      // enter x4, leave x4 (cancel, disconnect, matched x2), match_made x1
+      const rows = await waitForRows(queueLogPath, 9);
+      expect(rows).toHaveLength(9);
+      const left = rows.filter((r) => r.event === 'queue_leave');
+      expect(left.map((r) => r.reason).sort()).toEqual(['cancel', 'disconnect', 'matched', 'matched']);
+      expect(rows.filter((r) => r.event === 'queue_enter').every((r) => typeof r.cid === 'string' && r.ts)).toBe(true);
+      const made = rows.find((r) => r.event === 'match_made')!;
+      expect(made.via).toBe('queue');
+      expect(made.waitMs).toBeGreaterThanOrEqual(50);
+      expect(made.cids).toHaveLength(2);
+      const matchedA = left.find((r) => r.reason === 'matched' && r.cid === made.cids[0]) ?? left.find((r) => r.reason === 'matched')!;
+      expect(matchedA.waitMs).toBeGreaterThanOrEqual(0);
+      // No names or IPs in the queue log
+      expect(JSON.stringify(rows)).not.toMatch(/QA|QB|QC|QD|127\.0\.0\.1/);
+    } finally {
+      await Promise.all([a.close(), b.close(), c.close()]);
+      await s2.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

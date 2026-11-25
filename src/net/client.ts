@@ -704,6 +704,7 @@ export class OnlineClient {
     errorX: number;
     errorY: number;
     springZone?: SpringZoneWire;
+    u?: number;
   }): void {
     const sz = encodeSpringZone(payload.springZone);
     this.sendRaw({
@@ -716,6 +717,7 @@ export class OnlineClient {
       ex: round3(payload.errorX),
       ey: round3(payload.errorY),
       ...(sz !== undefined ? { sz } : {}),
+      ...(payload.u !== undefined ? { u: round3(payload.u) } : {}),
     });
   }
 
