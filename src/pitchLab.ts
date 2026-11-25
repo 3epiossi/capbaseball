@@ -1,6 +1,7 @@
 import { configFromRaw } from './physics/config';
 import {
   buildPitchRawConfig,
+  computePitchBreakDelta,
   DEFAULT_RELEASE_POS,
   HIT_PLANE_X,
   PASS_LINE_SIM_X,
@@ -378,8 +379,9 @@ function runLabSimulation(): LabSimOutput {
     if (bz <= 0) break;
   }
 
-  const breakDxCm = (hitPos[1] - ballisticHitPos[1]) * 100;
-  const breakDzCm = (hitPos[2] - ballisticHitPos[2]) * 100;
+  const breakDelta = computePitchBreakDelta(frames, rel, hitPos, ballisticHitPos[1]);
+  const breakDxCm = breakDelta[1] * 100;
+  const breakDzCm = breakDelta[2] * 100;
   const marginM = computeStrikeZoneMarginM(hitPos[1], hitPos[2]);
 
   return {

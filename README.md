@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.7.0`（語意化三段式版本號）
+- **目前里程碑**：`v2.7.1`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -288,3 +288,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **記分板同時顯示客隊與主隊 ABS 剩餘次數**：修復觀戰者及 CPU 模式下因只顯示客隊（`away`）造成主隊挑戰失敗卻看似未扣次數的顯示 Bug，於 [index.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/index.html)、[src/styles.css](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/styles.css) 與 [src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 改為上排客隊（銀白 `ABS`）＋下排主隊（金黃 `ABS`）同步呈現。
   - **將 `/analytics` 融入 `/monitor` 統一四分頁後台與進階數據收集**：[server/monitorUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/monitorUi.ts) 整合為「伺服器監控／對戰總覽／球路與平衡／裝置與跨平台」四大分頁（切分頁才按需輪詢 `/metrics` 或 `/analytics.json` 節省樹莓派資源，`/analytics` 路徑自動開啟對戰總覽）；[src/net/client.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/net/client.ts) 與 [server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 新增零 PII 單次節流裝置檔案（寫入 `data/sessions.jsonl` 並設 ~13.7 MB SD 卡自動輪替上限）與彈簧 `SOFT/BEST/OVER` 標記；[server/analyticsUi.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/analyticsUi.ts) 新增跨平台觸控 vs 滑鼠公平性、左右打對位矩陣、好球帶 9 宮格熱區（投球量／揮棒率／安打率／誤判率）、捕手與特殊規則事件率與揮棒時機分佈（新增 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 第 38 項整合測試，全部 **61/61** 通過）。
   - **`/pitch-lab` 開放 6 項白話非投手物理滑桿**：[pitch-lab.html](file:///Users/chang/Documents/raspberry%20pi/capbaseball/pitch-lab.html)、[src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 與 [src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 開放調整空氣煞車強度（`cdProjected`）、滑翔轉彎力（`clAlphaPerRad`）、旋轉吸力強度（`magnusCoeff`）、空氣濃稠度（`airDensityKgM3`）、瓶蓋重量（`capMassG`）與旋轉維持力（`spinDamping`），並支援快速基準切換與 JSON 匯出。
+- **v2.7.1 指叉球／卡特球調校、變化量（BRK）新公式與逐球紀錄路徑修正（2026-11-25）**：
+  - **指叉球（`fork`）與卡特球（`cutter`）出手前伸 `+1.5m` 與氣動調校**：[src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 將 `fork` 的 `cdProjected` 調高至 `1.0`、`cutter` 調為 `clAlphaPerRad: 1.50` / `bankRightDeg: -50°` / `noseUpDeg: 10°`，兩者 `releasePos` 皆前移至 `[1.85, -0.22, 1.18]` 並同步放寬飛行包絡線限制。
+  - **重構變化量（`computePitchBreakDelta`）計算基準**：[src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 與 [src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 水平變化維持純橫移量，垂直變化改以軌跡相對於「出手點至進壘點連線」的最大垂直弧偏（上飄為 `+`、下墜為 `-`）計算，不再扣減真空自由落體重力下墜，使直球回歸 `~15.8 cm`、變速球 `~71.9 cm`、卡特球 `~81.1 cm`、噴射球 `~147.6 cm` 等直覺排序（`61/61` 測試通過）。
+  - **逐球與裝置紀錄改用絕對路徑**：[deploy/capbaseball.service](deploy/capbaseball.service) 的 `PITCH_LOG`、`SESSION_LOG` 改為 `%h/capbaseball/data/` 下的固定路徑，修正每次換版（相對路徑落在各版本目錄）造成逐球紀錄被清空的問題。

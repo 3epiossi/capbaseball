@@ -101,23 +101,24 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     code: 'CUT',
     nameEn: 'Cutter',
     baseAttitude: 'flat',
-    bankRightDeg: -30,
-    noseUpDeg: 5,
+    bankRightDeg: -50,
+    noseUpDeg: 10,
     yawLeftDeg: 5,
     rpm: 1300,
     spinAxis: 'cap',
     rotationSense: 'clockwise',
     speedRangeKmh: [64, 75],
     defaultSpeedKmh: 70,
-    clAlphaPerRad: 0.9,
+    clAlphaPerRad: 1.50,
     magnusCoeff: 0.04,
+    releasePos: [1.85, -0.22, 1.18],
     envelope: {
-      minFlightZ: 0.22,
+      minFlightZ: 0.12,
       maxFlightZ: 1.92,
-      maxAbsFlightY: 0.72,
-      minElevationDeg: -6.5,
+      maxAbsFlightY: 0.85,
+      minElevationDeg: -14.0,
       maxElevationDeg: 10.5,
-      maxAbsAzimuthDeg: 10.0,
+      maxAbsAzimuthDeg: 12.0,
     },
     description: 'Sharp right-cutting break.',
   },
@@ -137,13 +138,15 @@ export const PITCH_SPECS: Record<PitchId, PitchSpec> = {
     clAlphaPerRad: 0.08,
     magnusCoeff: 0.25,
     magnusMaxCoeff: 1.0,
+    cdProjected: 1.0,
+    releasePos: [1.85, -0.22, 1.18],
     envelope: {
-      minFlightZ: 0.2,
-      maxFlightZ: 2.02,
-      maxAbsFlightY: 0.64,
-      minElevationDeg: -4.5,
-      maxElevationDeg: 14.5,
-      maxAbsAzimuthDeg: 8.0,
+      minFlightZ: 0.1,
+      maxFlightZ: 2.35,
+      maxAbsFlightY: 0.68,
+      minElevationDeg: -8.0,
+      maxElevationDeg: 22.0,
+      maxAbsAzimuthDeg: 10.0,
     },
     description: '6 o\'clock sharp downward drop.',
   },
@@ -362,6 +365,30 @@ export function buildPitchRawConfig(
         : {}),
     },
   };
+}
+
+export function computePitchBreakDelta(
+  frames: readonly SimFrame[],
+  releasePos: V3,
+  hitCrossPos: V3,
+  ballisticY: number,
+): V3 {
+  const x0 = releasePos[0];
+  const z0 = releasePos[2];
+  const x1 = hitCrossPos[0];
+  const z1 = hitCrossPos[2];
+  const spanX = Math.max(1e-6, x1 - x0);
+  let maxChordDz = 0;
+  for (const f of frames) {
+    if (f.y[0] > x1) break;
+    const u = (f.y[0] - x0) / spanX;
+    const zChord = z0 + u * (z1 - z0);
+    const dz = f.y[2] - zChord;
+    if (Math.abs(dz) > Math.abs(maxChordDz)) {
+      maxChordDz = dz;
+    }
+  }
+  return [0, hitCrossPos[1] - ballisticY, -maxChordDz];
 }
 
 export interface PitchTrajectoryOptions {
@@ -684,16 +711,10 @@ export function solvePitchTrajectoryForSpec(
   const elRad = deg2rad(elDeg);
   const vx0 = speedMs * Math.cos(elRad) * Math.cos(azRad);
   const vy0 = speedMs * Math.cos(elRad) * Math.sin(azRad);
-  const vz0 = speedMs * Math.sin(elRad);
   const tBallistic = (HIT_PLANE_X - releasePos[0]) / Math.max(1e-6, vx0);
   const ballisticY = releasePos[1] + vy0 * tBallistic;
-  const ballisticZ = releasePos[2] + vz0 * tBallistic - 0.5 * 9.80665 * tBallistic * tBallistic;
 
-  const breakDelta: V3 = [
-    0,
-    hitCross.pos[1] - ballisticY,
-    hitCross.pos[2] - ballisticZ,
-  ];
+  const breakDelta = computePitchBreakDelta(frames, releasePos, hitCross.pos, ballisticY);
 
   let peakSpeedMS = 0;
   for (const f of frames) {

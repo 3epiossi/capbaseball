@@ -7,7 +7,7 @@ StartLimitIntervalSec=0
 [Service]
 WorkingDirectory=%h/capbaseball/current
 ExecStart=%h/node/bin/node dist-server/index.mjs
-Environment=HOST=127.0.0.1 PORT=8788 NODE_ENV=production MATCH_LOG=%h/capbaseball/data/matches.jsonl DRAIN_SECONDS=600
+Environment=HOST=127.0.0.1 PORT=8788 NODE_ENV=production MATCH_LOG=%h/capbaseball/data/matches.jsonl PITCH_LOG=%h/capbaseball/data/pitches.jsonl SESSION_LOG=%h/capbaseball/data/sessions.jsonl DRAIN_SECONDS=600
 Restart=always
 RestartSec=2
 TimeoutStopSec=630
