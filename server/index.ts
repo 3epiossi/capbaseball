@@ -1794,7 +1794,11 @@ export function startServer(
       match: room.match,
     });
     if (inningChanged && !room.match.isGameOver) {
-      sendToRoom(room, { type: 'batter_side', side: getCurrentBatterSide(room) });
+      sendToRoom(room, {
+        type: 'batter_side',
+        side: getCurrentBatterSide(room),
+        team: getBattingSide(room.match),
+      });
     }
 
     room.absWindowUntil = 0;

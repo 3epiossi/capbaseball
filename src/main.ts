@@ -537,6 +537,7 @@ function stepPresentationQueue(rawDt: number): void {
   if (
     presentationQueue.length === 0 &&
     !transitionDirector.isActive() &&
+    !isActivePlayMotion() &&
     (visualHalf !== match.half || visualInning !== match.inning)
   ) {
     visualInning = match.inning;
@@ -900,6 +901,18 @@ let batterHandedness: 'left' | 'right' = 'left';
 let myBatterHandedness: 'left' | 'right' = 'left';
 let teamBatterHandedness: Record<'away' | 'home', 'left' | 'right'> = { away: 'left', home: 'left' };
 let powerSwing = false;
+
+function isActivePlayMotion(): boolean {
+  return (
+    phase === 'windup' ||
+    phase === 'pitch_flight' ||
+    phase === 'batted_flight' ||
+    Boolean(pendingOnlineResult) ||
+    Boolean(queuedOnlinePitchResult) ||
+    Boolean(absReplay?.active) ||
+    wildCapRoll.active
+  );
+}
 
 function syncVisualBatterHandedness(): void {
   if (isOnline || spectating) {
@@ -1734,7 +1747,7 @@ function updateHudAndDocks(): void {
   const role = getCurrentRole();
   if (isOnline && !spectating && !onTitleScreen && role === 'batter') {
     if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
-    syncVisualBatterHandedness();
+    if (!isActivePlayMotion()) syncVisualBatterHandedness();
     btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
   }
   const canPitchUi =
@@ -3133,7 +3146,7 @@ btnHand.addEventListener('click', () => {
   if (isOnline && !spectating) {
     myBatterHandedness = myBatterHandedness === 'right' ? 'left' : 'right';
     if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
-    if (getCurrentRole() === 'batter') {
+    if (getCurrentRole() === 'batter' && !isActivePlayMotion()) {
       syncVisualBatterHandedness();
     }
     btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
@@ -3141,10 +3154,12 @@ btnHand.addEventListener('click', () => {
     return;
   }
   const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-  const nextHand: 'left' | 'right' = batterHandedness === 'right' ? 'left' : 'right';
+  const nextHand: 'left' | 'right' = teamBatterHandedness[activeVisualSide] === 'right' ? 'left' : 'right';
   teamBatterHandedness[activeVisualSide] = nextHand;
-  batterHandedness = nextHand;
   myBatterHandedness = nextHand;
+  if (!isActivePlayMotion()) {
+    batterHandedness = nextHand;
+  }
   btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 });
 
@@ -4081,14 +4096,19 @@ onlineClient.onMessage((msg) => {
     }
     case 'batter_side': {
       const nextHand: 'left' | 'right' = msg.side === 'L' ? 'left' : 'right';
-      const targetTeam: 'away' | 'home' = msg.team ?? (match.half === 'top' ? 'away' : 'home');
+      const fallbackHalf = pendingOnlineResult?.match?.half ?? match.half;
+      const targetTeam: 'away' | 'home' = msg.team ?? (fallbackHalf === 'top' ? 'away' : 'home');
       // Always record into the team slot; only update visible batter stance if that team is CURRENTLY
-      // shown at the plate (visualHalf), never before the inning-change transition completes!
+      // shown at the plate (visualHalf) and no pitch/batted flight, wild-ball roll, or ABS replay is running!
       if (spectating || targetTeam !== onlineSide) {
         teamBatterHandedness[targetTeam] = nextHand;
       }
       const visibleTeam: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-      if (targetTeam === visibleTeam && (spectating || getCurrentRole() !== 'batter')) {
+      if (
+        !isActivePlayMotion() &&
+        targetTeam === visibleTeam &&
+        (spectating || getCurrentRole() !== 'batter')
+      ) {
         syncVisualBatterHandedness();
       }
       break;
@@ -4224,6 +4244,9 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'match_over': {
+      if (phase === 'batted_flight' && msg.reason === 'completed') {
+        break;
+      }
       queuedOnlinePitchResult = null;
       pendingOnlineResult = null;
       resetOnlineFreezeState();
@@ -4234,7 +4257,8 @@ onlineClient.onMessage((msg) => {
         else if (msg.reason === 'pitch_clock_forfeit') match.endReason = 'pitch_clock';
       }
       visualInning = match.inning;
-  visualHalf = match.half;
+      visualHalf = match.half;
+      syncVisualBatterHandedness();
       onlineTurnState = 'game_over';
       phase = 'result';
       cam.setFollowTarget(null);
@@ -5183,6 +5207,7 @@ function step(now: number): void {
           capTrail = [];
           wildCapRoll.active = false;
           resetOutfielders(allFielders);
+          syncVisualBatterHandedness();
           if (isOnline && !spectating) {
             lastPitchTelemetry =
               getCurrentRole() === 'pitcher' ? t('telYourPitch') : t('telWaitingPitch');

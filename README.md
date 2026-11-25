@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.7.1`（語意化三段式版本號）
+- **目前里程碑**：`v2.7.2`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -292,3 +292,6 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **指叉球（`fork`）與卡特球（`cutter`）出手前伸 `+1.5m` 與氣動調校**：[src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 將 `fork` 的 `cdProjected` 調高至 `1.0`、`cutter` 調為 `clAlphaPerRad: 1.50` / `bankRightDeg: -50°` / `noseUpDeg: 10°`，兩者 `releasePos` 皆前移至 `[1.85, -0.22, 1.18]` 並同步放寬飛行包絡線限制。
   - **重構變化量（`computePitchBreakDelta`）計算基準**：[src/physics/pitches.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/physics/pitches.ts) 與 [src/pitchLab.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/pitchLab.ts) 水平變化維持純橫移量，垂直變化改以軌跡相對於「出手點至進壘點連線」的最大垂直弧偏（上飄為 `+`、下墜為 `-`）計算，不再扣減真空自由落體重力下墜，使直球回歸 `~15.8 cm`、變速球 `~71.9 cm`、卡特球 `~81.1 cm`、噴射球 `~147.6 cm` 等直覺排序（`61/61` 測試通過）。
   - **逐球與裝置紀錄改用絕對路徑**：[deploy/capbaseball.service](deploy/capbaseball.service) 的 `PITCH_LOG`、`SESSION_LOG` 改為 `%h/capbaseball/data/` 下的固定路徑，修正每次換版（相對路徑落在各版本目錄）造成逐球紀錄被清空的問題。
+- **v2.7.2 修正兩出局飛球空中提前切換左右打與全域動作／狀態／動畫順序保護（2026-11-25）**：
+  - **補齊接觸出局換局推播的 `batter_side.team` 欄位**：[server/index.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/server/index.ts) 於兩出局安打／接殺出局觸發換局時同步附帶 `team: getBattingSide(room.match)`，根治球還在飛行中即因缺欄被套用到場上現任打者、導致左打者空中瞬變右打者的問題。
+  - **新增 `isActivePlayMotion()` 動畫鎖定守衛與全面時序審計**：[src/main.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/src/main.ts) 在投球揮臂（`windup`）、投球飛行（`pitch_flight`）、擊球飛行（`batted_flight`）、待結算／ABS 重播／漏球滾動期間統一鎖住打者左右打外觀、HUD 與操作面板（並防止 `match_over` 提前中斷飛行中全壘打／再見安打，及於 `result -> idle` 同步重整視覺打席），同步擴充 [tests/multiplayer.test.ts](file:///Users/chang/Documents/raspberry%20pi/capbaseball/tests/multiplayer.test.ts) 第 34 項測試驗證接觸出局與三振換局皆帶正確 `team`（`61/61` 測試通過）。

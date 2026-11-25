@@ -1878,15 +1878,19 @@ describe('Online Multiplayer Server Integration', () => {
         }
       }
 
-      // Bottom of 1st: server switches room active batterSide back to Home's saved stance ('L')!
+      // Bottom of 1st: server switches room active batterSide back to Home's saved stance ('L') with explicit team!
       const [swapHome, swapAway] = await Promise.all([
         home.nextMsg((m) => m.type === 'batter_side'),
         away.nextMsg((m) => m.type === 'batter_side'),
       ]);
       expect(swapHome.side).toBe('L');
+      expect(swapHome.team).toBe('home');
       expect(swapAway.side).toBe('L');
+      expect(swapAway.team).toBe('home');
 
       // Away pitches in bottom of 1st -> pitch_launch must carry Home's 'L', NOT Away's 'R'!
+      const room = hSrv.rooms.get(String(created.code))!;
+      room.match.outs = 2; // Set 2 outs so a contact out ends the bottom of 1st and tests batted-out batter_side.team!
       away.send({
         type: 'pitch_submit',
         pitchSeq: seq,
@@ -1902,6 +1906,32 @@ describe('Online Multiplayer Server Integration', () => {
         home.nextMsg((m) => m.type === 'pitch_launch'),
       ]);
       expect(botLaunch.batterSide).toBe('L');
+
+      // Home makes weak contact (infield/fly out) with 2 outs -> inning changes to top of 2nd -> batter_side MUST carry team='away'!
+      const traj = room.activePitch!.trajectory;
+      home.send({
+        type: 'swing_input',
+        pitchSeq: seq,
+        flightTimeSec: traj.hitPlaneTimeSec,
+        batX: 0,
+        batY: 0.72 - 0.08, // under/pop-up or grounder
+        swingMode: 'normal',
+        batterSide: 'L',
+      });
+      const [batRes] = await Promise.all([
+        away.nextMsg((m) => m.type === 'pitch_result'),
+        home.nextMsg((m) => m.type === 'pitch_result'),
+      ]);
+      if (batRes.inningChanged) {
+        const [swapTop2Home, swapTop2Away] = await Promise.all([
+          home.nextMsg((m) => m.type === 'batter_side'),
+          away.nextMsg((m) => m.type === 'batter_side'),
+        ]);
+        expect(swapTop2Home.side).toBe('R');
+        expect(swapTop2Home.team).toBe('away');
+        expect(swapTop2Away.side).toBe('R');
+        expect(swapTop2Away.team).toBe('away');
+      }
     } finally {
       await Promise.all([home.close(), away.close()]);
       await hSrv.close();
