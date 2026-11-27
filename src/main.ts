@@ -914,6 +914,10 @@ function isActivePlayMotion(): boolean {
     phase === 'windup' ||
     phase === 'pitch_flight' ||
     phase === 'batted_flight' ||
+    phase === 'result' ||
+    catcherReturn.active ||
+    stoppedRetrieve.active ||
+    catchCamHold.active ||
     Boolean(pendingOnlineResult) ||
     Boolean(queuedOnlinePitchResult) ||
     Boolean(absReplay?.active) ||
@@ -5606,9 +5610,7 @@ function step(now: number): void {
       fieldingFxList = fieldingFxList.filter((fx) => fx.elapsedSec < fx.durationSec);
     }
 
-    // Smoothly fade out foreground batter during wild-pitch / passed-ball camera pull-back so Catcher dive is unobstructed
-    const wantBatterAlpha = wildCamHoldTimer > 0.12 ? 0.0 : 1.0;
-    batterVisualAlpha += (wantBatterAlpha - batterVisualAlpha) * Math.min(1, dt * 11);
+    batterVisualAlpha = 1.0; // batter stays visible during wild-pitch camera pull-back
 
     cam.update(dt);
   }

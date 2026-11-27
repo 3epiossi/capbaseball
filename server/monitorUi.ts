@@ -357,6 +357,7 @@ export const MONITOR_HTML = `<!doctype html>
         <div class="kv"><span>停滯房(&gt;45秒) / 斷線等待房</span><strong id="a-stalled">--</strong></div>
         <div class="kv"><span>投球計時超時 / 揮棒同步逾時</span><strong id="a-clocks">--</strong></div>
         <div class="kv"><span>對戰斷線 / 重連成功 / 失敗</span><strong id="a-reconn">--</strong></div>
+        <div class="kv"><span>斷線判負原因</span><strong id="a-dccause">--</strong></div>
         <div class="kv"><span>過期封包忽略 / 參數修正 / NaN</span><strong id="a-integrity">--</strong></div>
       </div>
     </div>
@@ -1028,6 +1029,11 @@ export const MONITOR_JS = `(() => {
       );
       setText('a-stalled', (rh.stalledRooms || 0) + ' 間 / ' + (rh.disconnectedRooms || 0) + ' 間');
       setText('a-clocks', (gp.pitchClockViolations || out.clockViolations || 0) + ' / ' + (gp.swingTimeouts || 0));
+      const dcNames = { network_lost: '網路中斷', page_left: '離開頁面', client_closed: '主動關閉', dead_pong: '無回應', unknown: '未知' };
+      setText(
+        'a-dccause',
+        Object.entries(gp.disconnectCauses || {}).map(([k, v]) => (dcNames[k] || k) + ' ' + v).join(' / ') || '0'
+      );
       setText(
         'a-reconn',
         (gp.disconnectsInMatch || 0) + ' / ' + (gp.reconnectsSucceeded || 0) + ' / ' + (gp.reconnectsFailed || 0)

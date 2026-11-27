@@ -144,6 +144,8 @@ export class ServerMonitor {
   matchesCompleted = 0;
   matchesResigned = 0;
   matchesDisconnectTimeout = 0;
+  /** Forfeits by disconnect, keyed by why the socket dropped (network_lost, page_left, dead_pong, ...). */
+  disconnectCauses: Record<string, number> = {};
   waitingExpired = 0;
   rematchesStarted = 0;
 
@@ -743,6 +745,7 @@ export class ServerMonitor {
         matchesCompleted: this.matchesCompleted,
         matchesResigned: this.matchesResigned,
         matchesDisconnectTimeout: this.matchesDisconnectTimeout,
+        disconnectCauses: { ...this.disconnectCauses },
         waitingExpired: this.waitingExpired,
         rematchesStarted: this.rematchesStarted,
         pitchClockViolations: this.pitchClockViolations,

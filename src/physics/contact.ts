@@ -249,6 +249,14 @@ function clampDefenderToGym(x: number, z: number, role: FielderId): [number, num
       nx *= scale;
       nz *= scale;
     }
+  } else if (nz < 0) {
+    // Foul territory: stop at the fence extension line (perpendicular to the foul line) instead of running through it
+    const d = (Math.abs(nx) - nz) * Math.SQRT1_2;
+    if (d > MAX_FIELDER_RADIUS_M) {
+      const k = (d - MAX_FIELDER_RADIUS_M) * Math.SQRT1_2;
+      nx -= Math.sign(nx) * k;
+      nz += k;
+    }
   }
   return [nx, nz];
 }

@@ -178,7 +178,7 @@ export async function loadSprites(): Promise<SpriteBank> {
 }
 
 export type TeamColor = 'yellow' | 'black';
-export type FielderAnim = 'idle' | 'run' | 'catch_fly' | 'catch_ground' | 'catch_wp' | 'dive';
+export type FielderAnim = 'idle' | 'run' | 'run_front' | 'run_back' | 'catch_fly' | 'catch_ground' | 'catch_wp' | 'dive';
 export type BatterAnim = 'ready' | 'load' | 'swing_early' | 'swing_contact' | 'follow_through';
 
 export interface DrawEntityListParams {
@@ -296,10 +296,16 @@ function resolveAtlasAnim(
       null
     );
   }
+  if (animName === 'run_front' || animName === 'run_back') return atlas.animations['run'] ?? atlas.animations['idle'] ?? null;
   if (animName === 'catch_fly' || animName === 'catch_ground') {
     return atlas.animations['dive'] ?? atlas.animations['idle'] ?? null;
   }
   return atlas.animations['idle'] ?? null;
+}
+
+/** Front/back run sprites are drawn as-is: mirroring would flip the back number. */
+function mirrorFor(atlas: AtlasData | null, anim: string, flipX: boolean): boolean {
+  return flipX && !((anim === 'run_front' || anim === 'run_back') && atlas?.animations[anim]);
 }
 
 function pickAtlasFrame(
@@ -607,7 +613,7 @@ export function drawWorldEntities(
                 dy,
                 dw,
                 dh,
-                pf.flipX,
+                mirrorFor(bank.pitcherFieldAtlas, pf.anim, pf.flipX),
                 1,
               );
               return;
@@ -620,7 +626,7 @@ export function drawWorldEntities(
             const frameIdx =
               pf.anim === 'dive' || pf.anim === 'catch_ground' || pf.anim === 'catch_fly'
                 ? 5
-                : pf.anim === 'run'
+                : pf.anim.startsWith('run')
                   ? 1 + (Math.floor(pf.animTime * 11) % 4)
                   : 0;
             const dw = dh * (fw / fh);
@@ -705,7 +711,7 @@ export function drawWorldEntities(
               dy,
               dw,
               dh,
-              f.flipX,
+              mirrorFor(bank.fielderAtlas, f.anim, f.flipX),
               1,
             );
           } else {

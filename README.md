@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.8.0`（語意化三段式版本號）
+- **目前里程碑**：`v2.8.2`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -299,6 +299,13 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **`pitches.jsonl` 每球新增 `seed`、`u`（彈簧蓄力值 0–1，選填）與 `version`**：[server/index.ts](server/index.ts) 的 `pitch_submit` 解析選填的 `u`，[src/net/protocol.ts](src/net/protocol.ts)、[src/net/client.ts](src/net/client.ts) 與 [src/main.ts](src/main.ts) 一併送出；舊客戶端不送 `u` 照常運作。有了種子與蓄力值，每一球都能離線重跑。
   - **新增 `queue.jsonl`**：記錄 `queue_enter`、`queue_leave`（含原因 `cancel`／`disconnect`／`matched`／`drain` 與等待毫秒數）與 `match_made`，用來分析隨機配對的等待時間（路徑由 `QUEUE_LOG` 指定，預設與逐球紀錄同資料夾，保留上限 50,000 筆或 5 MB）；[deploy/capbaseball.service](deploy/capbaseball.service) 補上 `QUEUE_LOG`。
   - 測試新增第 39、40 項，全部 **63/63** 通過。
+- **v2.8.2 打者換手時序、界外守備邊界、斷線原因記錄與紀錄檔寫入量修正（2026-11-27）**：
+  - **左右打者換手等結果動畫結束**：[src/main.ts](src/main.ts) 的 `isActivePlayMotion()` 原本不含 `result` 階段，線上對戰時結果一到就會在動畫中換成下一位打者的慣用手；現在 `result`、捕手回傳、停球撿拾與接殺鏡頭停留期間都視為動畫進行中，換手與半局、局數顯示都等回到 `idle` 的下一打席才更新。
+  - **暴投／捕逸不死三振拉遠時打者不再消失**：移除鏡頭拉遠期間將打者淡出為透明的處理（[src/main.ts](src/main.ts)、[src/fieldLab.ts](src/fieldLab.ts)），打者全程保留在畫面上。
+  - **守備員界外不再穿過全壘打牆延伸線**：[src/physics/contact.ts](src/physics/contact.ts) 的 `clampDefenderToGym` 原本只限制界內 12.45 m 弧線，界外區可跑到場館牆；現在界外區也限制在垂直於邊線的延伸線內。
+  - **斷線判負原因記錄**：[server/index.ts](server/index.ts) 依 WebSocket 關閉碼與伺服器端主動關閉分為 `network_lost`（無關閉訊號）、`page_left`（關頁或換頁）、`client_closed`、`dead_pong`（心跳逾時）與 `code_<n>`，因同一人重連而被取代的舊連線不計；寬限期結束判負時，原因與判負方寫入對局紀錄的 `disconnectCause`、`disconnectSide`，[server/monitor.ts](server/monitor.ts) 的 `gameplay.disconnectCauses` 累計次數，[server/monitorUi.ts](server/monitorUi.ts) 新增「斷線判負原因」一列。
+  - **紀錄檔不再每 40 球整檔重寫**：[server/analyticsUi.ts](server/analyticsUi.ts) 的 `trimJsonlFileIfNeeded` 原本在 `pitches.jsonl` 達到 25000 行上限後，每 40 次寫入就讀寫整個約 21 MB 的檔案，造成 `/monitor` 的 `STORAGE_SLOW`；現在改為超過上限 1.2 倍才修剪並剪回上限，約每 5000 球才重寫一次。
+  - **守備員新增前後跑精靈圖**：投手（#18）與外野手（#99）各補 `run_front`（朝向鏡頭）與 `run_back`（背對鏡頭）8 格跑步圖，由真實跑步動作以 3D 渲染再轉像素圖。[src/ai/cpu.ts](src/ai/cpu.ts) 的 `runAnimFor()` 在沿 Z 軸移動距離大於橫向 1.5 倍時選用（往 -Z 為背面、往 +Z 為正面），其餘仍用側跑；[src/render/sprites.ts](src/render/sprites.ts) 對前後跑圖不做左右鏡像，背號不會反，圖集缺少該動畫時自動退回側跑。
 - **v2.8.1 1 局制改名、投手跑步重製與手機舊圖修正（2026-11-27）**：
   - **「突破僵局」模式改名為「1 局制」**：僅更改顯示名稱（繁中 `1局制`、英文 `1-INNING MATCH`、日文 `1イニング戦`），內部代碼仍為 `tiebreak`，封包與配對佇列不變；延長賽的滿壘無人出局規則維持原稱。
   - **`/monitor` 新增分模式統計**：[server/index.ts](server/index.ts) 的監控快照加入 `queuesByMode` 與 `roomsByMode`，[server/monitorUi.ts](server/monitorUi.ts) 顯示「房間 3局 / 1局 / 6局」與「排隊 3局 / 1局 / 6局」，並隨 `/metrics` 的 `connections` 輸出。

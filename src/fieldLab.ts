@@ -444,7 +444,7 @@ function stepSim(dt: number): void {
         f.flipX = false;
       }
     }
-    batterAlpha = showCatcher ? 0.0 : 1.0;
+    batterAlpha = 1.0;
     if (camOverride === 'auto') {
       if (showCatcher) {
         cam.setFollowTarget(null);
@@ -718,8 +718,7 @@ function stepSim(dt: number): void {
     updateOutfielders(allFielders, dt, null, null, false, false);
   }
 
-  const wantAlpha = wildActive || camOverride === 'wild' ? 0.0 : 1.0;
-  batterAlpha += (wantAlpha - batterAlpha) * Math.min(1, dt * 11);
+  batterAlpha = 1.0;
 
   if (camOverride !== 'auto') applyCameraOverride();
   cam.update(dt);

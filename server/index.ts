@@ -127,6 +127,18 @@ interface ClientMeta {
   deviceProfile: ClientDeviceProfile | null;
 }
 
+/** Server-initiated close reasons, set just before close()/terminate() so the 'close' handler can tell them apart. */
+const closeWhy = new WeakMap<WebSocket, string>();
+
+function closeCause(ws: WebSocket, code: number): string {
+  const why = closeWhy.get(ws);
+  if (why) return why;
+  if (code === 1006) return 'network_lost'; // no close frame: wifi/cell drop, app killed, OS suspended socket
+  if (code === 1001) return 'page_left'; // tab closed, reload or navigation
+  if (code === 1000 || code === 1005) return 'client_closed';
+  return `code_${code}`;
+}
+
 interface RoomPlayer {
   token: string;
   name: string;
@@ -135,6 +147,8 @@ interface RoomPlayer {
   connected: boolean;
   disconnectTimer: NodeJS.Timeout | null;
   disconnectDeadlineAt: number | null;
+  /** Why the socket last dropped (see closeCause); logged when the grace expires into a forfeit. */
+  disconnectCause?: string;
   device?: ClientDeviceProfile['device'] | null;
   input?: ClientDeviceProfile['input'] | null;
 }
@@ -1034,7 +1048,9 @@ export function startServer(
       room.match.endReason = 'disconnect';
       room.match.lastEvent = `${player.name} disconnected (timeout)`;
       room.turnState = 'game_over';
-      recordMatchEnd(room, 'disconnect_timeout');
+      const cause = player.disconnectCause ?? 'unknown';
+      monitor.disconnectCauses[cause] = (monitor.disconnectCauses[cause] ?? 0) + 1;
+      recordMatchEnd(room, 'disconnect_timeout', { disconnectSide: side, disconnectCause: cause });
       sendToRoom(room, {
         type: 'match_over',
         winner: oppSide,
@@ -1047,7 +1063,7 @@ export function startServer(
     cleanupRoom(code);
   }
 
-  function recordMatchEnd(room: Room, reason: string) {
+  function recordMatchEnd(room: Room, reason: string, extra?: Record<string, unknown>) {
     if (room.recorded) return;
     room.recorded = true;
     if (reason === 'completed') monitor.matchesCompleted += 1;
@@ -1089,6 +1105,7 @@ export function startServer(
         absUsedAway: Math.max(0, 2 - room.match.absChallenges.away),
         absUsedHome: Math.max(0, 2 - room.match.absChallenges.home),
         spectatorsPeak: room.spectatorsPeak,
+        ...extra,
       },
       opts.matchLogPath,
     );
@@ -2352,6 +2369,7 @@ export function startServer(
         if (t - c.lastPongAt > deadSocketTimeoutMs) {
           if (c.roomCode || c.watchingCode || c.queuedMode) {
             monitor.terminatedDeadPong += 1;
+            closeWhy.set(c.ws, 'dead_pong'); // no pong in time: frozen tab or dead link
             c.ws.terminate();
           } else {
             monitor.idleClosedTotal += 1;
@@ -2863,6 +2881,7 @@ export function startServer(
               oldClient.side = null;
             }
             try {
+              closeWhy.set(player.ws, 'replaced');
               player.ws.close(1000, 'replaced_by_reconnect');
             } catch {
               // ignore
@@ -2962,6 +2981,7 @@ export function startServer(
                 return;
               }
               try {
+                closeWhy.set(oldWs, 'replaced');
                 oldWs.terminate();
               } catch {
                 // ignore
@@ -3563,7 +3583,7 @@ export function startServer(
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (closeCode: number) => {
       monitor.connClosedTotal += 1;
       const ipLeft = (ipConnCounts.get(ip) ?? 1) - 1;
       if (ipLeft <= 0) ipConnCounts.delete(ip);
@@ -3587,6 +3607,8 @@ export function startServer(
           if (player && player.clientId === clientId) {
             player.connected = false;
             player.ws = null;
+            const cause = closeCause(ws, closeCode);
+            if (cause !== 'replaced') player.disconnectCause = cause;
 
             if (room.turnState === 'game_over') {
               // Already finished -> clean up immediately

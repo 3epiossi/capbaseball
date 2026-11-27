@@ -248,6 +248,12 @@ export interface FielderInterceptionTarget {
   isBlock: boolean;
 }
 
+/** Running mostly along Z shows the back (away from camera, -Z) or front (toward camera, +Z) sprite. */
+function runAnimFor(dx: number, dz: number): 'run' | 'run_front' | 'run_back' {
+  if (Math.abs(dz) < Math.abs(dx) * 1.5) return 'run';
+  return dz < 0 ? 'run_back' : 'run_front';
+}
+
 function defaultIdleFlipX(posX: number): boolean {
   // Base fielder sprites face right (+X): fielders on the right side (RF) mirror left to face home plate!
   return posX > 0.15;
@@ -380,7 +386,7 @@ export function updateOutfielders(
         const [cx, cz] = clampFielderInsideFence(f.pos[0] + (dx / d) * step, f.pos[2] + (dz / d) * step, f.id);
         f.pos[0] = cx;
         f.pos[2] = cz;
-        f.anim = 'run';
+        f.anim = runAnimFor(dx, dz);
         f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
       } else {
         f.pos[0] = f.homePos[0];
@@ -421,7 +427,7 @@ export function updateOutfielders(
         const step = Math.min(d, runSpeed * dt);
         f.pos[0] += (dx / d) * step;
         f.pos[2] += (dz / d) * step;
-        f.anim = 'run';
+        f.anim = runAnimFor(dx, dz);
         f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
       } else {
         f.pos[0] = tx;
@@ -477,7 +483,7 @@ export function updateOutfielders(
         const step = Math.min(d, speedMps * dt);
         f.pos[0] += (dx / d) * step;
         f.pos[2] += (dz / d) * step;
-        f.anim = 'run';
+        f.anim = runAnimFor(dx, dz);
         f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
       } else {
         f.pos[0] = tx;
@@ -549,7 +555,7 @@ export function updateOutfielders(
       const step = Math.min(d, speedMps * dt);
       f.pos[0] += (dx / d) * step;
       f.pos[2] += (dz / d) * step;
-      f.anim = 'run';
+      f.anim = runAnimFor(dx, dz);
       f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
     } else {
       f.pos[0] = tx;

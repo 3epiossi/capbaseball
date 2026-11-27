@@ -27,7 +27,8 @@ export async function trimJsonlFileIfNeeded(
     if (st.size <= byteThreshold) return;
     const raw = await fs.promises.readFile(logPath, 'utf8');
     const lines = raw.split('\n').filter((l) => l.trim().length > 0);
-    if (lines.length <= maxLines) return;
+    // Hysteresis: only rewrite once 20% over the cap, so a full file is not rewritten every few appends (SD card wear)
+    if (lines.length <= maxLines * 1.2) return;
     const kept = lines.slice(-maxLines).join('\n') + '\n';
     await fs.promises.writeFile(logPath, kept, 'utf8');
   } catch {
