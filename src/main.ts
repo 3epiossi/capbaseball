@@ -1237,34 +1237,6 @@ function startTouchRing(pos: FieldV3): void {
   touchRing = { pos: [pos[0], 0.015, pos[2]], handled: battedIsOut(), ageSec: 0, maxAgeSec: 0.8 };
 }
 
-let ringLanded = false;
-let ringOutfield = false;
-let ringEndAtMs = 0;
-let ringLastPos: FieldV3 = [0, 0, 0];
-
-/** Ring under the ball from its first floor touch until fielding ends: red = handled (caught/blocked/picked up), green = not handled. */
-function getFieldingRing(): { pos: FieldV3; handled: boolean } | null {
-  const inFlight = phase === 'batted_flight' && capVisible && activeBatted !== null && !battedCaughtInAir;
-  if (!inFlight && !stoppedRetrieve.active) {
-    ringLanded = false;
-    ringOutfield = false;
-    ringEndAtMs = 0;
-    return null;
-  }
-  if (!ringLanded) {
-    const touched = battedBouncesPlayed > 0 || (activeBatted?.firstLandingPos != null && battedFlightTime > 0.25);
-    if (stoppedRetrieve.active || (inFlight && touched && capPos[1] <= 0.12)) ringLanded = true;
-    else return null;
-  }
-  const picked = stoppedRetrieve.pickedUp;
-  if (picked && ringEndAtMs === 0) ringEndAtMs = performance.now() + 600;
-  if (ringEndAtMs !== 0 && performance.now() > ringEndAtMs) return null;
-  if (!picked) ringLastPos = stoppedRetrieve.active ? stoppedRetrieve.target : capPos;
-  // Rule 5.07 A1: touching outfield floor makes it a hit, so the ring turns green for good.
-  if (capPos[1] <= 0.12 && !isInfield(ringLastPos[0], ringLastPos[2])) ringOutfield = true;
-  const handled = battedIsOut() && !ringOutfield;
-  return { pos: [ringLastPos[0], 0.015, ringLastPos[2]], handled };
-}
 let fenceImpact: { pos: FieldV3; ageSec: number; maxAgeSec: number } | null = null;
 let hrBurst: { pos: FieldV3; ageSec: number; maxAgeSec: number } | null = null;
 let fenceFlashAngle: number | undefined = undefined;
@@ -5770,7 +5742,6 @@ function step(now: number): void {
     fieldingFx: fieldingFxList,
     fenceItems,
     battedEffects: {
-      fieldingRing: getFieldingRing(),
       touchRing,
       bounceRings,
       fenceImpact,

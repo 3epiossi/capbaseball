@@ -15,7 +15,7 @@ import {
 import { GameCamera } from './render/camera';
 import { buildFenceDepthItems, drawGymBackground, type PassLineState } from './render/gymScene';
 import { createTranslator } from './i18n/index';
-import { PASS_LINE_Z, isInfield } from './rules/field';
+import { PASS_LINE_Z } from './rules/field';
 import { judgeBattedCap } from './rules/judge';
 import {
   drawWorldEntities,
@@ -853,36 +853,10 @@ function stepSim(dt: number): void {
 }
 
 let labTouchRing: { pos: FieldV3; handled: boolean; ageSec: number; maxAgeSec: number } | null = null;
-let labRingOutfield = false;
 
 /** Same verdict the match applies: only an out is red. */
 function labIsOut(): boolean {
   return activeBatted !== null && judgeBattedCap(activeBatted, { caughtInAir: interceptKind === 'caught' }) === 'OUT';
-}
-
-let labRingLanded = false;
-let labRingEndAtMs = 0;
-let labRingLastPos: FieldV3 = [0, 0, 0];
-
-/** Red = handled (caught/blocked/picked up), green = not; from first floor touch until fielding ends (mirrors getFieldingRing in main.ts). */
-function labFieldingRing(): { pos: FieldV3; handled: boolean } | null {
-  const inFlight = activeBatted !== null && capVisible && !stoppedPickupDone;
-  if (!inFlight && !stoppedRetrieveActive) {
-    labRingLanded = false;
-    labRingOutfield = false;
-    labRingEndAtMs = 0;
-    return null;
-  }
-  if (!labRingLanded) {
-    if (stoppedRetrieveActive || (activeBatted && battedTime >= firstLandingTime(activeBatted) && capPos[1] <= 0.12)) labRingLanded = true;
-    else return null;
-  }
-  if (stoppedPickupDone && labRingEndAtMs === 0) labRingEndAtMs = performance.now() + 600;
-  if (labRingEndAtMs !== 0 && performance.now() > labRingEndAtMs) return null;
-  if (!stoppedPickupDone) labRingLastPos = stoppedRetrieveActive ? stoppedTarget : capPos;
-  if (capPos[1] <= 0.12 && !isInfield(labRingLastPos[0], labRingLastPos[2])) labRingOutfield = true;
-  const handled = labIsOut() && !labRingOutfield;
-  return { pos: [labRingLastPos[0], 0.015, labRingLastPos[2]], handled };
 }
 
 function render(): void {
@@ -958,7 +932,6 @@ function render(): void {
     fieldingFx: fieldingFxList,
     fenceItems,
     battedEffects: {
-      fieldingRing: labFieldingRing(),
       touchRing: labTouchRing,
       bounceRings,
       fenceImpact: null,
