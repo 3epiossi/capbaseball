@@ -243,6 +243,8 @@ export const MONITOR_HTML = `<!doctype html>
         <div class="kv"><span>目前在線人數</span><strong id="c-active">-</strong></div>
         <div class="kv"><span>對戰中 / 排隊 / 觀戰</span><strong id="c-split">-</strong></div>
         <div class="kv"><span>活躍房間（隨機 / 好友）</span><strong id="c-rooms">-</strong></div>
+        <div class="kv"><span>房間 3局 / 1局 / 6局</span><strong id="c-rooms-mode">-</strong></div>
+        <div class="kv"><span>排隊 3局 / 1局 / 6局</span><strong id="c-queue-mode">-</strong></div>
         <div class="kv"><span>獨立 IP 數 / 單 IP 上限</span><strong id="c-ips">-</strong></div>
         <div class="kv"><span>累計連線 / 累計離線</span><strong id="c-churn">-</strong></div>
       </div>
@@ -809,6 +811,10 @@ export const MONITOR_JS = `(() => {
       );
       setText('c-split', c.inMatch + ' / ' + c.queuing + ' / ' + c.spectating);
       setText('c-rooms', c.roomsActive + '（隨機 ' + c.matchmakingRooms + ' / 好友 ' + c.friendRooms + '）');
+      const rm = c.roomsByMode || {};
+      const qm = c.queuesByMode || {};
+      setText('c-rooms-mode', (rm.quick3 || 0) + ' / ' + (rm.tiebreak || 0) + ' / ' + (rm.official6 || 0));
+      setText('c-queue-mode', (qm.quick3 || 0) + ' / ' + (qm.tiebreak || 0) + ' / ' + (qm.official6 || 0));
       setText('c-ips', c.uniqueIps + ' / ' + c.maxConnsSingleIp);
       setText('c-churn', c.acceptedTotal + ' / ' + c.closedTotal);
 

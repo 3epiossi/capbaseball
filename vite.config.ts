@@ -38,7 +38,8 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+      // cache:'reload' skips the HTTP cache: Cloudflare adds max-age=14400 to sprites, which otherwise re-stores stale PNGs
+      .then((cache) => cache.addAll(PRECACHE_URLS.map((u) => new Request(u, { cache: 'reload' }))))
       .then(() => self.skipWaiting())
       .catch(() => self.skipWaiting())
   );

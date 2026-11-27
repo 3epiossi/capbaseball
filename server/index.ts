@@ -669,7 +669,9 @@ export function startServer(
     let startedPitchSum = 0;
     let maxMatchRuns = 0;
 
+    const roomsByMode: Record<OnlineMode, number> = { quick3: 0, tiebreak: 0, official6: 0 };
     for (const r of rooms.values()) {
+      roomsByMode[r.mode] += 1;
       if (r.isMatchmaking) matchmakingRooms += 1;
       const ageMs = Math.max(0, now - r.createdAt);
       if (ageMs > oldestAgeMs) oldestAgeMs = ageMs;
@@ -750,6 +752,8 @@ export function startServer(
       draining,
       load: getServerLoad(),
       queuesTotal: getTotalQueued(),
+      queuesByMode: { quick3: queues.quick3.length, tiebreak: queues.tiebreak.length, official6: queues.official6.length },
+      roomsByMode,
       inMatchClients,
       spectatingClients,
       friendRooms: rooms.size - matchmakingRooms,

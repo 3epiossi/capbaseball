@@ -88,6 +88,8 @@ export interface ServerSnapshotInput {
     friendReserveActive?: boolean;
   };
   queuesTotal: number;
+  queuesByMode: Record<'quick3' | 'tiebreak' | 'official6', number>;
+  roomsByMode: Record<'quick3' | 'tiebreak' | 'official6', number>;
   inMatchClients: number;
   spectatingClients: number;
   friendRooms: number;
@@ -671,6 +673,8 @@ export class ServerMonitor {
         activeClients: snap.load.clients,
         inMatch: snap.inMatchClients,
         queuing: snap.queuesTotal,
+        queuesByMode: snap.queuesByMode,
+        roomsByMode: snap.roomsByMode,
         spectating: snap.spectatingClients,
         lobbyIdle: Math.max(0, snap.load.clients - snap.inMatchClients - snap.queuesTotal - snap.spectatingClients),
         roomsActive: snap.load.rooms,

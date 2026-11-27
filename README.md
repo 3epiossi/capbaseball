@@ -299,6 +299,11 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **`pitches.jsonl` 每球新增 `seed`、`u`（彈簧蓄力值 0–1，選填）與 `version`**：[server/index.ts](server/index.ts) 的 `pitch_submit` 解析選填的 `u`，[src/net/protocol.ts](src/net/protocol.ts)、[src/net/client.ts](src/net/client.ts) 與 [src/main.ts](src/main.ts) 一併送出；舊客戶端不送 `u` 照常運作。有了種子與蓄力值，每一球都能離線重跑。
   - **新增 `queue.jsonl`**：記錄 `queue_enter`、`queue_leave`（含原因 `cancel`／`disconnect`／`matched`／`drain` 與等待毫秒數）與 `match_made`，用來分析隨機配對的等待時間（路徑由 `QUEUE_LOG` 指定，預設與逐球紀錄同資料夾，保留上限 50,000 筆或 5 MB）；[deploy/capbaseball.service](deploy/capbaseball.service) 補上 `QUEUE_LOG`。
   - 測試新增第 39、40 項，全部 **63/63** 通過。
+- **v2.8.1 1 局制改名、投手跑步重製與手機舊圖修正（2026-11-27）**：
+  - **「突破僵局」模式改名為「1 局制」**：僅更改顯示名稱（繁中 `1局制`、英文 `1-INNING MATCH`、日文 `1イニング戦`），內部代碼仍為 `tiebreak`，封包與配對佇列不變；延長賽的滿壘無人出局規則維持原稱。
+  - **`/monitor` 新增分模式統計**：[server/index.ts](server/index.ts) 的監控快照加入 `queuesByMode` 與 `roomsByMode`，[server/monitorUi.ts](server/monitorUi.ts) 顯示「房間 3局 / 1局 / 6局」與「排隊 3局 / 1局 / 6局」，並隨 `/metrics` 的 `connections` 輸出。
+  - **投手 Skywalker 跑步 8 格重製**：以棒球殿堂跑步動作（`D_move_run_fast`，一個步伐週期 0.6 秒）在 Blender 渲染 3D 側面 8 格，再交給 Gemini 轉像素圖，左右腳確實交替；投手接滾地球後不再出現舉球準備傳球的最後一格（`catch_ground` 與 `dive` 共 5 格）。
+  - **手機仍顯示舊圖修正**：Cloudflare 對 `/sprites/*.png` 加上 `max-age=14400`，Service Worker 安裝時 `cache.addAll` 會讀到過期圖片；[vite.config.ts](vite.config.ts) 改用 `cache: 'reload'` 略過 HTTP 快取。
 - **v2.8.0 突破僵局線上雙模式、實心白線捕逸線、角色精靈圖與守備特效打磨（2026-11-27）**：
   - **線上對戰雙模式（`3 局制` vs `突破僵局`）與漸進式選單**：[index.html](index.html)、[src/styles.css](src/styles.css)、[src/i18n/index.ts](src/i18n/index.ts) 與 [src/main.ts](src/main.ts) 保持大廳 4 顆主按鈕，點擊「線上對戰」後彈出 `#online-mode-dialog` 選擇 `3 局制` 或 `突破僵局`，點擊「好友對戰」按下「建立房間」後才展開 `#friend-create-options`（`3 局制 | 突破僵局` 與扣倒制設定，加入房間無需選擇）；[src/rules/match.ts](src/rules/match.ts) 新增 `tiebreak` 模式（1 局制、第 1 局上 0 出局滿壘開局、延長續滿壘、下半局超前即再見勝）；[server/index.ts](server/index.ts) 與 [src/net/protocol.ts](src/net/protocol.ts) 分開獨立 `quick3` / `tiebreak` 配對佇列與 Standby 佇列，同步支援好友開房與即時觀戰顯示。
   - **捕逸線實心白線與暴投／捕逸／不死三振演出**：[src/render/gymScene.ts](src/render/gymScene.ts) 於 `PASS_LINE_Z = 2.334m` 永久繪製實心白線；暴投／捕逸／不死三振時 [src/render/camera.ts](src/render/camera.ts) 將鏡頭拉退至捕逸線後方，[src/main.ts](src/main.ts) 修正貼地滾動阻尼確保瓶蓋確實彈跳滾越白線並觸發越線光環與揚塵；捕手 `#99` 換裝背面雙膝胸擋動作（鎖定 `flipX = false` 避免背號反轉）。

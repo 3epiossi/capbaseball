@@ -57,7 +57,7 @@
 ### 5. 零 `innerHTML` XSS 防護與跨裝置安全區框景
 
 - **安全 DOM 建構**：戰績結算視窗（`showGameOverModal`）、即時觀戰列表（`renderWatchRooms`）與大廳狀態文字一律使用 `replaceChildren()`、`document.createElement()` 與 `textContent` 寫入內容，完全不使用 `innerHTML`，阻斷任何來自玩家暱稱或伺服器字串的 XSS 注入。
-- **漸進式模式選擇與場上實驗室**：大廳維持 4 顆主按鈕，點擊「線上對戰」彈出 `#online-mode-dialog` 選擇 `3 局制`／`突破僵局`，點擊「好友對戰」按下「建立房間」才展開 `#friend-create-options`；另提供 `field-lab.html`（`src/fieldLab.ts`）離線預覽高飛接殺、滾地擋球、暴投越線與打擊動作。
+- **漸進式模式選擇與場上實驗室**：大廳維持 4 顆主按鈕，點擊「線上對戰」彈出 `#online-mode-dialog` 選擇 `3 局制`／`1 局制`，點擊「好友對戰」按下「建立房間」才展開 `#friend-create-options`；另提供 `field-lab.html`（`src/fieldLab.ts`）離線預覽高飛接殺、滾地擋球、暴投越線與打擊動作。
 - **跨瀏覽器／裝置佈局**：`styles.css` 以 `100dvw`／`100dvh` 搭配 `env(safe-area-inset-*)` 適配 iOS 劉海與動態網址列，觸控裝置下為主要按鈕套用至少 `44px` 點擊高度；透過 `.game-viewport` 的 `@container (max-width: 780px)` / `(max-width: 420px)` 與橫向短螢幕規則（`max-height: 500px`），結合 `updateSafeCameraFraming()` 動態調整鏡頭垂直投影中心，確保手機直／橫向時好球帶完整落在頂部 HUD 與底部投手面板之間。
 
 ---
