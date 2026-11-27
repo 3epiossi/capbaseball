@@ -303,6 +303,12 @@ export class EmoteController {
     this.pushFeed({ kind: 'chat', tag: senderLabel, text: phrase, accent }, isOpponent ? 'opp' : 'self', 2600, true);
   }
 
+  /** Display a custom opponent emote/chat text (reusing opponent bubble styling & SFX, pure textContent). */
+  showCustomOpponentEmote(text: string, senderName = 'CPU'): void {
+    if (this.mutedOpponent) return;
+    this.pushFeed({ kind: 'chat', tag: senderName, text, accent: '#38bdf8' }, 'opp', 2600, true);
+  }
+
   /** Display a game broadcast event (Next Batter, Intentional Walk, Pitch Clock) from the speech bubble. */
   showBroadcast(tag: string, text: string, accent = '#f4c41c', durationMs = 2200): void {
     const cleanTag = tag || this.uiLabels.broadcastTag;

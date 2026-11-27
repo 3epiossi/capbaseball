@@ -800,7 +800,7 @@ select {
 
 .menu-bat-row {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
   gap: 0.45rem;
 }
 
@@ -967,6 +967,49 @@ select {
   display: flex;
   flex-direction: column;
   gap: 0.58rem;
+}
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.28rem;
+  padding: 0.24rem;
+  background: rgba(7, 11, 20, 0.92);
+  border: 2px solid var(--steel-mid);
+}
+
+.mode-switch-btn {
+  appearance: none;
+  border: 1.5px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-pixel);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0.42rem 0.45rem;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.mode-switch-btn:hover {
+  color: var(--text-main);
+}
+
+.mode-switch-btn.active {
+  background: linear-gradient(180deg, rgba(244, 196, 28, 0.24), rgba(244, 196, 28, 0.1));
+  border-color: var(--gold);
+  color: var(--gold-hi);
+}
+
+.mode-switch-hint {
+  margin: -0.25rem 0 0.05rem;
+  font-family: var(--font-broadcast);
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--cyan-hi);
+  letter-spacing: 0.02em;
+  line-height: 1.25;
 }
 
 .hub-buttons[hidden] {
@@ -1844,8 +1887,35 @@ dialog::backdrop {
   font-size: 0.72rem;
 }
 
-.cpu-grid .mode-btn.primary {
-  grid-column: 1 / -1;
+.online-mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.online-mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.34rem;
+  padding: 0.95rem 0.65rem;
+  text-align: center;
+}
+
+.online-mode-btn strong {
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+}
+
+.online-mode-sub {
+  font-family: var(--font-broadcast);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.28;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  opacity: 0.86;
 }
 
 .online-form,
@@ -1874,6 +1944,25 @@ dialog::backdrop {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+}
+
+.friend-create-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.55rem 0.62rem;
+  background: rgba(9, 16, 32, 0.72);
+  border: 1.5px solid #283a5c;
+}
+
+.friend-create-options[hidden] {
+  display: none;
+}
+
+.friend-create-actions {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.45rem;
 }
 
 .room-created-box {
@@ -1987,7 +2076,7 @@ dialog.reconnect-dialog {
 
 .watch-item {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr) 44px 86px;
+  grid-template-columns: 58px minmax(0, 1fr) 44px 108px;
   align-items: center;
   gap: 0.55rem;
   background: linear-gradient(135deg, rgba(6, 13, 30, 0.96), rgba(10, 22, 48, 0.93));
@@ -2104,15 +2193,41 @@ dialog.reconnect-dialog {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 0.26rem;
+}
+
+.wi-tags {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 0.24rem;
 }
 
 .wi-kind {
   font-family: var(--font-pixel);
-  font-size: 0.58rem;
+  font-size: 0.56rem;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   line-height: 1.1;
+}
+
+.wi-mode {
+  font-family: var(--font-pixel);
+  font-size: 0.54rem;
+  font-weight: 700;
+  line-height: 1.1;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.88);
+  color: #cbd5e1;
+}
+
+.wi-mode.tiebreak {
+  border-color: rgba(244, 196, 28, 0.7);
+  background: rgba(244, 196, 28, 0.14);
+  color: #fde047;
 }
 
 .wi-kind.live {
@@ -2147,7 +2262,7 @@ dialog.reconnect-dialog {
 
 @media (max-width: 500px) {
   .watch-item {
-    grid-template-columns: 48px minmax(0, 1fr) 32px 74px;
+    grid-template-columns: 48px minmax(0, 1fr) 32px 92px;
     gap: 0.38rem;
     padding: 0.45rem 0.52rem;
   }

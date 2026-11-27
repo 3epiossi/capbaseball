@@ -11,6 +11,7 @@ interface AtlasFrame {
 interface AtlasData {
   frames: Record<string, AtlasFrame>;
   animations: Record<string, { frames: string[]; loop: boolean; duration: number }>;
+  baseline_y?: number;
 }
 
 interface PitcherMeta {
@@ -45,6 +46,7 @@ export interface SpriteBank {
   pitcherBlack: HTMLImageElement | null;
   pitcherFieldYellow: HTMLImageElement | null;
   pitcherFieldBlack: HTMLImageElement | null;
+  pitcherFieldAtlas: AtlasData | null;
   pitcherMeta: PitcherMeta;
   fielderYellow: HTMLImageElement | null;
   fielderBlack: HTMLImageElement | null;
@@ -52,8 +54,13 @@ export interface SpriteBank {
   batterRealHome: HTMLImageElement | null;
   batterRealAway: HTMLImageElement | null;
   batterRealMeta: BatterRealMeta;
+  batter18Home: HTMLImageElement | null;
+  batter18Away: HTMLImageElement | null;
+  batter18Meta: BatterRealMeta;
   fxHitImg: HTMLImageElement | null;
   fxHitAtlas: AtlasData | null;
+  fxFieldingImg: HTMLImageElement | null;
+  fxFieldingAtlas: AtlasData | null;
 }
 
 function loadImage(src: string): Promise<HTMLImageElement | null> {
@@ -81,6 +88,7 @@ export async function loadSprites(): Promise<SpriteBank> {
     pitcherBlack,
     pitcherFieldYellow,
     pitcherFieldBlack,
+    pitcherFieldAtlas,
     pitcherMeta,
     fielderYellow,
     fielderBlack,
@@ -88,13 +96,19 @@ export async function loadSprites(): Promise<SpriteBank> {
     batterRealHome,
     batterRealAway,
     batterRealMeta,
+    batter18Home,
+    batter18Away,
+    batter18Meta,
     fxHitImg,
     fxHitAtlas,
+    fxFieldingImg,
+    fxFieldingAtlas,
   ] = await Promise.all([
     loadImage('./sprites/pitcher_strip.png'),
     loadImage('./sprites/pitcher_black_strip.png'),
     loadImage('./sprites/pitcher_field_yellow.png'),
     loadImage('./sprites/pitcher_field_black.png'),
+    loadJson<AtlasData>('./sprites/pitcher_field.atlas.json'),
     loadJson<PitcherMeta>('./sprites/pitcher.json'),
     loadImage('./sprites/fielder_yellow.png'),
     loadImage('./sprites/fielder_black.png'),
@@ -102,9 +116,30 @@ export async function loadSprites(): Promise<SpriteBank> {
     loadImage('./sprites/batter_real_yellow_strip.png'),
     loadImage('./sprites/batter_real_black_strip.png'),
     loadJson<BatterRealMeta>('./sprites/batter_real.json'),
+    loadImage('./sprites/batter_18_yellow_strip.png'),
+    loadImage('./sprites/batter_18_black_strip.png'),
+    loadJson<BatterRealMeta>('./sprites/batter_18.json'),
     loadImage('./sprites/fx_hit.png'),
     loadJson<AtlasData>('./sprites/fx_hit.atlas.json'),
+    loadImage('./sprites/fx_fielding.png'),
+    loadJson<AtlasData>('./sprites/fx_fielding.atlas.json'),
   ]);
+
+  const defaultLeftBatterMeta: BatterRealMeta = {
+    frames: 10,
+    w: 148,
+    h: 114,
+    baseline_y: 112,
+    anchor_x: 62,
+    natural_handedness: 'left',
+    anims: {
+      ready: [0, 1, 2, 1],
+      load: [3],
+      swing_early: [4],
+      swing_contact: [4, 5],
+      follow_through: [6, 7, 8, 9],
+    },
+  };
 
   return {
     ready: true,
@@ -112,6 +147,7 @@ export async function loadSprites(): Promise<SpriteBank> {
     pitcherBlack,
     pitcherFieldYellow,
     pitcherFieldBlack,
+    pitcherFieldAtlas,
     pitcherMeta: pitcherMeta ?? {
       frames: 60,
       fps: 24,
@@ -126,28 +162,23 @@ export async function loadSprites(): Promise<SpriteBank> {
     fielderAtlas,
     batterRealHome,
     batterRealAway,
-    batterRealMeta: batterRealMeta ?? {
-      frames: 10,
-      w: 148,
-      h: 114,
-      baseline_y: 112,
-      anchor_x: 62,
-      natural_handedness: 'left',
-      anims: {
-        ready: [0, 1, 2, 1],
-        load: [3],
-        swing_early: [4],
-        swing_contact: [4, 5],
-        follow_through: [6, 7, 8, 9],
-      },
+    batterRealMeta: batterRealMeta ?? defaultLeftBatterMeta,
+    batter18Home,
+    batter18Away,
+    batter18Meta: batter18Meta ?? {
+      ...defaultLeftBatterMeta,
+      anchor_x: 86,
+      natural_handedness: 'right',
     },
     fxHitImg,
     fxHitAtlas,
+    fxFieldingImg,
+    fxFieldingAtlas,
   };
 }
 
 export type TeamColor = 'yellow' | 'black';
-export type FielderAnim = 'idle' | 'run' | 'dive';
+export type FielderAnim = 'idle' | 'run' | 'catch_fly' | 'catch_ground' | 'catch_wp' | 'dive';
 export type BatterAnim = 'ready' | 'load' | 'swing_early' | 'swing_contact' | 'follow_through';
 
 export interface DrawEntityListParams {
@@ -191,6 +222,11 @@ export interface DrawEntityListParams {
     kind: 'hit' | 'hr_burst';
     elapsedSec: number;
   } | null;
+  fieldingFx?: {
+    pos: FieldV3;
+    kind: 'catch_pop' | 'dive_dust';
+    elapsedSec: number;
+  }[];
   fenceItems?: DepthDrawItem[];
   battedEffects?: {
     bounceRings: {
@@ -212,6 +248,22 @@ export interface DrawEntityListParams {
   };
 }
 
+/** Anchor for fly-ball catch white pop FX on the fielder's raised hands. */
+export function getFlyCatchHandPos(fielder: {
+  id: 'LF' | 'RF' | 'P' | 'C';
+  pos: FieldV3;
+  flipX: boolean;
+}): FieldV3 {
+  const isPitcher = fielder.id === 'P';
+  const handDx = isPitcher ? 0.14 : 0.03;
+  const handY = isPitcher ? 1.52 : 1.46;
+  return [
+    fielder.pos[0] + (fielder.flipX ? -handDx : handDx),
+    handY,
+    fielder.pos[2] + 0.08,
+  ];
+}
+
 function drawGroundShadow(
   ctx: CanvasRenderingContext2D,
   cam: GameCamera,
@@ -231,13 +283,32 @@ function drawGroundShadow(
   ctx.restore();
 }
 
+function resolveAtlasAnim(
+  atlas: AtlasData,
+  animName: string,
+): { frames: string[]; loop: boolean; duration: number } | null {
+  if (atlas.animations[animName]?.frames.length) return atlas.animations[animName];
+  if (animName === 'catch_wp') {
+    return (
+      atlas.animations['catch_ground'] ??
+      atlas.animations['dive'] ??
+      atlas.animations['idle'] ??
+      null
+    );
+  }
+  if (animName === 'catch_fly' || animName === 'catch_ground') {
+    return atlas.animations['dive'] ?? atlas.animations['idle'] ?? null;
+  }
+  return atlas.animations['idle'] ?? null;
+}
+
 function pickAtlasFrame(
   atlas: AtlasData | null,
   animName: string,
   animTimeSec: number,
 ): AtlasFrame | null {
   if (!atlas) return null;
-  const anim = atlas.animations[animName];
+  const anim = resolveAtlasAnim(atlas, animName);
   if (!anim || anim.frames.length === 0) return null;
   const ms = Math.max(0, animTimeSec * 1000);
   const total = anim.duration || 100;
@@ -258,24 +329,26 @@ function pickBatterRealFrame(
   animTimeSec: number,
 ): number {
   const t = Math.max(0, animTimeSec);
+  const pickSeq = (seq: number[], durationSec: number, loop = false): number => {
+    if (!seq || seq.length === 0) return 0;
+    if (seq.length === 1) return seq[0];
+    const progress = loop ? (t % durationSec) / durationSec : Math.min(0.9999, t / durationSec);
+    return seq[Math.floor(progress * seq.length)] ?? seq[seq.length - 1];
+  };
   switch (anim) {
     case 'ready': {
       const seq = meta.anims.ready;
-      return seq[Math.floor(t * 3.5) % seq.length] ?? 0;
+      const fps = seq.length > 4 ? 6.5 : 3.5;
+      return seq[Math.floor(t * fps) % seq.length] ?? 0;
     }
     case 'load':
-      return meta.anims.load[0] ?? 3;
+      return pickSeq(meta.anims.load, 0.06);
     case 'swing_early':
-      return meta.anims.swing_early[0] ?? 4;
+      return pickSeq(meta.anims.swing_early, 0.05);
     case 'swing_contact':
-      return t < 0.045 ? (meta.anims.swing_contact[0] ?? 4) : (meta.anims.swing_contact[1] ?? 5);
-    case 'follow_through': {
-      const ft = meta.anims.follow_through;
-      if (t < 0.065) return ft[0] ?? 6;
-      if (t < 0.145) return ft[1] ?? 7;
-      if (t < 0.26) return ft[2] ?? 8;
-      return ft[3] ?? 9;
-    }
+      return pickSeq(meta.anims.swing_contact, 0.07);
+    case 'follow_through':
+      return pickSeq(meta.anims.follow_through, 0.34);
   }
 }
 
@@ -496,7 +569,7 @@ export function drawWorldEntities(
     }
   }
 
-  // 1. Pitcher (uses dedicated 6-frame pitcher_field_* strip when running/diving off the mound!)
+  // 1. Pitcher (#18 Skywalker: custom pitching strip on mound; fielding atlas/strip when fielding!)
   {
     const pf = params.pitcherFielder;
     const isFielding = Boolean(pf && pf.active);
@@ -506,19 +579,46 @@ export function drawWorldEntities(
       items.push({
         depth: pr.depth,
         draw: () => {
-          drawGroundShadow(ctx, cam, pPos, isFielding && pf!.anim === 'dive' ? 0.44 : 0.34, 0.34);
+          const isCatchAction =
+            isFielding &&
+            (pf!.anim === 'dive' || pf!.anim === 'catch_ground' || pf!.anim === 'catch_fly');
+          drawGroundShadow(ctx, cam, pPos, isCatchAction ? 0.44 : 0.34, 0.34);
           const fieldImg = params.pitchingTeam === 'yellow' ? bank.pitcherFieldYellow : bank.pitcherFieldBlack;
           const heightM = 1.72;
           const dh = Math.max(18, pr.scale * heightM);
 
           if (isFielding && pf && fieldImg) {
-            // 6-frame horizontal strip (136x113 per frame, baseline_y = 112):
+            const atlasFrame = pickAtlasFrame(bank.pitcherFieldAtlas, pf.anim, pf.animTime);
+            if (atlasFrame) {
+              const fw = atlasFrame.frame.w;
+              const fh = atlasFrame.frame.h;
+              const baselineY = bank.pitcherFieldAtlas?.baseline_y ?? fh - 1;
+              const dw = dh * (fw / fh);
+              const dx = pr.sx - dw * 0.5;
+              const dy = pr.sy - dh * (baselineY / fh);
+              drawSpriteFrame(
+                ctx,
+                fieldImg,
+                atlasFrame.frame.x,
+                atlasFrame.frame.y,
+                fw,
+                fh,
+                dx,
+                dy,
+                dw,
+                dh,
+                pf.flipX,
+                1,
+              );
+              return;
+            }
+            // Legacy 6-frame horizontal strip fallback (136x113 per frame, baseline_y = 112):
             // 0 = fielding ready, 1..4 = 4-frame sprint cycle, 5 = low ground-scoop lunge
             const fw = 136;
             const fh = 113;
             const baselineY = 112;
             const frameIdx =
-              pf.anim === 'dive'
+              pf.anim === 'dive' || pf.anim === 'catch_ground' || pf.anim === 'catch_fly'
                 ? 5
                 : pf.anim === 'run'
                   ? 1 + (Math.floor(pf.animTime * 11) % 4)
@@ -574,29 +674,33 @@ export function drawWorldEntities(
     }
   }
 
-  // 2. Outfielders (LF & RF)
+  // 2. Fielders (LF, RF) & Catcher (C when chasing wild pitch/passed ball or nearby batted ball) — #99 NastYboY
   for (const f of params.fielders) {
     const pr = cam.project(f.pos);
     if (pr.visible && pr.depth > 0.2) {
       items.push({
         depth: pr.depth,
         draw: () => {
-          drawGroundShadow(ctx, cam, f.pos, 0.32, 0.32);
+          const wideShadow = f.anim === 'dive' || f.anim === 'catch_wp' || f.anim === 'catch_ground';
+          drawGroundShadow(ctx, cam, f.pos, wideShadow ? 0.42 : 0.32, 0.32);
           const img = params.pitchingTeam === 'yellow' ? bank.fielderYellow : bank.fielderBlack;
           const frame = pickAtlasFrame(bank.fielderAtlas, f.anim, f.animTime);
-          const heightM = 1.66;
+          const heightM = 1.68;
           const dh = Math.max(14, pr.scale * heightM);
-          const dw = dh * (32 / 40);
-          const dx = pr.sx - dw * 0.5;
-          const dy = pr.sy - dh * (35.5 / 40);
           if (img && frame) {
+            const fw = frame.frame.w;
+            const fh = frame.frame.h;
+            const baselineY = bank.fielderAtlas?.baseline_y ?? fh * (35.5 / 40);
+            const dw = dh * (fw / fh);
+            const dx = pr.sx - dw * 0.5;
+            const dy = pr.sy - dh * (baselineY / fh);
             drawSpriteFrame(
               ctx,
               img,
               frame.frame.x,
               frame.frame.y,
-              frame.frame.w,
-              frame.frame.h,
+              fw,
+              fh,
               dx,
               dy,
               dw,
@@ -613,11 +717,9 @@ export function drawWorldEntities(
     }
   }
 
-  // 3. Foreground Batter
+  // 3. Foreground Batter (#18 Skywalker for RHB when loaded; #99 NastYboY for LHB & fallback)
   {
-    // Natural orientation is left-handed ('left') in RIGHT box (+0.76, z=0.14);
-    // right-handed ('right') mirrors around anchor_x in LEFT box (-0.76, z=0.14).
-    const bx = params.batter.handedness === 'right' ? -0.76 : 0.76;
+    const bx = params.batter.handedness === 'right' ? -0.76 : 0.58;
     const off = params.batter.posOffset;
     const bPos: FieldV3 = off ? [bx + off[0], off[1], 0.14 + off[2]] : [bx, 0, 0.14];
     const pr = cam.project(bPos);
@@ -626,8 +728,14 @@ export function drawWorldEntities(
         depth: pr.depth,
         draw: () => {
           drawGroundShadow(ctx, cam, bPos, 0.32, 0.28);
-          const img = params.battingTeam === 'yellow' ? bank.batterRealHome : bank.batterRealAway;
-          const meta = bank.batterRealMeta;
+          const img18 = params.battingTeam === 'yellow' ? bank.batter18Home : bank.batter18Away;
+          const useSkywalker = params.batter.handedness === 'right' && Boolean(img18);
+          const img = useSkywalker
+            ? img18
+            : params.battingTeam === 'yellow'
+              ? bank.batterRealHome
+              : bank.batterRealAway;
+          const meta = useSkywalker ? bank.batter18Meta : bank.batterRealMeta;
           const frameIdx = Math.max(
             0,
             Math.min(meta.frames - 1, pickBatterRealFrame(meta, params.batter.anim, params.batter.animTime)),
@@ -635,7 +743,7 @@ export function drawWorldEntities(
           const heightM = 1.72;
           const dh = Math.max(20, pr.scale * heightM);
           const dw = dh * (meta.w / meta.h);
-          const flipX = params.batter.handedness === 'right';
+          const flipX = params.batter.handedness !== meta.natural_handedness;
           const axFrac = meta.anchor_x / meta.w;
           const dx = flipX ? pr.sx - dw * (1 - axFrac) : pr.sx - dw * axFrac;
           const dy = pr.sy - dh * (meta.baseline_y / meta.h);
@@ -714,6 +822,43 @@ export function drawWorldEntities(
           },
         });
       }
+    }
+  }
+
+  // 5b. Procedural PixelFX Fielding Effects (catch pop burst + floor scoop/dive dust)
+  if (params.fieldingFx && params.fieldingFx.length > 0 && bank.fxFieldingImg && bank.fxFieldingAtlas) {
+    const baselineY = bank.fxFieldingAtlas.baseline_y ?? 48;
+    for (const fx of params.fieldingFx) {
+      const pr = cam.project(fx.pos);
+      if (!pr.visible || pr.depth <= 0.2) continue;
+      const frame = pickAtlasFrame(bank.fxFieldingAtlas, fx.kind, fx.elapsedSec);
+      if (!frame) continue;
+      const fw = frame.frame.w;
+      const fh = frame.frame.h;
+      const isDust = fx.kind === 'dive_dust';
+      items.push({
+        depth: isDust ? pr.depth + 0.04 : pr.depth - 0.12,
+        draw: () => {
+          const dh = Math.max(20, pr.scale * (isDust ? 1.18 : 0.82));
+          const dw = dh * (fw / fh);
+          const dx = pr.sx - dw * 0.5;
+          const dy = isDust ? pr.sy - dh * (baselineY / fh) : pr.sy - dh * 0.5;
+          drawSpriteFrame(
+            ctx,
+            bank.fxFieldingImg!,
+            frame.frame.x,
+            frame.frame.y,
+            fw,
+            fh,
+            dx,
+            dy,
+            dw,
+            dh,
+            false,
+            1,
+          );
+        },
+      });
     }
   }
 

@@ -19,7 +19,19 @@ import {
   simulateOutfieldGroundBlock,
   type OutfielderInit,
 } from '../src/physics/contact';
-import { createOutfielders, createPitcherFielder, updateOutfielders } from '../src/ai/cpu';
+import {
+  chooseCpuPitch,
+  createCatcherFielder,
+  createOutfielders,
+  createPitcherFielder,
+  updateOutfielders,
+} from '../src/ai/cpu';
+import {
+  isInStrikeZone,
+  PLATE_WIDTH,
+  STRIKE_ZONE_HI,
+  STRIKE_ZONE_LO,
+} from '../src/rules/field';
 import { judgeBattedCap } from '../src/rules/judge';
 
 describe('6-DOF Cap Flight Physics & Pitch Types', () => {
@@ -577,5 +589,43 @@ describe('6-DOF Cap Flight Physics & Pitch Types', () => {
     }
     expect(caughtCount).toBeGreaterThan(0);
     expect(catchers.size).toBeGreaterThan(0);
+  });
+
+  it('forces CPU pitcher on 3-ball counts to aim inside safe inner strike zone with tight scatter across 50 trials', () => {
+    const hw = PLATE_WIDTH * 0.5;
+    for (let i = 0; i < 50; i++) {
+      const diff = (i % 5) + 1;
+      const choice = chooseCpuPitch(diff, 3, 0);
+      expect(choice.pitchId).not.toBe('knuckle');
+      expect(choice.pitchId).not.toBe('fork');
+      expect(Math.abs(choice.targetX)).toBeLessThanOrEqual(hw * 0.58 + 1e-9);
+      expect(choice.targetY).toBeGreaterThanOrEqual(STRIKE_ZONE_LO + 0.10 - 1e-9);
+      expect(choice.targetY).toBeLessThanOrEqual(STRIKE_ZONE_HI - 0.10 + 1e-9);
+      expect(Math.abs(choice.scatterX)).toBeLessThanOrEqual(0.012 + 1e-9);
+      expect(Math.abs(choice.scatterY)).toBeLessThanOrEqual(0.012 + 1e-9);
+      expect(isInStrikeZone(choice.targetX + choice.scatterX, choice.targetY + choice.scatterY)).toBe(true);
+    }
+  });
+
+  it('sends the nearest defender all the way to retrieve stopped foul balls and infield grounders when interception is null', () => {
+    const dt = 1 / 60;
+    for (const stopped of [
+      [-5.5, 0, -3.5] as [number, number, number],
+      [3.4, 0, -4.5] as [number, number, number],
+    ]) {
+      const actors = [...createOutfielders(), createPitcherFielder(), createCatcherFielder()];
+      let pickedUp = false;
+      for (let t = 0; t < 3.0; t += dt) {
+        if (updateOutfielders(actors, dt, stopped, stopped, false, false, t, null, stopped)) {
+          pickedUp = true;
+        }
+      }
+      expect(pickedUp).toBe(true);
+      const minGap = Math.min(
+        ...actors.map((a) => Math.hypot(a.pos[0] - stopped[0], a.pos[2] - stopped[2])),
+      );
+      expect(minGap).toBeLessThan(0.5);
+      expect(actors.some((a) => a.anim === 'catch_ground')).toBe(true);
+    }
   });
 });

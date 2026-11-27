@@ -78,22 +78,36 @@ export function round3(n: number): number {
 }
 
 const DEFAULT_AWAY_LINEUP: PlayerSlot[] = [
-  { id: 'away-1', name: 'NastYboY #99', position: 'LF' },
-  { id: 'away-2', name: 'NastYboY #99', position: 'RF' },
-  { id: 'away-3', name: 'NastYboY #99', position: 'DH' },
-  { id: 'away-4', name: 'NastYboY #99', position: 'C' },
-  { id: 'away-5', name: 'skywalker #18', position: 'P' },
+  { id: 'away-1', name: 'NastYboY #99', position: 'LF', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'away-2', name: 'Skywalker #18', position: 'P', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'away-3', name: 'NastYboY #99', position: 'C', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'away-4', name: 'Skywalker #18', position: 'DH', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'away-5', name: 'NastYboY #99', position: 'RF', number: 99, handedness: 'left', avatar: 'nastyboy' },
 ];
 
 const DEFAULT_HOME_LINEUP: PlayerSlot[] = [
-  { id: 'home-1', name: 'NastYboY #99', position: 'LF' },
-  { id: 'home-2', name: 'NastYboY #99', position: 'RF' },
-  { id: 'home-3', name: 'NastYboY #99', position: 'DH' },
-  { id: 'home-4', name: 'NastYboY #99', position: 'C' },
-  { id: 'home-5', name: 'skywalker #18', position: 'P' },
+  { id: 'home-1', name: 'NastYboY #99', position: 'LF', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'home-2', name: 'Skywalker #18', position: 'P', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'home-3', name: 'NastYboY #99', position: 'C', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'home-4', name: 'Skywalker #18', position: 'DH', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'home-5', name: 'NastYboY #99', position: 'RF', number: 99, handedness: 'left', avatar: 'nastyboy' },
 ];
 
-const MODE_LIST: readonly GameMode[] = ['quick3', 'official6', 'practice_bat', 'practice_pitch', 'hotseat2p'];
+export type OnlineGameMode = 'quick3' | 'tiebreak' | 'official6';
+
+const MODE_LIST: readonly GameMode[] = ['quick3', 'official6', 'practice_bat', 'practice_pitch', 'hotseat2p', 'tiebreak'];
+
+export function encodeOnlineMode(mode: unknown): number {
+  if (mode === 'official6' || mode === 1) return 1;
+  if (mode === 'tiebreak' || mode === 2) return 2;
+  return 0;
+}
+
+export function decodeOnlineMode(raw: unknown): OnlineGameMode {
+  if (raw === 1 || raw === 'official6') return 'official6';
+  if (raw === 2 || raw === 'tiebreak') return 'tiebreak';
+  return 'quick3';
+}
 
 export interface CompactMatch {
   /** mode index (omitted on delta updates) */
@@ -227,7 +241,9 @@ export function unpackMatch(cm: CompactMatch, ctx?: CompactMatchDecodeContext): 
   const mode: GameMode =
     typeof cm.m === 'number' ? (MODE_LIST[cm.m] ?? 'quick3') : (ctx?.mode ?? 'quick3');
   const regInnings =
-    typeof cm.ri === 'number' ? cm.ri : (ctx?.regulationInnings ?? (mode === 'official6' ? 6 : 3));
+    typeof cm.ri === 'number'
+      ? cm.ri
+      : (ctx?.regulationInnings ?? (mode === 'official6' ? 6 : mode === 'tiebreak' ? 1 : 3));
   const [ar, hr, ah, hh, ap, hp, abi, hbi, abb, hbb, ak, hk] = cm.t;
   const [inning, halfNum, balls, strikes, outs, basesMask, absAway, absHome, paInHalf, maxPa] = cm.g;
   const [totalPitches, homeRuns, wildPitches, uncaughtThirdStrikes] = cm.s ?? [0, 0, 0, 0];
@@ -391,13 +407,13 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
         ...(raw.d ? { deviceProfile: sanitizeDeviceProfile(raw.d) } : {}),
       };
     case 'q':
-      return { type: 'queue', mode: raw.m === 1 ? 'official6' : 'quick3', name: raw.n };
+      return { type: 'queue', mode: decodeOnlineMode(raw.m), name: raw.n };
     case 'uq':
       return { type: 'unqueue' };
     case 'cr':
       return {
         type: 'create',
-        mode: raw.m === 1 ? 'official6' : 'quick3',
+        mode: decodeOnlineMode(raw.m),
         name: raw.n,
         ...(raw.mr !== undefined ? { mercyRule: raw.mr !== 0 } : {}),
       };
@@ -453,7 +469,7 @@ export function normalizeClientMsg(raw: Record<string, unknown>): Record<string,
     case 'mp':
       return { type: 'menu_pause', paused: raw.p === 1 || raw.p === true };
     case 'sj':
-      return { type: 'standby_join', mode: raw.m === 1 ? 'official6' : 'quick3', priority: raw.p === 1 };
+      return { type: 'standby_join', mode: decodeOnlineMode(raw.m), priority: raw.p === 1 };
     case 'sl':
       return { type: 'standby_leave' };
     case 'os':
@@ -617,7 +633,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
       const out: Record<string, unknown> = {
         t: msg.type === 'match_start' ? 'ms' : 'ss',
         c: msg.code,
-        m: msg.mode === 'official6' ? 1 : 0,
+        m: encodeOnlineMode(msg.mode),
         rk: msg.roomKind === 'friend' ? 1 : 0,
         sd: msg.side === 'home' ? 1 : 0,
         q: msg.pitchSeq,
@@ -653,7 +669,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
       const out: Record<string, unknown> = {
         t: 'sp',
         c: msg.code,
-        m: msg.mode === 'official6' ? 1 : 0,
+        m: encodeOnlineMode(msg.mode),
         rk: msg.roomKind === 'friend' ? 1 : 0,
         q: msg.pitchSeq,
         ts: msg.turnState === 'awaiting_swing' ? 1 : msg.turnState === 'game_over' ? 2 : 0,
@@ -743,7 +759,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         t: 'of',
         id: msg.offerId,
         n: msg.opponentName,
-        m: msg.mode === 'official6' ? 1 : 0,
+        m: encodeOnlineMode(msg.mode),
         ts: typeof msg.timeoutSec === 'number' ? msg.timeoutSec : 20,
       };
     case 'offer_cancelled':
@@ -940,7 +956,7 @@ export function decodeServerMsg(
       return {
         type: raw.t === 'ms' ? 'match_start' : 'state_sync',
         code: raw.c,
-        mode: raw.m === 1 ? 'official6' : 'quick3',
+        mode: decodeOnlineMode(raw.m),
         roomKind: raw.rk === 1 ? 'friend' : 'live',
         side: raw.sd === 1 ? 'home' : 'away',
         token: raw.k,
@@ -963,7 +979,7 @@ export function decodeServerMsg(
       return {
         type: 'spectate_sync',
         code: raw.c,
-        mode: raw.m === 1 ? 'official6' : 'quick3',
+        mode: decodeOnlineMode(raw.m),
         roomKind: raw.rk === 1 ? 'friend' : 'live',
         awayName: match.away.name,
         homeName: match.home.name,
@@ -1034,7 +1050,7 @@ export function decodeServerMsg(
         type: 'match_offer',
         offerId: raw.id,
         opponentName: raw.n,
-        mode: raw.m === 1 ? 'official6' : 'quick3',
+        mode: decodeOnlineMode(raw.m),
         timeoutSec: typeof raw.ts === 'number' ? raw.ts : 20,
       };
     case 'ox':

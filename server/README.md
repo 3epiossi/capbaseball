@@ -81,5 +81,5 @@
 ## 與其他模組的相依關係
 
 - **相依於 `src/physics`、`src/rules`、`src/ai`**：在伺服器端執行完全一致的投球軌跡求解、接觸與接殺模擬、比賽狀態機推進與捕手接捕判定。
-- **相依於 `src/net/protocol.ts`**：使用 `normalizeClientMsg` 解碼客戶端 v2／舊版封包，並依 `wsCompactMode` 透過 `encodeServerMsgV2` 回傳精簡 v2 封包。
+- **相依於 `src/net/protocol.ts`**：使用 `normalizeClientMsg` 解碼客戶端 v2／舊版封包，並依 `wsCompactMode` 透過 `encodeServerMsgV2` 回傳精簡 v2 封包（含 `quick3` 與 `tiebreak` 分開配對佇列與 Standby 佇列）。
 - **被 `deploy/` 與 `scripts/deploy.sh` 使用**：建置為 `dist-server/index.mjs` 後由 `systemd` 常駐執行。

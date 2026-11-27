@@ -20,6 +20,7 @@ import {
 import { PhysicsPool, type ServerPitchSummary } from './physicsPool';
 import { evaluateCatcherCatch } from '../src/ai/cpu';
 import {
+  decodeOnlineMode,
   decodeSpringZone,
   encodeServerMsgV2,
   normalizeClientMsg,
@@ -27,6 +28,7 @@ import {
   round3,
   sanitizeDeviceProfile,
   type ClientDeviceProfile,
+  type OnlineGameMode,
   type ServerLoadStatus,
   type SpringZoneWire,
 } from '../src/net/protocol';
@@ -81,22 +83,24 @@ const MIME_TYPES: Record<string, string> = {
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const AWAY_LINEUP: PlayerSlot[] = [
-  { id: 'away-1', name: 'NastYboY #99', position: 'LF' },
-  { id: 'away-2', name: 'NastYboY #99', position: 'RF' },
-  { id: 'away-3', name: 'NastYboY #99', position: 'DH' },
-  { id: 'away-4', name: 'NastYboY #99', position: 'C' },
-  { id: 'away-5', name: 'skywalker #18', position: 'P' },
+  { id: 'away-1', name: 'NastYboY #99', position: 'LF', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'away-2', name: 'Skywalker #18', position: 'P', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'away-3', name: 'NastYboY #99', position: 'C', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'away-4', name: 'Skywalker #18', position: 'DH', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'away-5', name: 'NastYboY #99', position: 'RF', number: 99, handedness: 'left', avatar: 'nastyboy' },
 ];
 
 const HOME_LINEUP: PlayerSlot[] = [
-  { id: 'home-1', name: 'NastYboY #99', position: 'LF' },
-  { id: 'home-2', name: 'NastYboY #99', position: 'RF' },
-  { id: 'home-3', name: 'NastYboY #99', position: 'DH' },
-  { id: 'home-4', name: 'NastYboY #99', position: 'C' },
-  { id: 'home-5', name: 'skywalker #18', position: 'P' },
+  { id: 'home-1', name: 'NastYboY #99', position: 'LF', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'home-2', name: 'Skywalker #18', position: 'P', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'home-3', name: 'NastYboY #99', position: 'C', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'home-4', name: 'Skywalker #18', position: 'DH', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'home-5', name: 'NastYboY #99', position: 'RF', number: 99, handedness: 'left', avatar: 'nastyboy' },
 ];
 
-export type OnlineMode = 'quick3' | 'official6';
+export type OnlineMode = OnlineGameMode;
+const ONLINE_MODES: readonly OnlineMode[] = ['quick3', 'tiebreak', 'official6'];
+const parseOnlineMode = decodeOnlineMode;
 export type Side = 'home' | 'away';
 export type TurnState = 'awaiting_pitch' | 'awaiting_swing' | 'game_over';
 
@@ -505,13 +509,16 @@ export function startServer(
   const rooms = new Map<string, Room>();
   const queues: Record<OnlineMode, string[]> = {
     quick3: [],
+    tiebreak: [],
     official6: [],
   };
   const STANDBY_OFFER_FANOUT = 5;
   const standbyQueues: Record<OnlineMode, string[]> = {
     quick3: [],
+    tiebreak: [],
     official6: [],
   };
+  const getTotalQueued = () => queues.quick3.length + queues.tiebreak.length + queues.official6.length;
   interface PendingOffer {
     offerId: string;
     mode: OnlineMode;
@@ -591,7 +598,7 @@ export function startServer(
     return {
       online: clients.size,
       rooms: rooms.size,
-      queued: queues.quick3.length + queues.official6.length,
+      queued: getTotalQueued(),
       load: load.status,
       lagMs: load.eventLoopLagMs,
     };
@@ -742,7 +749,7 @@ export function startServer(
       version,
       draining,
       load: getServerLoad(),
-      queuesTotal: queues.quick3.length + queues.official6.length,
+      queuesTotal: getTotalQueued(),
       inMatchClients,
       spectatingClients,
       friendRooms: rooms.size - matchmakingRooms,
@@ -1101,7 +1108,7 @@ export function startServer(
   }
 
   function removeFromStandby(clientId: string) {
-    for (const m of ['quick3', 'official6'] as const) {
+    for (const m of ONLINE_MODES) {
       const idx = standbyQueues[m].indexOf(clientId);
       if (idx !== -1) standbyQueues[m].splice(idx, 1);
     }
@@ -1180,7 +1187,7 @@ export function startServer(
         waitMs: Date.now() - queued.queuedAtMs,
       });
     }
-    for (const m of ['quick3', 'official6'] as const) {
+    for (const m of ONLINE_MODES) {
       const idx = queues[m].indexOf(clientId);
       if (idx !== -1) queues[m].splice(idx, 1);
     }
@@ -2117,7 +2124,7 @@ export function startServer(
         version,
         uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
         rooms: rooms.size,
-        queued: queues.quick3.length + queues.official6.length,
+        queued: getTotalQueued(),
         clients: clients.size,
         draining,
         updateAtMs,
@@ -2531,7 +2538,7 @@ export function startServer(
           abandonWaitingRoomIfHost(client);
           if (client.roomCode) return;
           if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
-          const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
+          const mode = parseOnlineMode(msg.mode);
           removeFromQueues(clientId);
           client.queuedMode = mode;
           client.queuedAtMs = Date.now();
@@ -2554,7 +2561,7 @@ export function startServer(
           if (draining || client.roomCode) return;
           const load = getServerLoad();
           if (load.status === 'red' || clients.size > publicClientCap) return;
-          const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
+          const mode = parseOnlineMode(msg.mode);
           const priority = Boolean(msg.priority);
           removeFromQueues(clientId);
           enqueueStandby(client, mode, priority, false);
@@ -2662,7 +2669,7 @@ export function startServer(
           if (client.roomCode) return;
           removeFromQueues(clientId);
           if (msg.name) client.name = sanitizeName(msg.name, isNameTaken);
-          const mode: OnlineMode = msg.mode === 'official6' ? 'official6' : 'quick3';
+          const mode = parseOnlineMode(msg.mode);
           const mercyRule = msg.mercyRule !== false;
           const code = generateRoomCode(rooms);
           const token = crypto.randomUUID();
@@ -3667,10 +3674,10 @@ export function startServer(
         if (sc) sendJson(sc.ws, { type: 'offer_cancelled', offerId: offer.offerId, reason: 'draining' });
       }
       pendingOffers.clear();
-      queues.quick3.length = 0;
-      queues.official6.length = 0;
-      standbyQueues.quick3.length = 0;
-      standbyQueues.official6.length = 0;
+      for (const m of ONLINE_MODES) {
+        queues[m].length = 0;
+        standbyQueues[m].length = 0;
+      }
       for (const c of clients.values()) {
         if (c.queuedMode) removeFromQueues(c.id, 'drain');
         c.queuedMode = null;

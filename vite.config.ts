@@ -22,7 +22,7 @@ const versionPlugin: Plugin = {
   },
   closeBundle() {
     const allFiles = (readdirSync('dist', { recursive: true }) as string[]).map((f) => f.replace(/\\/g, '/'));
-    const precacheSet = new Set<string>(['./', './index.html', './pitch-lab.html']);
+    const precacheSet = new Set<string>(['./', './index.html', './pitch-lab.html', './field-lab.html']);
     for (const f of allFiles) {
       const p = `dist/${f}`;
       if (f.endsWith('.gz') || f === 'sw.js' || !statSync(p).isFile()) continue;
@@ -190,6 +190,7 @@ export default defineConfig({
       input: {
         main: resolve(rootDir, 'index.html'),
         pitchLab: resolve(rootDir, 'pitch-lab.html'),
+        fieldLab: resolve(rootDir, 'field-lab.html'),
       },
     },
   },

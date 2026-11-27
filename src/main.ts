@@ -54,7 +54,7 @@ import {
 } from './physics/pitches';
 import { GameCamera } from './render/camera';
 import { simNormalToField } from './render/cap3d';
-import { buildFenceDepthItems, drawGymBackground } from './render/gymScene';
+import { buildFenceDepthItems, drawGymBackground, type PassLineState } from './render/gymScene';
 import {
   drawStrikeZoneAndOverlay,
   HIT_PLANE_Z,
@@ -73,6 +73,7 @@ import {
 } from './render/speedRibbon';
 import {
   drawWorldEntities,
+  getFlyCatchHandPos,
   loadSprites,
   type BatterAnim,
   type SpriteBank,
@@ -83,6 +84,7 @@ import {
   FENCE_HEIGHT,
   isFair,
   isInfield,
+  PASS_LINE_Z,
   PLATE_WIDTH,
 } from './rules/field';
 import { evaluateUmpirePitchCall, judgeBattedCap, judgePitch } from './rules/judge';
@@ -99,6 +101,7 @@ import {
   getCurrentBatter,
   getFieldingTeam,
   getPitchClockSeconds,
+  getSlotHandedness,
   recordChallengeableCall,
   type AbsOutcomeKind,
   type GameMode,
@@ -196,7 +199,6 @@ const btnThrow = document.getElementById('btn-throw') as HTMLButtonElement;
 const btnIbb = document.getElementById('btn-ibb') as HTMLButtonElement;
 const pitchButtonsWrap = document.getElementById('pitch-buttons') as HTMLElement;
 const menuBatRow = document.getElementById('menu-bat-row') as HTMLElement;
-const btnHand = document.getElementById('btn-hand') as HTMLButtonElement;
 const btnSwingType = document.getElementById('btn-swing-type') as HTMLButtonElement;
 
 const btnHubPlay = document.getElementById('btn-hub-play') as HTMLButtonElement;
@@ -208,6 +210,7 @@ const btnQueueCpu = document.getElementById('btn-queue-cpu') as HTMLButtonElemen
 
 const menuDialog = document.getElementById('menu-dialog') as HTMLDialogElement;
 const menuOnlineTimerEl = document.getElementById('menu-online-timer') as HTMLElement;
+const onlineModeDialog = document.getElementById('online-mode-dialog') as HTMLDialogElement;
 const cpuDialog = document.getElementById('cpu-dialog') as HTMLDialogElement;
 const friendDialog = document.getElementById('friend-dialog') as HTMLDialogElement;
 const watchDialog = document.getElementById('watch-dialog') as HTMLDialogElement;
@@ -220,7 +223,11 @@ const reconnectDescEl = document.getElementById('reconnect-desc') as HTMLElement
 const reconnectCountdownEl = document.getElementById('reconnect-countdown') as HTMLElement;
 
 const friendStatusMsg = document.getElementById('friend-status-msg') as HTMLElement;
+const friendCreateOptions = document.getElementById('friend-create-options') as HTMLElement;
+const friendModeSwitch = document.getElementById('friend-mode-switch') as HTMLElement;
 const btnRoomCreate = document.getElementById('btn-room-create') as HTMLButtonElement;
+const btnRoomCreateBack = document.getElementById('btn-room-create-back') as HTMLButtonElement;
+const btnRoomCreateConfirm = document.getElementById('btn-room-create-confirm') as HTMLButtonElement;
 const roomCreatedBox = document.getElementById('room-created-box') as HTMLElement;
 const roomCodeDisplay = document.getElementById('room-code-display') as HTMLElement;
 const btnCopyCode = document.getElementById('btn-copy-code') as HTMLButtonElement;
@@ -676,8 +683,6 @@ function applyLocaleToDom(): void {
     const key = el.dataset.i18nPlaceholder as DictKey | undefined;
     if (key) el.placeholder = t(key);
   }
-  const visibleHand = isOnline && !spectating ? myBatterHandedness : batterHandedness;
-  btnHand.textContent = visibleHand === 'right' ? t('btnRhb') : t('btnLhb');
   btnSwingType.textContent = powerSwing ? t('btnPower') : t('btnNormal');
   btnSound.textContent = sfx.isMuted() ? t('btnMute') : t('btnSfx');
   btnMuteEmotes.textContent = emoteCtrl.mutedOpponent ? t('btnUnmuteEmotes') : t('btnMuteEmotes');
@@ -687,6 +692,7 @@ function applyLocaleToDom(): void {
   updateStandbyToggleBtn();
   updateNickGreeting();
   pitchSelectedNameEl.textContent = getLocalizedPitchName(selectedPitch);
+  updateModeSwitchUi();
   if (phase === 'idle') {
     btnThrow.textContent = isPlayCallActive() ? t('btnWait') : t('btnHoldToPitch');
   }
@@ -727,21 +733,21 @@ function applyLocaleToDom(): void {
   updateHudAndDocks();
 }
 
-// --- Lineups ---
+// --- Lineups (1/3/5 = #99 NastYboY LF/C/RF LHB; 2/4 = #18 Skywalker P/DH RHB) ---
 const AWAY_LINEUP: PlayerSlot[] = [
-  { id: 'away-1', name: 'NastYboY #99', position: 'LF' },
-  { id: 'away-2', name: 'NastYboY #99', position: 'RF' },
-  { id: 'away-3', name: 'NastYboY #99', position: 'DH' },
-  { id: 'away-4', name: 'NastYboY #99', position: 'C' },
-  { id: 'away-5', name: 'skywalker #18', position: 'P' },
+  { id: 'away-1', name: 'NastYboY #99', position: 'LF', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'away-2', name: 'Skywalker #18', position: 'P', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'away-3', name: 'NastYboY #99', position: 'C', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'away-4', name: 'Skywalker #18', position: 'DH', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'away-5', name: 'NastYboY #99', position: 'RF', number: 99, handedness: 'left', avatar: 'nastyboy' },
 ];
 
 const HOME_LINEUP: PlayerSlot[] = [
-  { id: 'home-1', name: 'NastYboY #99', position: 'LF' },
-  { id: 'home-2', name: 'NastYboY #99', position: 'RF' },
-  { id: 'home-3', name: 'NastYboY #99', position: 'DH' },
-  { id: 'home-4', name: 'NastYboY #99', position: 'C' },
-  { id: 'home-5', name: 'skywalker #18', position: 'P' },
+  { id: 'home-1', name: 'NastYboY #99', position: 'LF', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'home-2', name: 'Skywalker #18', position: 'P', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'home-3', name: 'NastYboY #99', position: 'C', number: 99, handedness: 'left', avatar: 'nastyboy' },
+  { id: 'home-4', name: 'Skywalker #18', position: 'DH', number: 18, handedness: 'right', avatar: 'skywalker' },
+  { id: 'home-5', name: 'NastYboY #99', position: 'RF', number: 99, handedness: 'left', avatar: 'nastyboy' },
 ];
 
 // --- Game State ---
@@ -758,7 +764,8 @@ type Role = 'pitcher' | 'batter' | 'spectate';
 const onlineClient = new OnlineClient();
 let isOnline = false;
 let spectating = false;
-const onlineModeChoice: OnlineMode = 'quick3';
+let onlineModeChoice: OnlineMode = 'quick3';
+let selectedFriendMode: OnlineMode = 'quick3';
 let onlineSide: OnlineSide | null = null;
 let cpuPlayerSide: OnlineSide = 'home';
 let onlineRoomCode: string | null = null;
@@ -898,8 +905,8 @@ let lastPreviewPitchId: PitchId | null = null;
 
 let batCursor = { x: 0, y: 0.72 };
 let batterHandedness: 'left' | 'right' = 'left';
-let myBatterHandedness: 'left' | 'right' = 'left';
 let teamBatterHandedness: Record<'away' | 'home', 'left' | 'right'> = { away: 'left', home: 'left' };
+let lastAutoLineupKey = '';
 let powerSwing = false;
 
 function isActivePlayMotion(): boolean {
@@ -915,44 +922,108 @@ function isActivePlayMotion(): boolean {
 }
 
 function syncVisualBatterHandedness(): void {
-  if (isOnline || spectating) {
-    const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-    batterHandedness = teamBatterHandedness[activeVisualSide];
+  // Handedness is strictly tied to the player in the lineup:
+  // #99 NastYboY = left-handed (LHB), #18 Skywalker = right-handed (RHB).
+  const awaySlot = match.away.lineup[match.away.batterIndex % match.away.lineup.length];
+  const homeSlot = match.home.lineup[match.home.batterIndex % match.home.lineup.length];
+  if (awaySlot) teamBatterHandedness.away = getSlotHandedness(awaySlot);
+  if (homeSlot) teamBatterHandedness.home = getSlotHandedness(homeSlot);
+
+  const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
+  batterHandedness = teamBatterHandedness[activeVisualSide];
+
+  if (isOnline && !spectating && onlineSide) {
+    const myHand = teamBatterHandedness[onlineSide];
+    const key = `${onlineSide}:${(onlineSide === 'away' ? match.away : match.home).batterIndex}:${myHand}`;
+    if (key !== lastAutoLineupKey) {
+      lastAutoLineupKey = key;
+      onlineClient.setBatterSide(myHand === 'right' ? 'R' : 'L');
+    }
   } else {
-    const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-    batterHandedness = teamBatterHandedness[activeVisualSide];
+    const team = activeVisualSide === 'away' ? match.away : match.home;
+    lastAutoLineupKey = `${activeVisualSide}:${team.batterIndex % team.lineup.length}`;
   }
 }
+
+interface FieldingFxInstance {
+  pos: FieldV3;
+  kind: 'catch_pop' | 'dive_dust';
+  elapsedSec: number;
+  durationSec: number;
+}
+let fieldingFxList: FieldingFxInstance[] = [];
+
+function spawnFieldingFx(pos: FieldV3, kind: 'catch_pop' | 'dive_dust'): void {
+  fieldingFxList.push({
+    pos: [pos[0], pos[1], pos[2]],
+    kind,
+    elapsedSec: 0,
+    durationSec: kind === 'catch_pop' ? 0.56 : 0.64,
+  });
+}
+
+let wildCamHoldTimer = 0;
+let batterVisualAlpha = 1.0;
+let cpuAtBatBallEmoteSent = false;
+
+const catchCamHold = {
+  active: false,
+  pos: [0, 0.4, -9.0] as FieldV3,
+  timer: 0,
+};
+
+const stoppedRetrieve = {
+  active: false,
+  pickedUp: false,
+  target: [0, 0, 0] as FieldV3,
+  elapsedSec: 0,
+};
 
 const wildCapRoll = {
   active: false,
   elapsedSec: 0,
-  durationSec: 1.15,
+  durationSec: 1.48,
   pos: [0, 0.2, 0.4] as [number, number, number],
-  vel: [1.6, 1.4, 0.9] as [number, number, number],
+  vel: [1.35, -0.95, 2.75] as [number, number, number],
   bounces: 0,
+  crossedPassLine: false,
+  crossX: 0,
 };
 
 function startWildCapVisuals(plateX: number, plateY: number, isUncaughtThird: boolean, isPassedBall: boolean): void {
   catcherReturn.active = false;
-  // Never teleport a cap backward to z=0.28m once the pitched trajectory has already sailed past home plate / off-screen!
-  if (!capVisible || capPos[2] > 1.25) {
-    wildCapRoll.active = false;
-    capVisible = false;
-    capTrail = [];
-    return;
-  }
+  const sideDir = Math.abs(plateX) > 0.08 ? Math.sign(plateX) : (isPassedBall ? -1 : 1);
+  const holdSec = isUncaughtThird ? 1.60 : 1.48;
+  // Trigger exclusive Catcher (#99 NastYboY) wild-pitch / passed-ball dive behind home plate!
+  catcherFielder.pos[0] = Math.max(-1.4, Math.min(1.4, plateX * 0.35));
+  catcherFielder.pos[1] = 0;
+  catcherFielder.pos[2] = 0.95;
+  catcherFielder.anim = 'catch_wp';
+  catcherFielder.animTime = 0;
+  catcherFielder.diveTimer = holdSec;
+  // Rear-view center kneel-block sprite: keep flipX false so back number #99 never mirrors backwards
+  catcherFielder.flipX = false;
+
+  // Smoothly pull camera backward & higher behind PASS_LINE_Z so Home Plate, Catcher dive, and pass line crossing are framed!
+  wildCamHoldTimer = holdSec;
+  cam.setFollowTarget(null);
+  cam.setWildPitchTarget([catcherFielder.pos[0] + sideDir * 0.45, Math.max(0.25, plateY * 0.5), 1.65]);
+  spawnFieldingFx([catcherFielder.pos[0], 0.02, catcherFielder.pos[2]], 'dive_dust');
+
+  const useCurrentCap = capVisible && capPos[2] <= 1.35;
   wildCapRoll.active = true;
   wildCapRoll.elapsedSec = 0;
-  wildCapRoll.durationSec = isUncaughtThird ? 1.15 : 0.95;
+  wildCapRoll.durationSec = holdSec;
   wildCapRoll.bounces = 0;
-  const sideDir = Math.abs(plateX) > 0.08 ? Math.sign(plateX) : (isPassedBall ? -1 : 1);
-  wildCapRoll.pos = [capPos[0], Math.max(0.04, capPos[1]), capPos[2]];
-  // Continue seamlessly forward & downward onto visible foreground floor (zero backward jump)
+  wildCapRoll.crossedPassLine = false;
+  wildCapRoll.crossX = 0;
+  wildCapRoll.pos = useCurrentCap
+    ? [capPos[0], Math.max(0.08, capPos[1]), Math.max(0.45, capPos[2])]
+    : [catcherFielder.pos[0] + sideDir * 0.25, Math.max(0.16, Math.min(0.65, plateY)), 1.05];
   wildCapRoll.vel = [
-    sideDir * (1.05 + Math.min(0.65, Math.abs(plateX))),
-    plateY < 0.22 ? 1.4 : -1.5,
-    0.55,
+    sideDir * (1.15 + Math.min(0.55, Math.abs(plateX))),
+    plateY < 0.22 ? 1.45 : -0.95,
+    isUncaughtThird ? 3.85 : 3.55,
   ];
   capVisible = true;
 }
@@ -1067,7 +1138,7 @@ function enqueuePostAbsOutcome(opts: {
       half: match.half,
       awayRuns: match.away.totalRuns,
       homeRuns: match.home.totalRuns,
-      isTieBreaker: match.inning > match.regulationInnings,
+      isTieBreaker: isTieBreakerInning(match),
     });
   } else if (match.isGameOver) {
     enqueueGameOverPresentation(walkOffSub);
@@ -1115,6 +1186,7 @@ let swingTargetContactTimeSec = 0;
 let activeBatted: BattedCapResult | null = null;
 let activeCatchInfo: CatchInfo | null = null;
 let bobbledTriggered = false;
+let preCatchTriggered = false;
 let battedFlightTime = 0;
 let battedCaughtInAir = false;
 let battedBouncesPlayed = 0;
@@ -1223,10 +1295,41 @@ async function pollHealthVersion(): Promise<void> {
   }
 }
 
+function isTieBreakerInning(m: MatchState): boolean {
+  return m.mode === 'tiebreak' || m.inning > m.regulationInnings;
+}
+
+function getOnlineModeLabel(mode: OnlineMode): string {
+  return t(mode === 'tiebreak' ? 'modeTagTiebreak' : 'modeTagQuick3');
+}
+
+function updateModeSwitchUi(): void {
+  for (const btn of friendModeSwitch.querySelectorAll<HTMLButtonElement>('[data-friend-mode]')) {
+    const active = btn.dataset.friendMode === selectedFriendMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+}
+
+function resetFriendCreateUi(): void {
+  btnRoomCreate.hidden = false;
+  friendCreateOptions.hidden = true;
+  roomCreatedBox.hidden = true;
+}
+
+function formatQueueStatusText(secs: number): string {
+  return `${t('queueFinding')} (${getOnlineModeLabel(onlineModeChoice)}) 0:${String(secs).padStart(2, '0')}...`;
+}
+
 function isPitchClockEnabled(): boolean {
   if (onTitleScreen || match.isGameOver) return false;
   if (isOnline || spectating) return true;
-  return match.mode === 'quick3' || match.mode === 'official6' || match.mode === 'hotseat2p';
+  return (
+    match.mode === 'quick3' ||
+    match.mode === 'tiebreak' ||
+    match.mode === 'official6' ||
+    match.mode === 'hotseat2p'
+  );
 }
 
 function updatePitchClockUi(running: boolean): void {
@@ -1288,6 +1391,7 @@ let sprites: SpriteBank = {
   pitcherBlack: null,
   pitcherFieldYellow: null,
   pitcherFieldBlack: null,
+  pitcherFieldAtlas: null,
   pitcherMeta: { frames: 60, fps: 24, w: 113, h: 113, baseline_y: 112, release_frame: 30, idle_frame: 0 },
   fielderYellow: null,
   fielderBlack: null,
@@ -1309,8 +1413,27 @@ let sprites: SpriteBank = {
       follow_through: [6, 7, 8, 9],
     },
   },
+  batter18Home: null,
+  batter18Away: null,
+  batter18Meta: {
+    frames: 10,
+    w: 148,
+    h: 114,
+    baseline_y: 112,
+    anchor_x: 86,
+    natural_handedness: 'right',
+    anims: {
+      ready: [0, 1, 2, 1],
+      load: [3],
+      swing_early: [4],
+      swing_contact: [4, 5],
+      follow_through: [6, 7, 8, 9],
+    },
+  },
   fxHitImg: null,
   fxHitAtlas: null,
+  fxFieldingImg: null,
+  fxFieldingAtlas: null,
 };
 
 const keysPressed = new Set<string>();
@@ -1606,11 +1729,34 @@ function triggerAbsChallenge(): void {
   }
 
   transitionDirector.clear();
+  const prevInning = match.inning;
+  const prevHalf = match.half;
   const prevBatterIdx = (match.half === 'top' ? match.away : match.home).batterIndex;
   const prevBatterName = getCurrentBatter(match).name;
 
   const res = applyAbsChallenge(match, lc.eligibleSide);
   if (!res.ok) return;
+
+  const isOfflinePlayerPitchingToCpu =
+    !isOnline && !spectating && match.mode !== 'hotseat2p' && getCurrentRole() === 'pitcher';
+  if (
+    isOfflinePlayerPitchingToCpu &&
+    res.overturned &&
+    res.trueCall === 'ball' &&
+    (match.balls >= 3 || res.outcome === 'WALK') &&
+    !cpuAtBatBallEmoteSent
+  ) {
+    cpuAtBatBallEmoteSent = true;
+    emoteCtrl.showCustomOpponentEmote('114514', prevBatterName);
+  }
+  const curBattingAfterAbs = match.half === 'top' ? match.away : match.home;
+  if (
+    match.inning !== prevInning ||
+    match.half !== prevHalf ||
+    curBattingAfterAbs.batterIndex !== prevBatterIdx
+  ) {
+    cpuAtBatBallEmoteSent = false;
+  }
 
   absReplay = {
     active: true,
@@ -1746,9 +1892,7 @@ function updateHudAndDocks(): void {
 
   const role = getCurrentRole();
   if (isOnline && !spectating && !onTitleScreen && role === 'batter') {
-    if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
     if (!isActivePlayMotion()) syncVisualBatterHandedness();
-    btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
   }
   const canPitchUi =
     !onTitleScreen &&
@@ -1852,12 +1996,24 @@ function startMode(mode: GameMode, suppressStandbyNotice = false): void {
   }
   visualInning = match.inning;
   visualHalf = match.half;
-  teamBatterHandedness = { away: myBatterHandedness, home: myBatterHandedness };
+  lastAutoLineupKey = '';
+  teamBatterHandedness = { away: 'left', home: 'left' };
   syncVisualBatterHandedness();
   wildCapRoll.active = false;
+  wildCapRoll.crossedPassLine = false;
+  wildCapRoll.crossX = 0;
+  wildCamHoldTimer = 0;
+  cpuAtBatBallEmoteSent = false;
+  stoppedRetrieve.active = false;
+  stoppedRetrieve.pickedUp = false;
+  stoppedRetrieve.elapsedSec = 0;
+  catchCamHold.active = false;
+  catchCamHold.timer = 0;
+  fieldingFxList = [];
   onTitleScreen = false;
   titleScreen.hidden = true;
   scoreboardEl.hidden = false;
+  if (onlineModeDialog.open) onlineModeDialog.close();
   if (cpuDialog.open) cpuDialog.close();
 
   phase = 'idle';
@@ -1948,6 +2104,14 @@ function returnToTitle(): void {
   absPromptTimer = 0;
   absReplay = null;
   capVisible = false;
+  wildCapRoll.active = false;
+  wildCapRoll.crossedPassLine = false;
+  wildCapRoll.crossX = 0;
+  wildCamHoldTimer = 0;
+  cpuAtBatBallEmoteSent = false;
+  stoppedRetrieve.active = false;
+  stoppedRetrieve.pickedUp = false;
+  stoppedRetrieve.elapsedSec = 0;
   cam.resetImmediate();
   updateHudAndDocks();
   updateSafeCameraFraming(true);
@@ -1979,12 +2143,22 @@ function launchPitch(
   // Reset at-bat pitch history whenever a new plate appearance begins (0-0 count)
   if ((match.balls === 0 && match.strikes === 0) || match.derby.active) {
     currentAtBatPitches = [];
+    cpuAtBatBallEmoteSent = false;
   }
   launchedPitchUid += 1;
   clearPresentationQueue();
   transitionDirector.clear();
   catcherReturn.active = false;
   wildCapRoll.active = false;
+  wildCapRoll.crossedPassLine = false;
+  wildCapRoll.crossX = 0;
+  wildCamHoldTimer = 0;
+  stoppedRetrieve.active = false;
+  stoppedRetrieve.pickedUp = false;
+  stoppedRetrieve.elapsedSec = 0;
+  catchCamHold.active = false;
+  catchCamHold.timer = 0;
+  cam.setWildPitchTarget(null);
   activePitch = solvePitchTrajectory(pitchId, spdKmh, targetX, targetY, {
     errorY: errorX,
     errorZ: errorY,
@@ -2243,6 +2417,9 @@ function resolveContact(
   activeBatted = resolution.battedResult;
   activeCatchInfo = resolution.catchInfo;
   bobbledTriggered = false;
+  preCatchTriggered = false;
+  catchCamHold.active = false;
+  catchCamHold.timer = 0;
   const grade = resolution.outcome === 'FOUL' ? resolution.label : resolution.quality.toUpperCase();
   const ev = Math.round(resolution.exitSpeedKmh);
   const [bvx, bvy, bvz] = resolution.battedParams.velocity;
@@ -2301,6 +2478,9 @@ function resolveContact(
   battedBouncesPlayed = 0;
   battedFencePlayed = false;
   battedHrBurstPlayed = false;
+  stoppedRetrieve.active = false;
+  stoppedRetrieve.pickedUp = false;
+  stoppedRetrieve.elapsedSec = 0;
   bounceRings = [];
   fenceImpact = null;
   hrBurst = null;
@@ -2380,6 +2560,13 @@ function finishPitchWithoutContact(): void {
 
     const isBB = !res.isStrike && match.balls === 0 && match.lastEvent.includes('walks');
     walkedOnBall4 = isBB;
+
+    const isOfflinePlayerPitchingToCpu =
+      !isOnline && !spectating && match.mode !== 'hotseat2p' && getCurrentRole() === 'pitcher';
+    if (isOfflinePlayerPitchingToCpu && res.isBall && (match.balls >= 3 || isBB) && !cpuAtBatBallEmoteSent) {
+      cpuAtBatBallEmoteSent = true;
+      emoteCtrl.showCustomOpponentEmote('114514', prevBatterName);
+    }
 
     if (res.call === 'UNCAUGHT_THIRD_STRIKE') {
       callLbl = 'UNCAUGHT 3RD';
@@ -2524,6 +2711,14 @@ function finishPitchWithoutContact(): void {
   }
 
   const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+  if (inningChanged) {
+    cpuAtBatBallEmoteSent = false;
+  } else {
+    const curBattingCheck = match.half === 'top' ? match.away : match.home;
+    if (curBattingCheck.batterIndex !== prevBatterIdx) {
+      cpuAtBatBallEmoteSent = false;
+    }
+  }
   if (struckOut && !match.isGameOver) {
     presentationQueue.push({ kind: 'strikeout', batterName: prevBatterName });
   }
@@ -2534,7 +2729,7 @@ function finishPitchWithoutContact(): void {
       half: match.half,
       awayRuns: match.away.totalRuns,
       homeRuns: match.home.totalRuns,
-      isTieBreaker: match.inning > match.regulationInnings,
+      isTieBreaker: isTieBreakerInning(match),
     });
   } else if (match.isGameOver) {
     let walkOffSub: string | undefined;
@@ -2559,6 +2754,21 @@ function finishPitchWithoutContact(): void {
 
 function finishBattedPlay(): void {
   if (!activeBatted) return;
+
+  const activateStoppedRetrieveIfNeeded = (isHrOutcome: boolean): void => {
+    const finalTgt = activeBatted!.overFence
+      ? (activeBatted!.firstLandingPos ?? activeBatted!.stoppedPos)
+      : activeBatted!.stoppedPos;
+    const overFenceTarget = isFair(finalTgt[0], finalTgt[2]) && Math.hypot(finalTgt[0], finalTgt[2]) > FENCE_DIST;
+    if (!battedCaughtInAir && !activeCatchInfo?.blocked && !isHrOutcome && !overFenceTarget && !stoppedRetrieve.pickedUp) {
+      stoppedRetrieve.active = true;
+      stoppedRetrieve.pickedUp = false;
+      stoppedRetrieve.target = [finalTgt[0], Math.max(0.02, finalTgt[1]), finalTgt[2]];
+      stoppedRetrieve.elapsedSec = battedFlightTime;
+      capPos = [...stoppedRetrieve.target];
+      capVisible = true;
+    }
+  };
 
   if ((isOnline || spectating) && pendingOnlineResult) {
     const msg = pendingOnlineResult;
@@ -2595,7 +2805,7 @@ function finishBattedPlay(): void {
     }
 
     // Wait for camera pullback to home plate BEFORE showing the side dual feedback card + verdict tone in lockstep!
-    presentationQueue.push({ kind: 'wait_camera_rest', maxSec: 1.0, elapsedSec: 0 });
+    presentationQueue.push({ kind: 'wait_camera_rest', maxSec: 1.85, elapsedSec: 0 });
     if (pendingBattedFeedback) {
       presentationQueue.push({
         kind: 'show_feedback',
@@ -2615,7 +2825,7 @@ function finishBattedPlay(): void {
         half: match.half,
         awayRuns: match.away.totalRuns,
         homeRuns: match.home.totalRuns,
-        isTieBreaker: match.inning > match.regulationInnings,
+        isTieBreaker: isTieBreakerInning(match),
       });
     } else if (match.isGameOver) {
       enqueueGameOverPresentation();
@@ -2626,6 +2836,7 @@ function finishBattedPlay(): void {
         presentationQueue.push({ kind: 'next_batter', orderNum: curBatting.batterIndex + 1, batterName: nextB.name });
       }
     }
+    activateStoppedRetrieveIfNeeded(outcome === 'HR');
     enterResultPause();
     return;
   }
@@ -2705,7 +2916,7 @@ function finishBattedPlay(): void {
   }
 
   // Wait until camera pulls back & settles at home plate BEFORE popping the dual feedback card + verdict tone in lockstep!
-  presentationQueue.push({ kind: 'wait_camera_rest', maxSec: 1.0, elapsedSec: 0 });
+  presentationQueue.push({ kind: 'wait_camera_rest', maxSec: 1.85, elapsedSec: 0 });
   if (pendingBattedFeedback) {
     presentationQueue.push({
       kind: 'show_feedback',
@@ -2719,6 +2930,14 @@ function finishBattedPlay(): void {
   }
 
   const inningChanged = match.inning !== prevInning || match.half !== prevHalf;
+  if (inningChanged) {
+    cpuAtBatBallEmoteSent = false;
+  } else if (outcome !== 'FOUL') {
+    const curBattingCheck = match.half === 'top' ? match.away : match.home;
+    if (curBattingCheck.batterIndex !== prevBatterIdx) {
+      cpuAtBatBallEmoteSent = false;
+    }
+  }
   if (inningChanged && !match.isGameOver) {
     presentationQueue.push({
       kind: 'inning_change',
@@ -2726,7 +2945,7 @@ function finishBattedPlay(): void {
       half: match.half,
       awayRuns: match.away.totalRuns,
       homeRuns: match.home.totalRuns,
-      isTieBreaker: match.inning > match.regulationInnings,
+      isTieBreaker: isTieBreakerInning(match),
     });
   } else if (match.isGameOver) {
     enqueueGameOverPresentation();
@@ -2738,6 +2957,7 @@ function finishBattedPlay(): void {
     }
   }
 
+  activateStoppedRetrieveIfNeeded(outcome === 'HR');
   enterResultPause();
 }
 
@@ -2802,8 +3022,15 @@ function showGameOverModal(): void {
 
 function enterResultPause(): void {
   phase = 'result';
-  resultDelayTimer = 1.05;
-  cam.setFollowTarget(null);
+  const catchExtra = catchCamHold.active ? catchCamHold.timer + 0.55 : 0;
+  const wildExtra = wildCamHoldTimer > 0 ? wildCamHoldTimer + 0.35 : 0;
+  const retrieveExtra = stoppedRetrieve.active && !stoppedRetrieve.pickedUp ? 1.85 : 0;
+  resultDelayTimer = Math.max(1.05, catchExtra, wildExtra, retrieveExtra);
+  if (catchCamHold.active) {
+    cam.setFollowTarget(catchCamHold.pos);
+  } else if (wildCamHoldTimer <= 0) {
+    cam.setFollowTarget(null);
+  }
   if (match.isGameOver && isOnline) {
     saveSession(null);
   }
@@ -3004,7 +3231,7 @@ window.addEventListener('pointercancel', (e) => {
 });
 
 function navigateBack(): boolean {
-  for (const dlg of [resultDialog, settingsDialog, rulesDialog, watchDialog, friendDialog, cpuDialog, menuDialog]) {
+  for (const dlg of [resultDialog, settingsDialog, rulesDialog, watchDialog, friendDialog, cpuDialog, onlineModeDialog, menuDialog]) {
     if (dlg.open) {
       dlg.close();
       return true;
@@ -3040,6 +3267,7 @@ window.addEventListener('keydown', (e) => {
   if (
     inFormField ||
     menuDialog.open ||
+    onlineModeDialog.open ||
     cpuDialog.open ||
     friendDialog.open ||
     watchDialog.open ||
@@ -3141,27 +3369,6 @@ btnIbb.addEventListener('click', () => {
     }
     updateHudAndDocks();
   }
-});
-
-btnHand.addEventListener('click', () => {
-  if (isOnline && !spectating) {
-    myBatterHandedness = myBatterHandedness === 'right' ? 'left' : 'right';
-    if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
-    if (getCurrentRole() === 'batter' && !isActivePlayMotion()) {
-      syncVisualBatterHandedness();
-    }
-    btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
-    onlineClient.setBatterSide(myBatterHandedness === 'right' ? 'R' : 'L');
-    return;
-  }
-  const activeVisualSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-  const nextHand: 'left' | 'right' = teamBatterHandedness[activeVisualSide] === 'right' ? 'left' : 'right';
-  teamBatterHandedness[activeVisualSide] = nextHand;
-  myBatterHandedness = nextHand;
-  if (!isActivePlayMotion()) {
-    batterHandedness = nextHand;
-  }
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 });
 
 btnSwingType.addEventListener('click', () => {
@@ -3330,7 +3537,7 @@ function autoFallbackToCpu(title: string, detail: string, registerStandby = fals
     onlineClient.unqueue();
   }
   if (friendDialog.open) friendDialog.close();
-  startMode('quick3', true);
+  startMode(onlineModeChoice === 'tiebreak' ? 'tiebreak' : 'quick3', true);
   const loc = localizeServerCallout(locale, title, detail);
   emoteCtrl.showSystem(loc.title, loc.subtitle, '#f97316', 3600);
 }
@@ -3385,8 +3592,10 @@ onlineClient.onNetUpdate((m) => {
   }
 });
 
-btnHubPlay.addEventListener('click', async () => {
-  sfx.unlock();
+async function startOnlineMatchmaking(mode: OnlineMode): Promise<void> {
+  onlineModeChoice = mode;
+  updateModeSwitchUi();
+  if (onlineModeDialog.open) onlineModeDialog.close();
   // Actively clicking Online Match re-enables online standby invites for this session
   standbyOptedOut = false;
   standbyPriorityMode = true;
@@ -3420,7 +3629,7 @@ btnHubPlay.addEventListener('click', async () => {
   queuePanel.hidden = false;
   onlineWaitingQueue = true;
   queueElapsedSec = 0;
-  queueStatusText.textContent = `${t('queueFinding')} 0:00...`;
+  queueStatusText.textContent = formatQueueStatusText(0);
   updateHudAndDocks();
   try {
     await onlineClient.connect(getOnlinePlayerName(), 1500);
@@ -3436,7 +3645,19 @@ btnHubPlay.addEventListener('click', async () => {
   } catch {
     autoFallbackToCpu('SERVER OFFLINE', 'AUTO-MATCHED VS CPU');
   }
+}
+
+btnHubPlay.addEventListener('click', () => {
+  sfx.unlock();
+  if (!onlineModeDialog.open) onlineModeDialog.showModal();
 });
+
+for (const btn of onlineModeDialog.querySelectorAll<HTMLButtonElement>('[data-online-mode]')) {
+  btn.addEventListener('click', () => {
+    const mode: OnlineMode = btn.dataset.onlineMode === 'tiebreak' ? 'tiebreak' : 'quick3';
+    void startOnlineMatchmaking(mode);
+  });
+}
 
 btnQueueCancel.addEventListener('click', () => {
   onlineWaitingQueue = false;
@@ -3456,7 +3677,7 @@ btnHubCpu.addEventListener('click', () => {
 
 btnHubFriend.addEventListener('click', async () => {
   sfx.unlock();
-  roomCreatedBox.hidden = true;
+  resetFriendCreateUi();
   friendStatusMsg.textContent = t('friendConnecting');
   if (!friendDialog.open) friendDialog.showModal();
   try {
@@ -3496,10 +3717,28 @@ btnWatchRefresh.addEventListener('click', async () => {
   }
 });
 
-btnRoomCreate.addEventListener('click', async () => {
+for (const btn of friendModeSwitch.querySelectorAll<HTMLButtonElement>('[data-friend-mode]')) {
+  btn.addEventListener('click', () => {
+    const m = btn.dataset.friendMode;
+    selectedFriendMode = m === 'tiebreak' ? 'tiebreak' : 'quick3';
+    updateModeSwitchUi();
+  });
+}
+
+btnRoomCreate.addEventListener('click', () => {
+  btnRoomCreate.hidden = true;
+  friendCreateOptions.hidden = false;
+});
+
+btnRoomCreateBack.addEventListener('click', () => {
+  resetFriendCreateUi();
+});
+
+btnRoomCreateConfirm.addEventListener('click', async () => {
   try {
     await onlineClient.connect(getOnlinePlayerName());
-    onlineClient.createRoom(onlineModeChoice, getOnlinePlayerName(), friendMercyRule.checked);
+    onlineClient.createRoom(selectedFriendMode, getOnlinePlayerName(), friendMercyRule.checked);
+    friendCreateOptions.hidden = true;
     friendStatusMsg.textContent = t('friendCreating');
   } catch {
     friendStatusMsg.textContent = t('friendConnFailed');
@@ -3591,13 +3830,20 @@ function renderWatchRooms(rooms: LiveRoomInfo[]): void {
     homeSc.textContent = String(r.homeScore);
     scoresCol.append(awaySc, homeSc);
 
-    // Col 4: LIVE / FRIEND tag on top + rounded pill Watch button below
+    // Col 4: LIVE / FRIEND + Mode tag on top + rounded pill Watch button below
     const actCol = document.createElement('div');
     actCol.className = 'wi-action';
+    const tagsRow = document.createElement('div');
+    tagsRow.className = 'wi-tags';
     const kind = r.roomKind === 'friend' ? 'friend' : 'live';
     const kindTag = document.createElement('span');
     kindTag.className = `wi-kind ${kind}`;
     kindTag.textContent = kind === 'friend' ? t('roomTagFriend') : t('roomTagLive');
+    const modeTag = document.createElement('span');
+    const modeKey = r.mode === 'tiebreak' ? 'tiebreak' : 'quick3';
+    modeTag.className = `wi-mode ${modeKey}`;
+    modeTag.textContent = t(modeKey === 'tiebreak' ? 'watchModeTiebreak' : 'watchModeQuick3');
+    tagsRow.append(kindTag, modeTag);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'wi-watch-btn';
@@ -3605,7 +3851,7 @@ function renderWatchRooms(rooms: LiveRoomInfo[]): void {
     btn.addEventListener('click', () => {
       onlineClient.watchRoom(r.code);
     });
-    actCol.append(kindTag, btn);
+    actCol.append(tagsRow, btn);
 
     row.append(leftCol, playersCol, scoresCol, actCol);
     watchListEl.appendChild(row);
@@ -3632,26 +3878,9 @@ function enterOnlineMatch(
   match = msg.match;
   visualInning = match.inning;
   visualHalf = match.half;
-  const activeBatchSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-  const curServerHand: 'left' | 'right' = msg.batterSide === 'L' ? 'left' : 'right';
-  if (msg.batterSides) {
-    teamBatterHandedness = {
-      away: msg.batterSides.away === 'L' ? 'left' : 'right',
-      home: msg.batterSides.home === 'L' ? 'left' : 'right',
-    };
-  } else {
-    teamBatterHandedness = { away: 'left', home: 'left' };
-    teamBatterHandedness[activeBatchSide] = curServerHand;
-  }
-  if (msg.type === 'match_start') {
-    myBatterHandedness = 'left';
-    if (onlineSide) teamBatterHandedness[onlineSide] = 'left';
-  } else if (onlineSide) {
-    myBatterHandedness = teamBatterHandedness[onlineSide];
-  }
+  lastAutoLineupKey = '';
   syncVisualBatterHandedness();
   wildCapRoll.active = false;
-  btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
   onTitleScreen = false;
   titleScreen.hidden = true;
@@ -3713,19 +3942,9 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   match = msg.match;
   visualInning = match.inning;
   visualHalf = match.half;
-  const specActiveSide: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-  if (msg.batterSides) {
-    teamBatterHandedness = {
-      away: msg.batterSides.away === 'L' ? 'left' : 'right',
-      home: msg.batterSides.home === 'L' ? 'left' : 'right',
-    };
-  } else {
-    teamBatterHandedness = { away: 'left', home: 'left' };
-    teamBatterHandedness[specActiveSide] = msg.batterSide === 'L' ? 'left' : 'right';
-  }
+  lastAutoLineupKey = '';
   syncVisualBatterHandedness();
   wildCapRoll.active = false;
-  btnHand.textContent = batterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
 
   onTitleScreen = false;
   titleScreen.hidden = true;
@@ -3816,6 +4035,9 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       }
     }
     bobbledTriggered = false;
+    preCatchTriggered = false;
+    catchCamHold.active = false;
+    catchCamHold.timer = 0;
     const ev = Math.round(res.exitSpeedKmh);
     const [bvx, bvy, bvz] = res.battedParams.velocity;
     const la =
@@ -3878,6 +4100,9 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
     battedBouncesPlayed = 0;
     battedFencePlayed = false;
     battedHrBurstPlayed = false;
+    stoppedRetrieve.active = false;
+    stoppedRetrieve.pickedUp = false;
+    stoppedRetrieve.elapsedSec = 0;
     bounceRings = [];
     fenceImpact = null;
     hrBurst = null;
@@ -4005,7 +4230,7 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
       half: match.half,
       awayRuns: match.away.totalRuns,
       homeRuns: match.home.totalRuns,
-      isTieBreaker: match.inning > match.regulationInnings,
+      isTieBreaker: isTieBreakerInning(match),
     });
   } else if (match.isGameOver) {
     let onlineWalkOffSub: string | undefined;
@@ -4057,6 +4282,8 @@ onlineClient.onMessage((msg) => {
     case 'room_created': {
       saveSession({ code: msg.code, token: msg.token });
       roomCodeDisplay.textContent = msg.code;
+      btnRoomCreate.hidden = true;
+      friendCreateOptions.hidden = true;
       roomCreatedBox.hidden = false;
       if (!friendDialog.open) friendDialog.showModal(); // also after resuming a waiting room
       friendStatusMsg.textContent = `${t('roomCodePrefix')} ${msg.code} · ${t('friendReady')}`;
@@ -4096,20 +4323,8 @@ onlineClient.onMessage((msg) => {
       break;
     }
     case 'batter_side': {
-      const nextHand: 'left' | 'right' = msg.side === 'L' ? 'left' : 'right';
-      const fallbackHalf = pendingOnlineResult?.match?.half ?? match.half;
-      const targetTeam: 'away' | 'home' = msg.team ?? (fallbackHalf === 'top' ? 'away' : 'home');
-      // Always record into the team slot; only update visible batter stance if that team is CURRENTLY
-      // shown at the plate (visualHalf) and no pitch/batted flight, wild-ball roll, or ABS replay is running!
-      if (spectating || targetTeam !== onlineSide) {
-        teamBatterHandedness[targetTeam] = nextHand;
-      }
-      const visibleTeam: 'away' | 'home' = visualHalf === 'top' ? 'away' : 'home';
-      if (
-        !isActivePlayMotion() &&
-        targetTeam === visibleTeam &&
-        (spectating || getCurrentRole() !== 'batter')
-      ) {
+      // Handedness is fixed per lineup player (#99 NastYboY = LHB, #18 Skywalker = RHB).
+      if (!isActivePlayMotion()) {
         syncVisualBatterHandedness();
       }
       break;
@@ -4126,15 +4341,7 @@ onlineClient.onMessage((msg) => {
         visualHalf = match.half;
         updateHudAndDocks();
       }
-      const serverBattingTeam: 'away' | 'home' = match.half === 'top' ? 'away' : 'home';
-      if (spectating || getCurrentRole() !== 'batter') {
-        teamBatterHandedness[serverBattingTeam] = p.batterSide === 'L' ? 'left' : 'right';
-        syncVisualBatterHandedness();
-      } else {
-        if (onlineSide) teamBatterHandedness[onlineSide] = myBatterHandedness;
-        syncVisualBatterHandedness();
-        btnHand.textContent = myBatterHandedness === 'right' ? t('btnRhb') : t('btnLhb');
-      }
+      syncVisualBatterHandedness();
       launchPitch(p.pitchId, p.speedKmh, p.targetX, p.targetY, p.errorX, p.errorY, p.seed);
       break;
     }
@@ -4364,6 +4571,9 @@ onlineClient.onMessage((msg) => {
     }
     case 'error': {
       friendStatusMsg.textContent = msg.message;
+      if (friendDialog.open && roomCreatedBox.hidden && friendCreateOptions.hidden && btnRoomCreate.hidden) {
+        btnRoomCreate.hidden = false;
+      }
       if (msg.code === 'server_busy') {
         autoFallbackToCpu('SERVER BUSY', 'AUTO-MATCHED VS CPU');
       } else if (msg.code === 'draining') {
@@ -4474,7 +4684,7 @@ btnStandbyToggle.addEventListener('click', () => {
 });
 
 // Dialog close & Safari closedby="any" fallback (modern-web-guidance 'dialog')
-for (const dlg of [menuDialog, cpuDialog, friendDialog, watchDialog, rulesDialog, settingsDialog, resultDialog]) {
+for (const dlg of [menuDialog, onlineModeDialog, cpuDialog, friendDialog, watchDialog, rulesDialog, settingsDialog, resultDialog]) {
   dlg.addEventListener('close', () => {
     const val = dlg.returnValue;
     dlg.returnValue = '';
@@ -4482,6 +4692,8 @@ for (const dlg of [menuDialog, cpuDialog, friendDialog, watchDialog, rulesDialog
       if (val === 'menu' || val === '') {
         returnToTitle();
       }
+    } else if (dlg === friendDialog && roomCreatedBox.hidden) {
+      resetFriendCreateUi();
     }
   });
 }
@@ -4519,7 +4731,7 @@ function step(now: number): void {
   if (onTitleScreen && onlineWaitingQueue) {
     queueElapsedSec += rawDt;
     const secs = Math.floor(queueElapsedSec);
-    queueStatusText.textContent = `${t('queueFinding')} 0:${String(secs).padStart(2, '0')}...`;
+    queueStatusText.textContent = formatQueueStatusText(secs);
     if (queueElapsedSec >= 40) {
       cancelQueueToCpu(false);
     }
@@ -4542,7 +4754,7 @@ function step(now: number): void {
         pendingMatchOffer.shownAtMs = nowMs;
         pendingMatchOffer.expiresAtMs = nowMs + pendingMatchOffer.timeoutSec * 1000;
         lastOfferRenderedSec = -1;
-        motBodyEl.textContent = `${t('offerBodyPrefix')} ${pendingMatchOffer.opponentName}`;
+        motBodyEl.textContent = `${t('offerBodyPrefix')} ${pendingMatchOffer.opponentName} · ${getOnlineModeLabel(pendingMatchOffer.mode)}`;
         motBarFillEl.style.width = '100%';
         matchOfferToast.hidden = false;
         onlineClient.sendOfferShown(pendingMatchOffer.offerId);
@@ -4991,14 +5203,20 @@ function step(now: number): void {
       }
 
       const frames = activeBatted.frames;
+      const isPlannedFlyCatch = Boolean(activeCatchInfo?.caught && activeCatchInfo.catchTimeSec !== null);
+      const sampleTime = isPlannedFlyCatch
+        ? Math.min(battedFlightTime, activeCatchInfo!.catchTimeSec!)
+        : battedFlightTime;
       let cur = frames[frames.length - 1];
       for (let i = 1; i < frames.length; i++) {
-        if (frames[i].t >= battedFlightTime) {
+        if (frames[i].t >= sampleTime) {
           cur = frames[i];
           break;
         }
       }
-      capPos = cur.pos;
+      capPos = isPlannedFlyCatch
+        ? [cur.pos[0], Math.max(0.55, cur.pos[1]), cur.pos[2]]
+        : cur.pos;
       capTrail.push(capPos);
       if (capTrail.length > 10) capTrail.shift();
 
@@ -5012,8 +5230,8 @@ function step(now: number): void {
 
       const radialDist = Math.hypot(capPos[0], capPos[2]);
 
-      // Floor bounce ripple ring
-      if (capPos[1] <= 0.035 && battedBouncesPlayed < activeBatted.bounces) {
+      // Floor bounce ripple ring (NEVER trigger on an airborne fly-out catch!)
+      if (!isPlannedFlyCatch && capPos[1] <= 0.035 && battedBouncesPlayed < activeBatted.bounces) {
         battedBouncesPlayed += 1;
         totalBounceEvents += 1;
         sfx.playFloorBounce();
@@ -5082,17 +5300,53 @@ function step(now: number): void {
 
       const finalTarget = activeBatted.overFence ? landingTarget : activeBatted.stoppedPos;
 
-      updateOutfielders(
+      const pickedUpInFlight = updateOutfielders(
         allFielders,
         dt,
-        capPos,
+        stoppedRetrieve.pickedUp ? null : capPos,
         landingTarget,
         airborne,
-        battedCaughtInAir,
+        battedCaughtInAir || stoppedRetrieve.pickedUp,
         battedFlightTime,
         interception,
         finalTarget,
       );
+      if (pickedUpInFlight && !interception && !stoppedRetrieve.pickedUp) {
+        stoppedRetrieve.pickedUp = true;
+        capVisible = false;
+        spawnFieldingFx([capPos[0], 0.02, capPos[2]], 'dive_dust');
+      }
+
+      // Pre-catch anticipation (0.26s early): start jump/crouch windup frames BEFORE contact so Frame 4 hits right at catch!
+      if (
+        interception &&
+        !preCatchTriggered &&
+        !battedCaughtInAir &&
+        !bobbledTriggered &&
+        interception.targetTimeSec - battedFlightTime <= 0.26 &&
+        interception.targetTimeSec - battedFlightTime > 0
+      ) {
+        const f = activeCatchInfo ? findFielderActor(activeCatchInfo) : null;
+        if (f) {
+          preCatchTriggered = true;
+          const hitP = interception.targetPos;
+          const isFly = !interception.isBlock && (airborne || hitP[1] >= 0.45);
+          f.anim = isFly ? 'catch_fly' : 'catch_ground';
+          f.animTime = 0;
+          f.diveTimer = 1.25;
+          f.flipX = Math.abs(hitP[0] - f.homePos[0]) > 0.25 ? hitP[0] < f.homePos[0] : f.pos[0] > 0.15;
+        }
+      }
+      // Smoothly finish the fielder's leap/lunge into interception.targetPos during pre-catch windup
+      if (preCatchTriggered && interception && !battedCaughtInAir && !bobbledTriggered) {
+        const f = activeCatchInfo ? findFielderActor(activeCatchInfo) : null;
+        if (f) {
+          const rem = Math.max(dt, interception.targetTimeSec - battedFlightTime);
+          const blend = Math.min(1, dt / rem);
+          f.pos[0] += (interception.targetPos[0] - f.pos[0]) * blend;
+          f.pos[2] += (interception.targetPos[2] - f.pos[2]) * blend;
+        }
+      }
 
       if (
         activeCatchInfo?.caught &&
@@ -5101,16 +5355,33 @@ function step(now: number): void {
         battedFlightTime >= activeCatchInfo.catchTimeSec
       ) {
         const f = findFielderActor(activeCatchInfo);
+        const hitP = interception?.targetPos ?? capPos;
+        const isFly = airborne || hitP[1] >= 0.45;
         if (f) {
-          const hitP = interception?.targetPos ?? capPos;
           f.pos[0] = hitP[0];
           f.pos[2] = hitP[2];
-          f.anim = 'dive';
-          f.animTime = 0;
-          f.diveTimer = 0.6;
-          f.flipX = hitP[0] < f.homePos[0];
+          if (!preCatchTriggered || (f.anim !== 'catch_fly' && f.anim !== 'catch_ground')) {
+            f.anim = isFly ? 'catch_fly' : 'catch_ground';
+            f.animTime = 0;
+          }
+          f.diveTimer = Math.max(f.diveTimer, 0.95);
+          f.flipX = Math.abs(hitP[0] - f.homePos[0]) > 0.25 ? hitP[0] < f.homePos[0] : f.pos[0] > 0.15;
         }
+        spawnFieldingFx(
+          isFly && f
+            ? getFlyCatchHandPos(f)
+            : [hitP[0], Math.max(0.32, Math.min(0.75, hitP[1])), hitP[2] + 0.06],
+          'catch_pop',
+        );
+        if (!isFly) {
+          spawnFieldingFx([hitP[0], 0.02, hitP[2]], 'dive_dust');
+        }
+        catchCamHold.active = true;
+        catchCamHold.pos = [hitP[0], Math.max(0.35, hitP[1] * 0.5), hitP[2]];
+        catchCamHold.timer = 0.92;
         battedCaughtInAir = true;
+        capVisible = false;
+        capTrail = [];
         sfx.playCatchPop();
         finishBattedPlay();
       } else if (
@@ -5121,15 +5392,19 @@ function step(now: number): void {
       ) {
         bobbledTriggered = true;
         const f = findFielderActor(activeCatchInfo);
+        const hitP = interception?.targetPos ?? capPos;
+        const isFly = airborne || hitP[1] >= 0.45;
         if (f) {
-          const hitP = interception?.targetPos ?? capPos;
           f.pos[0] = hitP[0];
           f.pos[2] = hitP[2];
-          f.anim = 'dive';
-          f.animTime = 0;
-          f.diveTimer = 0.6;
-          f.flipX = hitP[0] < f.homePos[0];
+          if (!preCatchTriggered || (f.anim !== 'catch_fly' && f.anim !== 'catch_ground')) {
+            f.anim = isFly ? 'catch_fly' : 'catch_ground';
+            f.animTime = 0;
+          }
+          f.diveTimer = Math.max(f.diveTimer, 0.85);
+          f.flipX = Math.abs(hitP[0] - f.homePos[0]) > 0.25 ? hitP[0] < f.homePos[0] : f.pos[0] > 0.15;
         }
+        spawnFieldingFx([hitP[0], 0.02, hitP[2]], 'dive_dust');
       } else if (
         activeCatchInfo?.blocked &&
         !bobbledTriggered &&
@@ -5138,41 +5413,122 @@ function step(now: number): void {
       ) {
         bobbledTriggered = true;
         const f = findFielderActor(activeCatchInfo);
+        const hitP = interception?.targetPos ?? capPos;
         if (f) {
-          const hitP = interception?.targetPos ?? capPos;
           f.pos[0] = hitP[0];
           f.pos[2] = hitP[2];
-          f.anim = 'dive';
-          f.animTime = 0;
-          f.diveTimer = 0.55;
-          f.flipX = hitP[0] < f.homePos[0];
+          if (!preCatchTriggered || f.anim !== 'catch_ground') {
+            f.anim = 'catch_ground';
+            f.animTime = 0;
+          }
+          f.diveTimer = Math.max(f.diveTimer, 0.95);
+          f.flipX = Math.abs(hitP[0] - f.homePos[0]) > 0.25 ? hitP[0] < f.homePos[0] : f.pos[0] > 0.15;
         }
+        spawnFieldingFx([hitP[0], Math.max(0.32, Math.min(0.75, hitP[1])), hitP[2] + 0.06], 'catch_pop');
+        spawnFieldingFx([hitP[0], 0.02, hitP[2]], 'dive_dust');
+        catchCamHold.active = true;
+        catchCamHold.pos = [hitP[0], 0.3, hitP[2]];
+        catchCamHold.timer = 0.92;
         sfx.playCatchPop();
         finishBattedPlay();
       } else if (battedFlightTime >= activeBatted.flightTimeSec) {
         finishBattedPlay();
       }
       } else if (phase === 'result') {
+        if (stoppedRetrieve.active) {
+          stoppedRetrieve.elapsedSec += dt;
+          const pickedUpStopped = updateOutfielders(
+            allFielders,
+            dt,
+            stoppedRetrieve.pickedUp ? null : stoppedRetrieve.target,
+            stoppedRetrieve.target,
+            false,
+            stoppedRetrieve.pickedUp,
+            stoppedRetrieve.elapsedSec,
+            null,
+            stoppedRetrieve.target,
+          );
+          if (pickedUpStopped && !stoppedRetrieve.pickedUp) {
+            stoppedRetrieve.pickedUp = true;
+            capVisible = false;
+            spawnFieldingFx([stoppedRetrieve.target[0], 0.02, stoppedRetrieve.target[2]], 'dive_dust');
+            resultDelayTimer = Math.max(resultDelayTimer, 0.72);
+          }
+        } else {
+          // Keep all fielders' catch/block/idle animations advancing smoothly during result hold!
+          for (const f of allFielders) {
+            if (f.id === 'C' && f.anim === 'catch_wp') continue;
+            f.animTime += dt;
+            if (f.diveTimer > 0) {
+              f.diveTimer = Math.max(0, f.diveTimer - dt);
+            }
+          }
+        }
+        if (catchCamHold.active) {
+          catchCamHold.timer -= dt;
+          cam.setFollowTarget(catchCamHold.pos);
+          if (catchCamHold.timer <= 0) {
+            catchCamHold.active = false;
+            cam.setFollowTarget(null);
+          }
+        }
+        if (wildCamHoldTimer > 0) {
+          wildCamHoldTimer = Math.max(0, wildCamHoldTimer - dt);
+          const wx = wildCapRoll.active
+            ? catcherFielder.pos[0] * 0.65 + wildCapRoll.pos[0] * 0.35
+            : catcherFielder.pos[0];
+          const wy = wildCapRoll.active ? Math.max(0.2, wildCapRoll.pos[1]) : 0.35;
+          const wz = Math.max(0.65, catcherFielder.pos[2]);
+          cam.setWildPitchTarget([wx, wy, wz]);
+          if (wildCamHoldTimer <= 0) {
+            cam.setWildPitchTarget(null);
+          }
+        }
         if (wildCapRoll.active) {
           wildCapRoll.elapsedSec += dt;
           wildCapRoll.vel[1] -= 9.81 * dt;
           wildCapRoll.pos[0] += wildCapRoll.vel[0] * dt;
           wildCapRoll.pos[1] += wildCapRoll.vel[1] * dt;
-          wildCapRoll.pos[2] = Math.min(1.85, wildCapRoll.pos[2] + wildCapRoll.vel[2] * dt);
+          wildCapRoll.pos[2] = Math.min(3.75, wildCapRoll.pos[2] + wildCapRoll.vel[2] * dt);
+          if (!wildCapRoll.crossedPassLine && wildCapRoll.pos[2] >= PASS_LINE_Z) {
+            wildCapRoll.crossedPassLine = true;
+            wildCapRoll.crossX = wildCapRoll.pos[0];
+            spawnFieldingFx([wildCapRoll.crossX, 0.04, PASS_LINE_Z], 'catch_pop');
+            spawnFieldingFx([wildCapRoll.crossX, 0.02, PASS_LINE_Z], 'dive_dust');
+          }
+          // Smoothly slide Catcher (#99) laterally toward the rolling wild pitch / passed ball
+          if (catcherFielder.anim === 'catch_wp') {
+            catcherFielder.animTime += dt;
+            const targetX = Math.max(-2.2, Math.min(2.2, wildCapRoll.pos[0] * 0.78));
+            const targetZ = Math.max(0.75, Math.min(1.55, wildCapRoll.pos[2] + 0.25));
+            const alpha = Math.min(1, dt * 6.5);
+            catcherFielder.pos[0] += (targetX - catcherFielder.pos[0]) * alpha;
+            catcherFielder.pos[2] += (targetZ - catcherFielder.pos[2]) * alpha;
+          }
           if (wildCapRoll.pos[1] <= 0.03) {
             wildCapRoll.pos[1] = 0.03;
-            wildCapRoll.vel[1] = Math.abs(wildCapRoll.vel[1]) * 0.42;
-            wildCapRoll.vel[0] *= 0.84;
-            wildCapRoll.vel[2] *= 0.72;
-            if (wildCapRoll.bounces < 3) {
-              wildCapRoll.bounces += 1;
-              sfx.playFloorBounce();
-              bounceRings.push({
-                pos: [wildCapRoll.pos[0], 0.015, wildCapRoll.pos[2]],
-                ageSec: 0,
-                maxAgeSec: 0.45,
-                infield: true,
-              });
+            if (wildCapRoll.vel[1] < -0.35) {
+              wildCapRoll.vel[1] = Math.abs(wildCapRoll.vel[1]) * 0.44;
+              wildCapRoll.vel[0] *= 0.88;
+              wildCapRoll.vel[2] *= 0.92;
+              if (wildCapRoll.bounces < 3) {
+                wildCapRoll.bounces += 1;
+                sfx.playFloorBounce();
+                bounceRings.push({
+                  pos: [wildCapRoll.pos[0], 0.015, wildCapRoll.pos[2]],
+                  ageSec: 0,
+                  maxAgeSec: 0.45,
+                  infield: true,
+                });
+              }
+            } else {
+              wildCapRoll.vel[1] = 0;
+              const rollDrag = Math.exp(-dt * 1.15);
+              wildCapRoll.vel[0] *= rollDrag;
+              wildCapRoll.vel[2] *= rollDrag;
+              if (wildCapRoll.pos[2] < PASS_LINE_Z + 0.65 && wildCapRoll.vel[2] < 1.55) {
+                wildCapRoll.vel[2] = 1.55;
+              }
             }
           }
           const spinAng = wildCapRoll.elapsedSec * 14;
@@ -5182,6 +5538,13 @@ function step(now: number): void {
           if (capTrail.length > 8) capTrail.shift();
           capVisible = wildCapRoll.elapsedSec < wildCapRoll.durationSec;
           if (!capVisible) wildCapRoll.active = false;
+        } else if (catcherFielder.anim === 'catch_wp') {
+          catcherFielder.animTime += dt;
+          const targetX = Math.max(-2.2, Math.min(2.2, wildCapRoll.pos[0] * 0.82));
+          const targetZ = Math.max(0.85, Math.min(1.55, wildCapRoll.pos[2]));
+          const alpha = Math.min(1, dt * 5.2);
+          catcherFielder.pos[0] += (targetX - catcherFielder.pos[0]) * alpha;
+          catcherFielder.pos[2] += (targetZ - catcherFielder.pos[2]) * alpha;
         }
         batterAnimTime += dt;
         if (batterSwungThisPitch) {
@@ -5207,6 +5570,16 @@ function step(now: number): void {
           capVisible = false;
           capTrail = [];
           wildCapRoll.active = false;
+          wildCapRoll.crossedPassLine = false;
+          wildCapRoll.crossX = 0;
+          wildCamHoldTimer = 0;
+          stoppedRetrieve.active = false;
+          stoppedRetrieve.pickedUp = false;
+          stoppedRetrieve.elapsedSec = 0;
+          catchCamHold.active = false;
+          catchCamHold.timer = 0;
+          cam.setFollowTarget(null);
+          cam.setWildPitchTarget(null);
           resetOutfielders(allFielders);
           syncVisualBatterHandedness();
           if (isOnline && !spectating) {
@@ -5225,6 +5598,18 @@ function step(now: number): void {
       updateOutfielders(allFielders, dt, null, null, false, false);
     }
 
+    // Advance procedural PixelFX fielding animations (catch_pop + dive_dust)
+    if (fieldingFxList.length > 0) {
+      for (const fx of fieldingFxList) {
+        fx.elapsedSec += dt;
+      }
+      fieldingFxList = fieldingFxList.filter((fx) => fx.elapsedSec < fx.durationSec);
+    }
+
+    // Smoothly fade out foreground batter during wild-pitch / passed-ball camera pull-back so Catcher dive is unobstructed
+    const wantBatterAlpha = wildCamHoldTimer > 0.12 ? 0.0 : 1.0;
+    batterVisualAlpha += (wantBatterAlpha - batterVisualAlpha) * Math.min(1, dt * 11);
+
     cam.update(dt);
   }
 
@@ -5232,18 +5617,33 @@ function step(now: number): void {
   const pw = pixelCanvas.width;
   const ph = pixelCanvas.height;
   cam.setViewport(pw, ph);
-  drawGymBackground(pixelCtx, cam, pw, ph, timeSec);
+  const passLineState: PassLineState | undefined =
+    wildCamHoldTimer > 0 || wildCapRoll.active
+      ? {
+          highlight: wildCapRoll.active ? 1.0 : Math.min(1, wildCamHoldTimer / 0.35),
+          crossed: wildCapRoll.crossedPassLine,
+          crossX: wildCapRoll.crossX,
+        }
+      : undefined;
+  drawGymBackground(pixelCtx, cam, pw, ph, timeSec, passLineState);
   const fenceItems = buildFenceDepthItems(pixelCtx, cam, fenceFlashAngle, fenceFlashAlpha);
+  const isCatchAnim = (a: string): boolean =>
+    a === 'dive' || a === 'catch_fly' || a === 'catch_ground' || a === 'catch_wp';
   const pitcherOffMound =
+    (phase === 'batted_flight' && battedFlightTime >= 0.25) ||
+    catchCamHold.active ||
     Math.hypot(
       pitcherFielder.pos[0] - pitcherFielder.homePos[0],
       pitcherFielder.pos[2] - pitcherFielder.homePos[2],
-    ) > 0.12 || pitcherFielder.anim === 'dive';
+    ) > 0.12 ||
+    isCatchAnim(pitcherFielder.anim);
   const catcherOffPlate =
+    wildCamHoldTimer > 0 ||
     Math.hypot(
       catcherFielder.pos[0] - catcherFielder.homePos[0],
       catcherFielder.pos[2] - catcherFielder.homePos[2],
-    ) > 0.18 || catcherFielder.anim === 'dive';
+    ) > 0.18 ||
+    isCatchAnim(catcherFielder.anim);
   const visibleFielders: OutfielderActor[] = [
     ...outfielders,
     ...(catcherOffPlate ? [catcherFielder] : []),
@@ -5272,18 +5672,23 @@ function step(now: number): void {
       handedness: batterHandedness,
       anim: batterAnim,
       animTime: batterAnimTime,
-      alpha: 1.0,
+      alpha: batterVisualAlpha,
     },
     cap: {
       pos: capPos,
       normalField: capNormalField,
       teamColor: getPitchingTeamColor(),
       trail: capTrail,
-      // Pitched cap renders razor-sharp on overlayCanvas; batted / wild-roll cap depth-sorts in world entities!
-      visible: capVisible && (phase === 'batted_flight' || wildCapRoll.active),
-      isFlyBall: phase === 'batted_flight',
+      // Pitched cap renders razor-sharp on overlayCanvas; batted / wild-roll / stopped cap depth-sorts in world entities!
+      visible:
+        capVisible &&
+        (phase === 'batted_flight' ||
+          wildCapRoll.active ||
+          (stoppedRetrieve.active && !stoppedRetrieve.pickedUp)),
+      isFlyBall: phase === 'batted_flight' && !stoppedRetrieve.pickedUp,
     },
     hitFx,
+    fieldingFx: fieldingFxList,
     fenceItems,
     battedEffects: {
       bounceRings,

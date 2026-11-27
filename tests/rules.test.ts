@@ -791,4 +791,42 @@ describe('2025-02 Cap Baseball Rules Engine', () => {
     expect(velPassed).toBeGreaterThanOrEqual(10);
     expect(velPassed).toBeLessThanOrEqual(55);
   });
+
+  it('starts tiebreak mode at Inning 1 with 0 outs & bases loaded, carries tiebreak into Bottom 1 & extra innings, and enforces walk-off', () => {
+    const m1 = createMatch('tiebreak');
+    expect(m1.mode).toBe('tiebreak');
+    expect(m1.regulationInnings).toBe(1);
+    expect(m1.inning).toBe(1);
+    expect(m1.half).toBe('top');
+    expect(m1.outs).toBe(0);
+    expect(m1.bases.every((b) => b !== null)).toBe(true);
+    expect(m1.bases).toEqual(['away-5', 'away-4', 'away-3']);
+
+    // Top 1: 3 outs without scoring -> transitions to Bottom 1 with 0 outs & bases loaded!
+    for (let o = 0; o < 3; o++) applyBattedOutcome(m1, 'OUT');
+    expect(m1.isGameOver).toBe(false);
+    expect(m1.inning).toBe(1);
+    expect(m1.half).toBe('bottom');
+    expect(m1.outs).toBe(0);
+    expect(m1.bases.every((b) => b !== null)).toBe(true);
+    expect(m1.bases).toEqual(['home-5', 'home-4', 'home-3']);
+
+    // Bottom 1: 3 outs without scoring -> still tied after regulation (1 inning) -> advances to Inning 2 Top with 0 outs & bases loaded!
+    for (let o = 0; o < 3; o++) applyBattedOutcome(m1, 'OUT');
+    expect(m1.isGameOver).toBe(false);
+    expect(m1.inning).toBe(2);
+    expect(m1.half).toBe('top');
+    expect(m1.outs).toBe(0);
+    expect(m1.bases.every((b) => b !== null)).toBe(true);
+
+    // Separate game: Home scores in Bottom 1 to take lead -> immediate walk-off win!
+    const m2 = createMatch('tiebreak');
+    for (let o = 0; o < 3; o++) applyBattedOutcome(m2, 'OUT');
+    expect(m2.half).toBe('bottom');
+    expect(m2.bases.every((b) => b !== null)).toBe(true);
+    applyBattedOutcome(m2, '1B');
+    expect(m2.home.totalRuns).toBe(1);
+    expect(m2.isGameOver).toBe(true);
+    expect(m2.winner).toBe('home');
+  });
 });

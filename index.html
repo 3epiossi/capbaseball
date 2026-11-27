@@ -343,7 +343,6 @@
         <div id="menu-online-timer" class="menu-online-timer" hidden aria-live="polite"></div>
         <button type="button" class="act-btn primary" id="btn-menu-back" data-i18n="btnBack" autofocus>BACK</button>
         <div class="menu-bat-row" id="menu-bat-row" hidden>
-          <button type="button" class="act-btn bat-opt" id="btn-hand" title="Batter handedness">LHB</button>
           <button type="button" class="act-btn bat-opt" id="btn-swing-type" aria-pressed="false" title="Swing power mode">NORMAL</button>
         </div>
         <div class="menu-util-row">
@@ -357,6 +356,23 @@
         <button type="button" class="act-btn danger-btn" id="btn-resign" data-i18n="btnForfeit" hidden>FORFEIT</button>
       </div>
     </dialog>
+    <dialog id="online-mode-dialog" closedby="any" aria-labelledby="online-mode-title">
+      <div class="dlg-head">
+        <h2 id="online-mode-title" data-i18n="dlgOnlineModeTitle">ONLINE MATCH</h2>
+        <form method="dialog"><button class="dlg-close" value="close" aria-label="Close">✕</button></form>
+      </div>
+      <div class="dlg-body online-mode-grid">
+        <button type="button" class="mode-btn primary online-mode-btn" data-online-mode="quick3" autofocus>
+          <strong data-i18n="onlineModeQuick3Title">3-INNING MATCH</strong>
+          <span class="online-mode-sub" data-i18n="onlineModeQuick3Sub">Standard 3-inning regulation game</span>
+        </button>
+        <button type="button" class="mode-btn online-mode-btn" data-online-mode="tiebreak">
+          <strong data-i18n="onlineModeTiebreakTitle">TIEBREAK START</strong>
+          <span class="online-mode-sub" data-i18n="onlineModeTiebreakSub">Start Inn 1, 0 outs, bases loaded</span>
+        </button>
+      </div>
+    </dialog>
+
     <dialog id="cpu-dialog" closedby="any" aria-labelledby="cpu-title">
       <div class="dlg-head">
         <h2 id="cpu-title" data-i18n="dlgCpuTitle">CPU PLAY</h2>
@@ -364,6 +380,7 @@
       </div>
       <div class="dlg-body cpu-grid">
         <button type="button" class="mode-btn primary" data-mode="quick3" data-i18n="modeQuick3">3-INNING MATCH</button>
+        <button type="button" class="mode-btn" data-mode="tiebreak" data-i18n="modeTiebreak">TIEBREAK START</button>
         <button type="button" class="mode-btn" data-mode="practice_bat" data-i18n="modePracticeBat">BATTING PRACTICE</button>
         <button type="button" class="mode-btn" data-mode="practice_pitch" data-i18n="modePracticePitch">PITCHING PRACTICE</button>
       </div>
@@ -379,11 +396,21 @@
           <span id="friend-status-msg" class="online-status">READY</span>
         </div>
         <div class="friend-create">
-          <label class="friend-opt-row">
-            <input type="checkbox" id="friend-mercy-rule" checked />
-            <span data-i18n="friendMercyRule">COLD GAME (10+ DIFF FROM INN 2)</span>
-          </label>
           <button type="button" class="act-btn primary" id="btn-room-create" data-i18n="btnCreateRoom" autofocus>CREATE ROOM</button>
+          <div id="friend-create-options" class="friend-create-options" hidden>
+            <div class="mode-switch friend-mode-switch" id="friend-mode-switch" role="group" aria-label="Friend room mode">
+              <button type="button" class="mode-switch-btn active" data-friend-mode="quick3" aria-pressed="true" data-i18n="modeTagQuick3">3-INNING</button>
+              <button type="button" class="mode-switch-btn" data-friend-mode="tiebreak" aria-pressed="false" data-i18n="modeTagTiebreak">TIEBREAK</button>
+            </div>
+            <label class="friend-opt-row">
+              <input type="checkbox" id="friend-mercy-rule" checked />
+              <span data-i18n="friendMercyRule">COLD GAME (10+ DIFF FROM INN 2)</span>
+            </label>
+            <div class="friend-create-actions">
+              <button type="button" class="act-btn" id="btn-room-create-back" data-i18n="btnCancel">CANCEL</button>
+              <button type="button" class="act-btn primary" id="btn-room-create-confirm" data-i18n="btnCreateRoomConfirm">CONFIRM CREATE</button>
+            </div>
+          </div>
           <div id="room-created-box" class="room-created-box" hidden>
             <div class="room-code-big" id="room-code-display">----</div>
             <div class="online-actions">

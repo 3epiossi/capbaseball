@@ -2,11 +2,13 @@ import type { PitchId } from '../physics/pitches';
 import type { AbsOutcomeKind, MatchState } from '../rules/match';
 import {
   decodeServerMsg,
+  encodeOnlineMode,
   encodePitchId,
   encodeSpringZone,
   round2,
   round3,
   type CompactMatchDecodeContext,
+  type OnlineGameMode,
   type ServerLoadStatus,
   type SpringZoneWire,
 } from './protocol';
@@ -70,7 +72,7 @@ function collectCompactDeviceProfile(): Record<string, unknown> {
   return { dv, os, br, in: inp, or, pw, lc, ...(nr ? { nr: 1 } : {}) };
 }
 
-export type OnlineMode = 'quick3' | 'official6';
+export type OnlineMode = OnlineGameMode;
 export type OnlineSide = 'home' | 'away';
 export type RoomKind = 'live' | 'friend';
 export type ClientPageActivity =
@@ -667,16 +669,16 @@ export class OnlineClient {
     this.sendRaw(payload);
   }
 
-  queue(mode: OnlineMode, name: string): void {
-    this.sendRaw({ t: 'q', m: mode === 'official6' ? 1 : 0, n: name });
+  queue(mode: OnlineMode = 'quick3', name = ''): void {
+    this.sendRaw({ t: 'q', m: encodeOnlineMode(mode), n: name });
   }
 
   unqueue(): void {
     this.sendRaw({ t: 'uq' });
   }
 
-  createRoom(mode: OnlineMode, name: string, mercyRule = true): void {
-    this.sendRaw({ t: 'cr', m: mode === 'official6' ? 1 : 0, n: name, mr: mercyRule ? 1 : 0 });
+  createRoom(mode: OnlineMode = 'quick3', name = '', mercyRule = true): void {
+    this.sendRaw({ t: 'cr', m: encodeOnlineMode(mode), n: name, mr: mercyRule ? 1 : 0 });
   }
 
   joinRoom(code: string, name: string): void {
@@ -780,8 +782,9 @@ export class OnlineClient {
     this.sendRaw({ t: 'mp', p: paused ? 1 : 0 });
   }
 
-  joinStandby(mode: OnlineMode, priority = false): void {
-    this.sendRaw(priority ? { t: 'sj', m: mode === 'official6' ? 1 : 0, p: 1 } : { t: 'sj', m: mode === 'official6' ? 1 : 0 });
+  joinStandby(mode: OnlineMode = 'quick3', priority = false): void {
+    const m = encodeOnlineMode(mode);
+    this.sendRaw(priority ? { t: 'sj', m, p: 1 } : { t: 'sj', m });
   }
 
   leaveStandby(): void {

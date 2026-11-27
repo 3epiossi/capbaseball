@@ -55,6 +55,7 @@
 
 - **`isUnstable`**：當 `!connected || netQuality === 'poor'` 時為 `true`。
 - **`isServerBusy`**：當從伺服器 `welcome`、`stats` 或 `error` 訊息收到的 `serverLoad === 'red'` 時為 `true`（`yellow` 預警等級不再阻擋線上配對或標示 `BUSY`）。
+- **雙模式編解碼（`OnlineGameMode`）**：`protocol.ts` 支援 `quick3`（`0`）、`tiebreak`（`1`）與 `official6`（`2`）於精簡 v2 封包中無損傳遞，同步用於配對佇列、好友房與觀戰列表。
 
 ---
 

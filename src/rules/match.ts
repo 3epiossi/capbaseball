@@ -12,16 +12,32 @@ import {
 export type GameMode =
   | 'official6'
   | 'quick3'
+  | 'tiebreak'
   | 'practice_bat'
   | 'practice_pitch'
   | 'hotseat2p';
 
 export type Position = 'P' | 'C' | 'LF' | 'RF' | 'DH';
+export type PlayerAvatarId = 'skywalker' | 'nastyboy';
+export type BatterHandedness = 'left' | 'right';
 
 export interface PlayerSlot {
   id: string;
   name: string;
   position: Position;
+  number?: number;
+  handedness?: BatterHandedness;
+  avatar?: PlayerAvatarId;
+}
+
+export function getSlotAvatar(slot: PlayerSlot): PlayerAvatarId {
+  if (slot.avatar) return slot.avatar;
+  return slot.position === 'P' || slot.position === 'DH' ? 'skywalker' : 'nastyboy';
+}
+
+export function getSlotHandedness(slot: PlayerSlot): BatterHandedness {
+  if (slot.handedness) return slot.handedness;
+  return getSlotAvatar(slot) === 'skywalker' ? 'right' : 'left';
 }
 
 export interface TeamState {
@@ -138,14 +154,23 @@ export interface MatchState {
   derby: DerbyState;
 }
 
-const DEFAULT_POSITIONS: Position[] = ['P', 'C', 'LF', 'RF', 'DH'];
+// Official 5-player order: 1/3/5 = #99 NastYboY (LF, C, RF, LHB), 2/4 = #18 Skywalker (P, DH, RHB)
+const DEFAULT_POSITIONS: Position[] = ['LF', 'P', 'C', 'DH', 'RF'];
 
 function makeDefaultLineup(prefix: string): PlayerSlot[] {
-  return DEFAULT_POSITIONS.map((pos, idx) => ({
-    id: `${prefix}-${idx + 1}`,
-    name: `${prefix.toUpperCase()} #${idx + 1} (${pos})`,
-    position: pos,
-  }));
+  return DEFAULT_POSITIONS.map((pos, idx) => {
+    const isSkywalker = pos === 'P' || pos === 'DH';
+    const number = isSkywalker ? 18 : 99;
+    const playerLabel = isSkywalker ? '#18 Skywalker' : '#99 NastYboY';
+    return {
+      id: `${prefix}-${idx + 1}`,
+      name: `${playerLabel} (${pos})`,
+      position: pos,
+      number,
+      handedness: isSkywalker ? 'right' : 'left',
+      avatar: isSkywalker ? 'skywalker' : 'nastyboy',
+    };
+  });
 }
 
 function makeTeam(name: string, prefix: string, lineup?: PlayerSlot[]): TeamState {
@@ -173,8 +198,8 @@ export function createMatch(
     mercyRule?: boolean;
   },
 ): MatchState {
-  const regulationInnings = mode === 'quick3' ? 3 : 6;
-  return {
+  const regulationInnings = mode === 'quick3' ? 3 : mode === 'tiebreak' ? 1 : 6;
+  const state: MatchState = {
     mode,
     regulationInnings,
     inning: 1,
@@ -211,6 +236,23 @@ export function createMatch(
       homeHR: 0,
     },
   };
+  if (mode === 'tiebreak') {
+    populateTiebreakBases(state);
+    state.lastEvent = 'Inning 1 (top): Tie-breaker 0 outs, bases loaded';
+  }
+  return state;
+}
+
+function populateTiebreakBases(state: MatchState): void {
+  const team = getBattingTeam(state);
+  const len = team.lineup.length;
+  const cur = team.batterIndex % len;
+  state.outs = 0;
+  state.bases = [
+    team.lineup[(cur - 1 + len) % len].id,
+    team.lineup[(cur - 2 + len) % len].id,
+    team.lineup[(cur - 3 + len) % len].id,
+  ];
 }
 
 export function getBattingTeam(state: MatchState): TeamState {
@@ -403,18 +445,13 @@ function transitionHalfInning(state: MatchState): void {
     state.half = 'top';
   }
 
-  // Extra-inning tie-breaker: 0 outs, bases loaded — played continuously until a winner is decided!
-  if (state.inning > state.regulationInnings) {
-    const team = getBattingTeam(state);
-    const len = team.lineup.length;
-    const cur = team.batterIndex % len;
-    state.outs = 0;
-    state.bases = [
-      team.lineup[(cur - 1 + len) % len].id,
-      team.lineup[(cur - 2 + len) % len].id,
-      team.lineup[(cur - 3 + len) % len].id,
-    ];
-    state.lastEvent = `Extra inning ${state.inning} (${state.half}): Tie-breaker 0 outs, bases loaded`;
+  // Tie-breaker start (every half-inning in tiebreak mode, or extra innings in standard modes): 0 outs, bases loaded
+  if (state.mode === 'tiebreak' || state.inning > state.regulationInnings) {
+    populateTiebreakBases(state);
+    state.lastEvent =
+      state.inning > state.regulationInnings
+        ? `Extra inning ${state.inning} (${state.half}): Tie-breaker 0 outs, bases loaded`
+        : `Inning ${state.inning} (${state.half}): Tie-breaker 0 outs, bases loaded`;
   }
 }
 

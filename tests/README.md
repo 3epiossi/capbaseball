@@ -60,4 +60,4 @@
 ## 與其他模組的相依關係
 
 - **測試目標模組**：直接匯入並測試 `src/physics/*`、`src/rules/*`、`src/ai/cpu.ts`、`src/net/protocol.ts` 與 `server/index.ts`。
-- **被 `scripts/deploy.sh` 呼叫**：部署腳本在建置與上傳遠端前會先執行 `npm test`，確保全部 52 項測試通過後才進行打包與換版。
+- **被 `scripts/deploy.sh` 呼叫**：部署腳本在建置與上傳遠端前會先執行 `npm test`，確保全部 67 項測試通過後才進行打包與換版（涵蓋 `quick3` vs `tiebreak` 佇列隔離、突破僵局規則與停球撿球／飛行物理測試）。

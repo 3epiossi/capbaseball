@@ -6,6 +6,7 @@ import {
   CATCHER_HOME_POS,
   OUTFIELDER_BLOCK_MAX_CHASE,
   OUTFIELDER_BLOCK_REACTION_DELAY,
+  OUTFIELDER_BLOCK_SPRINT_SPEED,
   OUTFIELDER_SPRINT_SPEED,
   PITCHER_BLOCK_MAX_CHASE,
   PITCHER_BLOCK_REACTION_DELAY,
@@ -19,7 +20,7 @@ import {
   type PitchId,
   type PitchTrajectoryResult,
 } from '../physics/pitches';
-import { FENCE_DIST, isInStrikeZone, PLATE_WIDTH, STRIKE_ZONE_HI, STRIKE_ZONE_LO } from '../rules/field';
+import { FENCE_DIST, isFair, isInStrikeZone, PLATE_WIDTH, STRIKE_ZONE_HI, STRIKE_ZONE_LO } from '../rules/field';
 import type { FielderAnim } from '../render/sprites';
 
 export interface CpuPitchChoice {
@@ -35,13 +36,19 @@ function randRange(lo: number, hi: number): number {
   return lo + Math.random() * (hi - lo);
 }
 
+const THREE_BALL_CONTROLLABLE_PITCHES: readonly PitchId[] = PITCH_IDS.filter(
+  (id) => id !== 'knuckle' && id !== 'fork',
+);
+
 export function chooseCpuPitch(
   difficulty: number,
   balls: number,
   strikes: number,
 ): CpuPitchChoice {
   const diff = Math.max(1, Math.min(5, difficulty));
-  const pitchId = PITCH_IDS[Math.floor(Math.random() * PITCH_IDS.length)];
+  const forceStrike = balls >= 3;
+  const pool = forceStrike && THREE_BALL_CONTROLLABLE_PITCHES.length > 0 ? THREE_BALL_CONTROLLABLE_PITCHES : PITCH_IDS;
+  const pitchId = pool[Math.floor(Math.random() * pool.length)];
   const spec = PITCH_SPECS[pitchId];
 
   const [minS, maxS] = spec.speedRangeKmh;
@@ -50,22 +57,33 @@ export function chooseCpuPitch(
     Math.max(minS, Math.min(maxS, minS + (maxS - minS) * randRange(speedBias - 0.25, speedBias + 0.15))),
   );
 
-  // Aim corners/edges when ahead in count, more in zone when behind
-  const throwStrikeBias = balls >= 2 ? 0.85 : strikes >= 2 ? 0.52 : 0.72;
   const hw = PLATE_WIDTH * 0.5;
-  const targetX =
-    Math.random() < throwStrikeBias
-      ? randRange(-hw * 0.85, hw * 0.85)
-      : (Math.random() < 0.5 ? -1 : 1) * randRange(hw * 0.95, hw * 1.45);
-  const targetY =
-    Math.random() < throwStrikeBias
-      ? randRange(STRIKE_ZONE_LO + 0.05, STRIKE_ZONE_HI - 0.05)
-      : Math.random() < 0.5
-        ? randRange(STRIKE_ZONE_LO - 0.16, STRIKE_ZONE_LO)
-        : randRange(STRIKE_ZONE_HI, STRIKE_ZONE_HI + 0.16);
+  let targetX: number;
+  let targetY: number;
+  let maxScatter: number;
 
-  // Scatter shrinks with difficulty
-  const maxScatter = (6 - diff) * 0.028;
+  if (forceStrike) {
+    // 3-ball count: force aiming squarely inside the safe inner strike zone with tight scatter
+    targetX = randRange(-hw * 0.58, hw * 0.58);
+    targetY = randRange(STRIKE_ZONE_LO + 0.10, STRIKE_ZONE_HI - 0.10);
+    maxScatter = Math.min(0.012, (6 - diff) * 0.0024);
+  } else {
+    // Aim corners/edges when ahead in count, more in zone when behind
+    const throwStrikeBias = balls >= 2 ? 0.85 : strikes >= 2 ? 0.52 : 0.72;
+    targetX =
+      Math.random() < throwStrikeBias
+        ? randRange(-hw * 0.85, hw * 0.85)
+        : (Math.random() < 0.5 ? -1 : 1) * randRange(hw * 0.95, hw * 1.45);
+    targetY =
+      Math.random() < throwStrikeBias
+        ? randRange(STRIKE_ZONE_LO + 0.05, STRIKE_ZONE_HI - 0.05)
+        : Math.random() < 0.5
+          ? randRange(STRIKE_ZONE_LO - 0.16, STRIKE_ZONE_LO)
+          : randRange(STRIKE_ZONE_HI, STRIKE_ZONE_HI + 0.16);
+    // Scatter shrinks with difficulty
+    maxScatter = (6 - diff) * 0.028;
+  }
+
   return {
     pitchId,
     speedKmh,
@@ -230,6 +248,11 @@ export interface FielderInterceptionTarget {
   isBlock: boolean;
 }
 
+function defaultIdleFlipX(posX: number): boolean {
+  // Base fielder sprites face right (+X): fielders on the right side (RF) mirror left to face home plate!
+  return posX > 0.15;
+}
+
 export function createOutfielders(): [OutfielderActor, OutfielderActor] {
   return [
     {
@@ -247,7 +270,7 @@ export function createOutfielders(): [OutfielderActor, OutfielderActor] {
       pos: [4.2, 0, -9.8],
       anim: 'idle',
       animTime: 0,
-      flipX: false,
+      flipX: true,
       diveTimer: 0,
     },
   ];
@@ -284,7 +307,7 @@ export function resetOutfielders(fielders: OutfielderActor[]): void {
     f.pos[2] = f.homePos[2];
     f.anim = 'idle';
     f.animTime = 0;
-    f.flipX = false;
+    f.flipX = defaultIdleFlipX(f.homePos[0]);
     f.diveTimer = 0;
   }
 }
@@ -311,12 +334,35 @@ export function updateOutfielders(
   dt: number,
   capPos: FieldV3 | null,
   landingTarget: FieldV3 | null,
-  _airborne: boolean,
+  airborne: boolean,
   alreadyCaught: boolean,
   flightTimeSec = 1.0,
   interception: FielderInterceptionTarget | null = null,
   finalTarget: FieldV3 | null = null,
 ): boolean {
+  let didPickup = false;
+  let retrieverId: FielderId | null = null;
+  let retrieverGoal: [number, number] | null = null;
+  if (capPos && landingTarget && !alreadyCaught && !interception) {
+    const rawTarget = finalTarget ?? landingTarget;
+    const isOverFenceHr =
+      isFair(rawTarget[0], rawTarget[2]) &&
+      Math.hypot(rawTarget[0], rawTarget[2]) > FENCE_DIST;
+    if (!isOverFenceHr && fielders.length > 0) {
+      const gx = Math.max(-16, Math.min(16, rawTarget[0]));
+      const gz = Math.max(-14.5, Math.min(3.8, rawTarget[2]));
+      retrieverGoal = [gx, gz];
+      let bestDist = Infinity;
+      for (const cand of fielders) {
+        const dist = Math.hypot(gx - cand.homePos[0], gz - cand.homePos[2]);
+        if (dist < bestDist) {
+          bestDist = dist;
+          retrieverId = cand.id;
+        }
+      }
+    }
+  }
+
   for (const f of fielders) {
     f.animTime += dt;
     if (f.diveTimer > 0) {
@@ -335,11 +381,12 @@ export function updateOutfielders(
         f.pos[0] = cx;
         f.pos[2] = cz;
         f.anim = 'run';
-        f.flipX = dx < 0;
+        f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
       } else {
         f.pos[0] = f.homePos[0];
         f.pos[2] = f.homePos[2];
         f.anim = 'idle';
+        f.flipX = defaultIdleFlipX(f.homePos[0]);
       }
       continue;
     }
@@ -375,11 +422,12 @@ export function updateOutfielders(
         f.pos[0] += (dx / d) * step;
         f.pos[2] += (dz / d) * step;
         f.anim = 'run';
-        f.flipX = dx < -0.02;
+        f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
       } else {
         f.pos[0] = tx;
         f.pos[2] = tz;
         f.anim = 'idle';
+        f.flipX = Math.abs(capPos[0] - f.pos[0]) > 0.12 ? capPos[0] < f.pos[0] : defaultIdleFlipX(f.pos[0]);
       }
       continue;
     }
@@ -396,6 +444,47 @@ export function updateOutfielders(
           : OUTFIELDER_BLOCK_REACTION_DELAY;
     if (flightTimeSec < reactDelay) {
       f.anim = 'idle';
+      continue;
+    }
+
+    // Designated retriever for un-intercepted non-HR balls (foul balls, slow dribblers, dead grounders):
+    // bypasses isMySide and maxChase caps so the nearest defender sprints all the way to pick up the cap.
+    if (retrieverId === f.id && retrieverGoal !== null) {
+      const [tx, tz] = retrieverGoal;
+      const speedMps =
+        f.id === 'P'
+          ? PITCHER_BLOCK_SPRINT_SPEED
+          : f.id === 'C'
+            ? CATCHER_BLOCK_SPRINT_SPEED
+            : OUTFIELDER_BLOCK_SPRINT_SPEED;
+      const dx = tx - f.pos[0];
+      const dz = tz - f.pos[2];
+      const d = Math.hypot(dx, dz);
+      const distToCap = Math.hypot(capPos[0] - f.pos[0], capPos[2] - f.pos[2]);
+
+      if (distToCap <= 0.48 && (!airborne || capPos[1] <= 0.42)) {
+        if (f.anim !== 'catch_ground') {
+          f.anim = 'catch_ground';
+          f.animTime = 0;
+          f.diveTimer = 0.72;
+          f.flipX = Math.abs(capPos[0] - f.pos[0]) > 0.06 ? capPos[0] < f.pos[0] : defaultIdleFlipX(f.pos[0]);
+          didPickup = true;
+        }
+        continue;
+      }
+
+      if (d > 0.08) {
+        const step = Math.min(d, speedMps * dt);
+        f.pos[0] += (dx / d) * step;
+        f.pos[2] += (dz / d) * step;
+        f.anim = 'run';
+        f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
+      } else {
+        f.pos[0] = tx;
+        f.pos[2] = tz;
+        f.anim = 'idle';
+        f.flipX = Math.abs(capPos[0] - f.pos[0]) > 0.12 ? capPos[0] < f.pos[0] : defaultIdleFlipX(f.pos[0]);
+      }
       continue;
     }
 
@@ -419,6 +508,7 @@ export function updateOutfielders(
       isMySide = Math.abs(pursuitTarget[0]) <= 3.2 && pursuitTarget[2] <= -3.0 && pursuitTarget[2] >= -11.4;
       if (!isMySide) {
         f.anim = 'idle';
+        f.flipX = Math.abs(capPos[0] - f.pos[0]) > 0.15 ? capPos[0] < f.pos[0] : false;
         continue;
       }
       rawTx = pursuitTarget[0];
@@ -460,13 +550,14 @@ export function updateOutfielders(
       f.pos[0] += (dx / d) * step;
       f.pos[2] += (dz / d) * step;
       f.anim = 'run';
-      f.flipX = dx < -0.02;
+      f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
     } else {
       f.pos[0] = tx;
       f.pos[2] = tz;
       f.anim = 'idle';
+      f.flipX = Math.abs(capPos[0] - f.pos[0]) > 0.12 ? capPos[0] < f.pos[0] : defaultIdleFlipX(f.pos[0]);
     }
   }
 
-  return false;
+  return didPickup;
 }

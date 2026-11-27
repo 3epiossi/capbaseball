@@ -58,6 +58,7 @@ export class GameCamera {
   };
 
   private followTarget: FieldV3 | null = null;
+  private wildPitchTarget: FieldV3 | null = null;
   private shakeTime = 0;
   private shakeDuration = 0;
   private shakeIntensity = 0;
@@ -94,9 +95,9 @@ export class GameCamera {
     return this.targetCenterYRatio;
   }
 
-  /** True once followTarget is cleared and the camera has settled back near home plate. */
+  /** True once followTarget and wildPitchTarget are cleared and the camera has settled back near home plate. */
   isNearRest(): boolean {
-    if (this.followTarget) return false;
+    if (this.followTarget || this.wildPitchTarget) return false;
     const targetPos = this.isPortrait ? PORTRAIT_POS : BASE_POS;
     const targetLook = this.isPortrait ? PORTRAIT_LOOK : BASE_LOOK;
     const posErr = Math.hypot(
@@ -120,8 +121,14 @@ export class GameCamera {
     this.followTarget = target;
   }
 
+  /** Smoothly pull camera backward & higher behind home plate to reveal wild pitch / passed ball + Catcher dive! */
+  setWildPitchTarget(target: FieldV3 | null): void {
+    this.wildPitchTarget = target;
+  }
+
   resetImmediate(): void {
     this.followTarget = null;
+    this.wildPitchTarget = null;
     this.current = {
       pos: [...(this.isPortrait ? PORTRAIT_POS : BASE_POS)],
       look: [...(this.isPortrait ? PORTRAIT_LOOK : BASE_LOOK)],
@@ -159,9 +166,25 @@ export class GameCamera {
         Math.min(-3.5, capZ - 1.8),
       ];
       targetFov = this.isPortrait ? 54 : 44;
+    } else if (this.wildPitchTarget) {
+      const [wx, wy, _wz] = this.wildPitchTarget;
+      // Pull back & elevate behind the official pass line (z = 2.334m) so Home Plate, Catcher dive,
+      // pass line, and cap rolling past z = 2.334m (to z ≈ 3.0..3.8m) are all cleanly framed!
+      targetPos = [
+        Math.max(-1.35, Math.min(1.35, wx * 0.35)),
+        this.isPortrait ? 2.40 : 2.15,
+        this.isPortrait ? 6.30 : 5.75,
+      ];
+      targetLook = [
+        Math.max(-1.6, Math.min(1.6, wx * 0.45)),
+        Math.max(0.32, Math.min(0.85, wy * 0.5)),
+        1.65,
+      ];
+      targetFov = this.isPortrait ? 54 : 44;
     }
 
-    const smooth = 1 - Math.exp(-dt * (this.followTarget ? 5.5 : 4.2));
+    const activeTracking = Boolean(this.followTarget || this.wildPitchTarget);
+    const smooth = 1 - Math.exp(-dt * (this.wildPitchTarget ? 6.2 : activeTracking ? 5.5 : 4.2));
     for (let i = 0; i < 3; i++) {
       this.current.pos[i] = lerp(this.current.pos[i], targetPos[i], smooth);
       this.current.look[i] = lerp(this.current.look[i], targetLook[i], smooth);

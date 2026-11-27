@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cap Baseball — 場上情境與動作實驗室 (Field & Action Lab)</title>
+    <link rel="stylesheet" href="./src/fieldLab.css" />
+  </head>
+  <body>
+    <div class="lab-shell">
+      <aside class="control-dock" id="control-dock">
+        <div class="dock-header">
+          <div>
+            <span class="lab-badge">FIELD &amp; ACTION LAB</span>
+            <h1>場上情境與動作實驗室</h1>
+          </div>
+          <div class="header-links">
+            <a class="btn-link" href="./pitch-lab.html">球種 Lab</a>
+            <a class="btn-link" href="./">← 遊戲</a>
+          </div>
+        </div>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>守備情境模擬（含前搖＋鏡頭停留＋特效）</h2>
+          </div>
+          <div class="scenario-grid">
+            <button type="button" class="sc-btn" data-sc="lf_fly">LF 高飛接殺</button>
+            <button type="button" class="sc-btn" data-sc="rf_fly">RF 高飛接殺</button>
+            <button type="button" class="sc-btn" data-sc="lf_ground">LF 滾地擋球</button>
+            <button type="button" class="sc-btn" data-sc="rf_ground">RF 滾地擋球</button>
+            <button type="button" class="sc-btn" data-sc="p_fly">P 投手飛球</button>
+            <button type="button" class="sc-btn" data-sc="p_ground">P 投手滾地</button>
+            <button type="button" class="sc-btn" data-sc="c_popup">C 捕手小飛球</button>
+            <button type="button" class="sc-btn" data-sc="rf_bobble">外野失誤漏球</button>
+            <button type="button" class="sc-btn accent-sky" data-sc="foul_pickup">界外／滾地停球撿球</button>
+          </div>
+        </section>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>暴投 / 捕逸 / 不死三振（鏡頭拉遠＋捕手撲擋）</h2>
+          </div>
+          <div class="scenario-grid">
+            <button type="button" class="sc-btn accent-warn" data-sc="wp_right">暴投往右撲擋</button>
+            <button type="button" class="sc-btn accent-warn" data-sc="wp_left">暴投往左撲擋</button>
+            <button type="button" class="sc-btn accent-warn" data-sc="pb_d3s">捕逸不死三振</button>
+            <button type="button" class="sc-btn" data-sc="pitch_only">投手投球動作</button>
+          </div>
+        </section>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>打擊姿勢與揮棒檢視</h2>
+          </div>
+          <div class="scenario-grid">
+            <button type="button" class="sc-btn accent-sky" data-sc="bat_99_swing">#99 左打揮棒</button>
+            <button type="button" class="sc-btn accent-sky" data-sc="bat_18_swing">#18 右打揮棒</button>
+            <button type="button" class="sc-btn" data-sc="bat_99_ready">#99 左打待機</button>
+            <button type="button" class="sc-btn" data-sc="bat_18_ready">#18 右打待機</button>
+          </div>
+        </section>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>原地動作＆比例對照（檢查放大／殘色）</h2>
+          </div>
+          <div class="scenario-grid">
+            <button type="button" class="sc-btn pose-btn active" data-pose="auto">正常模擬</button>
+            <button type="button" class="sc-btn pose-btn" data-pose="idle">全員待機</button>
+            <button type="button" class="sc-btn pose-btn" data-pose="run">全員跑動</button>
+            <button type="button" class="sc-btn pose-btn" data-pose="catch_fly">全員接高飛</button>
+            <button type="button" class="sc-btn pose-btn" data-pose="catch_ground">全員接滾地</button>
+            <button type="button" class="sc-btn pose-btn" data-pose="catch_wp">捕手撲地</button>
+          </div>
+        </section>
+
+        <section class="dock-section">
+          <div class="sec-head">
+            <h2>球衣配色 / 鏡頭 / 慢動作控制</h2>
+          </div>
+          <div class="toggle-row">
+            <button type="button" class="toggle-btn active" id="btn-team-yellow">黃隊守備 / 黑隊打擊</button>
+            <button type="button" class="toggle-btn" id="btn-team-black">黑隊守備 / 黃隊打擊</button>
+          </div>
+          <div class="cam-row">
+            <button type="button" class="cam-btn active" data-cam="auto">自動運鏡</button>
+            <button type="button" class="cam-btn" data-cam="home">本壘</button>
+            <button type="button" class="cam-btn" data-cam="wild">暴投拉遠</button>
+            <button type="button" class="cam-btn" data-cam="outfield">外野全景</button>
+          </div>
+          <div class="ctrl-group">
+            <label for="in-speed">
+              <span>播放倍速</span>
+              <strong id="val-speed" class="mono">1.00x</strong>
+            </label>
+            <input id="in-speed" type="range" min="0.10" max="1.00" step="0.05" value="1.00" />
+            <div class="speed-presets">
+              <button type="button" class="btn-tiny sp-btn" data-speed="0.2">0.2x</button>
+              <button type="button" class="btn-tiny sp-btn" data-speed="0.4">0.4x</button>
+              <button type="button" class="btn-tiny sp-btn" data-speed="0.7">0.7x</button>
+              <button type="button" class="btn-tiny sp-btn active" data-speed="1.0">1.0x</button>
+            </div>
+          </div>
+          <div class="playback-row">
+            <button type="button" id="btn-pause" class="btn-primary">暫停 (Space)</button>
+            <button type="button" id="btn-step" class="btn-ghost">+1 幀 (→)</button>
+            <button type="button" id="btn-replay" class="btn-ghost">重播 (R)</button>
+          </div>
+        </section>
+
+        <section class="dock-section telemetry-box">
+          <div class="sec-head">
+            <h2>即時狀態監測</h2>
+          </div>
+          <pre id="telemetry-out" class="mono">載入精靈圖中...</pre>
+        </section>
+      </aside>
+
+      <main class="stage-wrap">
+        <canvas id="field-canvas"></canvas>
+        <div class="stage-pill mono" id="stage-pill">READY</div>
+      </main>
+    </div>
+
+    <script type="module" src="./src/fieldLab.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "frames": 16,
+  "w": 148,
+  "h": 114,
+  "baseline_y": 112,
+  "anchor_x": 74,
+  "natural_handedness": "right",
+  "anims": {
+    "ready": [
+      0,
+      1,
+      2,
+      3,
+      2,
+      1
+    ],
+    "load": [
+      4,
+      5
+    ],
+    "swing_early": [
+      8
+    ],
+    "swing_contact": [
+      8,
+      9
+    ],
+    "follow_through": [
+      10,
+      11,
+      12,
+      13,
+      14
+    ]
+  }
+}

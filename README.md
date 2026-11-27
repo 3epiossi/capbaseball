@@ -5,7 +5,7 @@
 - **Fork 來源（Upstream）**：https://github.com/koshien2015/cap-flight-sim （感謝原作者開源之 6-DOF 瓶蓋飛翔物理模擬核心）
 - **正式上線網址**：https://3epiossi.com/capbaseball
 - **3D 投球實驗室**：https://3epiossi.com/capbaseball/pitch-lab
-- **目前里程碑**：`v2.7.3`（語意化三段式版本號）
+- **目前里程碑**：`v2.8.0`（語意化三段式版本號）
 - **支援語系**：自動偵測繁體中文（`zh-TW`）、日本語（`ja`）與英文（`en`）
 
 ---
@@ -19,7 +19,7 @@ npm install
 # 本機開發（Vite 前端）
 npm run dev
 
-# 執行完整型別檢查與單元／整合測試（3 檔 61 項測試）
+# 執行完整型別檢查與單元／整合測試（3 檔 67 項測試）
 npx tsc --noEmit && npm test
 
 # 建置正式產物（dist/ + dist-server/index.mjs）
@@ -299,3 +299,7 @@ PORT=8788 HOST=127.0.0.1 npm run server
   - **`pitches.jsonl` 每球新增 `seed`、`u`（彈簧蓄力值 0–1，選填）與 `version`**：[server/index.ts](server/index.ts) 的 `pitch_submit` 解析選填的 `u`，[src/net/protocol.ts](src/net/protocol.ts)、[src/net/client.ts](src/net/client.ts) 與 [src/main.ts](src/main.ts) 一併送出；舊客戶端不送 `u` 照常運作。有了種子與蓄力值，每一球都能離線重跑。
   - **新增 `queue.jsonl`**：記錄 `queue_enter`、`queue_leave`（含原因 `cancel`／`disconnect`／`matched`／`drain` 與等待毫秒數）與 `match_made`，用來分析隨機配對的等待時間（路徑由 `QUEUE_LOG` 指定，預設與逐球紀錄同資料夾，保留上限 50,000 筆或 5 MB）；[deploy/capbaseball.service](deploy/capbaseball.service) 補上 `QUEUE_LOG`。
   - 測試新增第 39、40 項，全部 **63/63** 通過。
+- **v2.8.0 突破僵局線上雙模式、實心白線捕逸線、角色精靈圖與守備特效打磨（2026-11-27）**：
+  - **線上對戰雙模式（`3 局制` vs `突破僵局`）與漸進式選單**：[index.html](index.html)、[src/styles.css](src/styles.css)、[src/i18n/index.ts](src/i18n/index.ts) 與 [src/main.ts](src/main.ts) 保持大廳 4 顆主按鈕，點擊「線上對戰」後彈出 `#online-mode-dialog` 選擇 `3 局制` 或 `突破僵局`，點擊「好友對戰」按下「建立房間」後才展開 `#friend-create-options`（`3 局制 | 突破僵局` 與扣倒制設定，加入房間無需選擇）；[src/rules/match.ts](src/rules/match.ts) 新增 `tiebreak` 模式（1 局制、第 1 局上 0 出局滿壘開局、延長續滿壘、下半局超前即再見勝）；[server/index.ts](server/index.ts) 與 [src/net/protocol.ts](src/net/protocol.ts) 分開獨立 `quick3` / `tiebreak` 配對佇列與 Standby 佇列，同步支援好友開房與即時觀戰顯示。
+  - **捕逸線實心白線與暴投／捕逸／不死三振演出**：[src/render/gymScene.ts](src/render/gymScene.ts) 於 `PASS_LINE_Z = 2.334m` 永久繪製實心白線；暴投／捕逸／不死三振時 [src/render/camera.ts](src/render/camera.ts) 將鏡頭拉退至捕逸線後方，[src/main.ts](src/main.ts) 修正貼地滾動阻尼確保瓶蓋確實彈跳滾越白線並觸發越線光環與揚塵；捕手 `#99` 換裝背面雙膝胸擋動作（鎖定 `flipX = false` 避免背號反轉）。
+  - **角色精靈圖、高飛接殺特效與場上情境實驗室**：[src/render/sprites.ts](src/render/sprites.ts) 新增 `#99`（固定左打、站位靠近好球帶）與 `#18`（固定右打）獨立精靈圖並移除手動左右打切換；[public/sprites/fx_fielding.atlas.json](public/sprites/fx_fielding.atlas.json) 修正毫秒單位讓白色接球爆裂光環正常播放並透過 `getFlyCatchHandPos()` 精準對齊舉高雙手座標；高飛接殺強制鎖定於空中收球絕不落地或彈地；移除投手接滾地後拉弓丟球格與右打者揮棒尾段突兀站正格；新增停球／界外球最近守備員衝刺撿球與 [field-lab.html](field-lab.html) 場上情境實驗室（測試擴充至 **67/67** 通過）。

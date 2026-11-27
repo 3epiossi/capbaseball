@@ -5,7 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { decodeServerMsg, type ServerLoadStatus } from '../src/net/protocol';
+import { decodeServerMsg, encodeServerMsgV2, type ServerLoadStatus } from '../src/net/protocol';
 import { solvePitchTrajectory } from '../src/physics/pitches';
 import { startServer } from '../server/index';
 
@@ -2344,5 +2344,84 @@ describe('Online Multiplayer Server Integration', () => {
       await s2.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('41. isolates quick3 vs tiebreak queues and supports tiebreak Friend Room + room_list + compact v2 round-trip', async () => {
+    const q3 = await connectClient(srv.port, 'Q3Player');
+    const tb1 = await connectClient(srv.port, 'TB1');
+    const tb2 = await connectClient(srv.port, 'TB2');
+    const host = await connectClient(srv.port, 'TBHost');
+    const guest = await connectClient(srv.port, 'TBGuest');
+    const watcher = await connectClient(srv.port, 'TBWatcher');
+    openClients.push(q3, tb1, tb2, host, guest, watcher);
+
+    // 1. quick3 player and tiebreak player must NOT match each other
+    q3.send({ type: 'queue', mode: 'quick3', name: 'Q3Player' });
+    const queuedQ3 = await q3.nextMsg((m) => m.type === 'queued');
+    expect(queuedQ3.mode).toBe('quick3');
+
+    tb1.send({ type: 'queue', mode: 'tiebreak', name: 'TB1' });
+    const queuedTb1 = await tb1.nextMsg((m) => m.type === 'queued');
+    expect(queuedTb1.mode).toBe('tiebreak');
+
+    // Brief pause to confirm q3 and tb1 did not prematurely match
+    await new Promise((r) => setTimeout(r, 80));
+    expect(q3.queue.some((m) => m.type === 'match_start')).toBe(false);
+    expect(tb1.queue.some((m) => m.type === 'match_start')).toBe(false);
+
+    // 2. Second tiebreak player (via compact v2 wire message) matches TB1 with tiebreak rules (0 outs, bases loaded)
+    tb2.send({ t: 'q', m: 2, n: 'TB2' });
+    const [start1, start2] = await Promise.all([
+      tb1.nextMsg((m) => m.type === 'match_start'),
+      tb2.nextMsg((m) => m.type === 'match_start'),
+    ]);
+    expect(start1.mode).toBe('tiebreak');
+    expect(start2.mode).toBe('tiebreak');
+    const m1 = start1.match as { mode: string; regulationInnings: number; outs: number; bases: Array<string | null> };
+    expect(m1.mode).toBe('tiebreak');
+    expect(m1.regulationInnings).toBe(1);
+    expect(m1.outs).toBe(0);
+    expect(m1.bases.every((b) => b !== null)).toBe(true);
+    expect(q3.queue.some((m) => m.type === 'match_start')).toBe(false);
+    q3.send({ type: 'unqueue' });
+    await q3.nextMsg((m) => m.type === 'unqueued');
+
+    // 3. Friend Room create with compact v2 mode: 2 ('tiebreak') starts bases loaded & reports 'tiebreak' in room_list
+    host.send({ t: 'cr', m: 2, n: 'TBHost', mr: 1 });
+    const created = await host.nextMsg((m) => m.type === 'room_created');
+    expect(created.mode).toBe('tiebreak');
+    const code = created.code as string;
+
+    guest.send({ type: 'join', code, name: 'TBGuest' });
+    const [hStart, gStart] = await Promise.all([
+      host.nextMsg((m) => m.type === 'match_start'),
+      guest.nextMsg((m) => m.type === 'match_start'),
+    ]);
+    expect(hStart.mode).toBe('tiebreak');
+    expect(gStart.mode).toBe('tiebreak');
+    const fm = hStart.match as { mode: string; regulationInnings: number; outs: number; bases: Array<string | null> };
+    expect(fm.mode).toBe('tiebreak');
+    expect(fm.regulationInnings).toBe(1);
+    expect(fm.outs).toBe(0);
+    expect(fm.bases.every((b) => b !== null)).toBe(true);
+
+    watcher.send({ type: 'list' });
+    const listMsg = await watcher.nextMsg((m) => m.type === 'room_list');
+    const rooms = listMsg.rooms as Array<{ code: string; mode: string; roomKind: string }>;
+    const friendRoom = rooms.find((r) => r.code === code);
+    expect(friendRoom).toBeDefined();
+    expect(friendRoom!.mode).toBe('tiebreak');
+    expect(friendRoom!.roomKind).toBe('friend');
+
+    // 4. Compact v2 server->client round-trip preserves mode: 'tiebreak' across match_start, spectate_sync, match_offer
+    const v2Start = decodeServerMsg(encodeServerMsgV2(hStart));
+    expect(v2Start.mode).toBe('tiebreak');
+    expect((v2Start.match as { mode: string; regulationInnings: number }).mode).toBe('tiebreak');
+    expect((v2Start.match as { regulationInnings: number }).regulationInnings).toBe(1);
+
+    const v2Offer = decodeServerMsg(
+      encodeServerMsgV2({ type: 'match_offer', offerId: 'abc', opponentName: 'TB1', mode: 'tiebreak', timeoutSec: 20 }),
+    );
+    expect(v2Offer.mode).toBe('tiebreak');
   });
 });

@@ -136,6 +136,123 @@ export interface DepthDrawItem {
   draw: () => void;
 }
 
+export interface PassLineState {
+  highlight: number;
+  crossed: boolean;
+  crossX?: number;
+}
+
+function drawPassLineOverlay(
+  ctx: CanvasRenderingContext2D,
+  cam: GameCamera,
+  width: number,
+  timeSec: number,
+  passLineState: PassLineState,
+): void {
+  const hl = Math.max(0, Math.min(1, passLineState.highlight));
+  if (hl <= 0 && !passLineState.crossed) return;
+
+  if (hl > 0) {
+    const pulse = 0.78 + 0.22 * Math.sin(timeSec * 10);
+    const glowAlpha = Math.min(0.45, hl * 0.34 * pulse);
+    drawLine3D(
+      ctx,
+      cam,
+      [-3.6, 0.003, PASS_LINE_Z],
+      [3.6, 0.003, PASS_LINE_Z],
+      `rgba(255, 255, 255, ${glowAlpha.toFixed(3)})`,
+      4.5,
+    );
+    drawLine3D(
+      ctx,
+      cam,
+      [-3.6, 0.004, PASS_LINE_Z],
+      [3.6, 0.004, PASS_LINE_Z],
+      '#ffffff',
+      2.4,
+    );
+
+    // Clean floor label projected on the gym floor beside the pass line
+    const lblProj = cam.project([0, 0.01, PASS_LINE_Z + 0.22]);
+    if (lblProj.depth > 0.25) {
+      const label = '捕逸線 PASS LINE';
+      ctx.save();
+      const fontSize = Math.max(8, Math.min(11, Math.round(lblProj.scale * 0.075)));
+      ctx.font = `700 ${fontSize}px monospace`;
+      const tw = ctx.measureText(label).width;
+      const padX = 5;
+      const boxW = tw + padX * 2;
+      const boxH = fontSize + 5;
+      const lx = Math.max(boxW * 0.5 + 4, Math.min(width - boxW * 0.5 - 4, Math.round(lblProj.sx)));
+      const ly = Math.round(lblProj.sy);
+      ctx.globalAlpha = Math.min(1, hl * 1.1);
+      ctx.fillStyle = 'rgba(18, 20, 24, 0.74)';
+      ctx.fillRect(Math.round(lx - boxW * 0.5), Math.round(ly - boxH * 0.5), Math.round(boxW), Math.round(boxH));
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(lx - boxW * 0.5) + 0.5, Math.round(ly - boxH * 0.5) + 0.5, Math.round(boxW) - 1, Math.round(boxH) - 1);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, lx, ly + 0.5);
+      ctx.restore();
+    }
+  }
+
+  if (passLineState.crossed) {
+    const cx = passLineState.crossX ?? 0;
+    const center = cam.project([cx, 0.02, PASS_LINE_Z]);
+    if (center.depth > 0.2 && center.visible) {
+      const ringPulse = (timeSec * 3.2) % 1;
+      const rOuter = 0.24 + ringPulse * 0.34;
+      const rInner = 0.14 + (1 - ringPulse) * 0.08;
+      const ringAlpha = Math.max(0.28, 1 - ringPulse * 0.65);
+
+      for (const [rad, col, lw] of [
+        [rOuter, `rgba(248, 113, 113, ${ringAlpha.toFixed(3)})`, 2.2],
+        [rInner, 'rgba(253, 224, 71, 0.95)', 1.8],
+      ] as const) {
+        ctx.save();
+        ctx.strokeStyle = col;
+        ctx.lineWidth = lw;
+        ctx.beginPath();
+        const segs = 16;
+        let started = false;
+        for (let i = 0; i <= segs; i++) {
+          const ang = (i / segs) * Math.PI * 2;
+          const p = cam.project([cx + Math.cos(ang) * rad, 0.02, PASS_LINE_Z + Math.sin(ang) * rad]);
+          if (p.depth <= 0.15) continue;
+          if (!started) {
+            ctx.moveTo(p.sx, p.sy);
+            started = true;
+          } else {
+            ctx.lineTo(p.sx, p.sy);
+          }
+        }
+        if (started) {
+          ctx.closePath();
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Crisp animated radial spark rays at the crossing point
+      ctx.save();
+      ctx.strokeStyle = 'rgba(254, 240, 138, 0.92)';
+      ctx.lineWidth = 1.6;
+      const rPx = Math.max(5, center.scale * (0.14 + ringPulse * 0.16));
+      for (let k = 0; k < 6; k++) {
+        const ang = (k / 6) * Math.PI * 2 + timeSec * 4.5;
+        ctx.beginPath();
+        ctx.moveTo(center.sx + Math.cos(ang) * rPx * 0.45, center.sy + Math.sin(ang) * rPx * 0.45);
+        ctx.lineTo(center.sx + Math.cos(ang) * rPx * 1.1, center.sy + Math.sin(ang) * rPx * 1.1);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+}
+
 let bgCacheCanvas: HTMLCanvasElement | null = null;
 let bgCacheCtx: CanvasRenderingContext2D | null = null;
 let bgCacheKey = '';
@@ -146,6 +263,7 @@ export function drawGymBackground(
   width: number,
   height: number,
   timeSec: number,
+  passLineState?: PassLineState,
 ): void {
   // Offscreen cache for static pixel stage (re-renders only on camera move, resize, or 4Hz light pulse)
   if (typeof document !== 'undefined') {
@@ -166,10 +284,16 @@ export function drawGymBackground(
         bgCacheKey = key;
       }
       ctx.drawImage(bgCacheCanvas, 0, 0);
+      if (passLineState) {
+        drawPassLineOverlay(ctx, cam, width, timeSec, passLineState);
+      }
       return;
     }
   }
   renderGymBackgroundDirect(ctx, cam, width, height, timeSec);
+  if (passLineState) {
+    drawPassLineOverlay(ctx, cam, width, timeSec, passLineState);
+  }
 }
 
 function renderGymBackgroundDirect(
@@ -207,14 +331,14 @@ function renderGymBackgroundDirect(
       [
         [x0, 0, -17.2],
         [x1, 0, -17.2],
-        [x1, 0, 3.2],
-        [x0, 0, 3.2],
+        [x1, 0, 4.8],
+        [x0, 0, 4.8],
       ],
       col,
     );
-    drawLine3D(ctx, cam, [x0, 0, -17.2], [x0, 0, 3.0], 'rgba(115, 68, 28, 0.22)', 1);
+    drawLine3D(ctx, cam, [x0, 0, -17.2], [x0, 0, 4.6], 'rgba(115, 68, 28, 0.22)', 1);
   }
-  for (let iz = -16; iz <= 2; iz += 2) {
+  for (let iz = -16; iz <= 4; iz += 2) {
     drawLine3D(ctx, cam, [-16, 0, iz], [16, 0, iz], 'rgba(120, 72, 30, 0.14)', 1);
   }
 
@@ -490,8 +614,8 @@ function renderGymBackgroundDirect(
   drawLine3D(ctx, cam, [0, 0, 0], [-fenceCorner, 0, -fenceCorner], '#ffffff', 2);
   drawLine3D(ctx, cam, [0, 0, 0], [fenceCorner, 0, -fenceCorner], '#ffffff', 2);
 
-  // Pass Line (捕逸線 at z = +2.334m)
-  drawLine3D(ctx, cam, [-3.2, 0, PASS_LINE_Z], [3.2, 0, PASS_LINE_Z], '#ffdf6b', 1.5);
+  // Pass Line (捕逸線 at z = +2.334m) — solid white tape matching foul lines & batter's box
+  drawLine3D(ctx, cam, [-3.6, 0.002, PASS_LINE_Z], [3.6, 0.002, PASS_LINE_Z], '#ffffff', 2);
 
   // Pitcher's Plate / Line (0.61m wide at z = -9.22)
   const hwMound = MOUND_WIDTH * 0.5;
@@ -636,9 +760,12 @@ export function drawGymScene(
   width: number,
   height: number,
   timeSec: number,
+  passLineState?: PassLineState,
 ): void {
-  drawGymBackground(ctx, cam, width, height, timeSec);
+  drawGymBackground(ctx, cam, width, height, timeSec, passLineState);
   const fenceItems = buildFenceDepthItems(ctx, cam);
   fenceItems.sort((a, b) => b.depth - a.depth);
   for (const it of fenceItems) it.draw();
 }
+
+export const renderGymScene = drawGymScene;
