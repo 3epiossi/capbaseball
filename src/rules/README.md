@@ -51,7 +51,7 @@
 - **延長突破僵局（滿壘無人出局，取消全壘打大賽）**：正規局數結束若仍平手，每一個延長半局均由 `transitionHalfInning` 自動設定為 **0 出局滿壘**（由當前打序前三位打者佔據一、二、三壘），持續進行直到分出勝負（不再於第 4 局後切換全壘打大賽）。
 - **扣倒制（Mercy Rule / Cold Game）與結束原因（`endReason`）**：自第 2 局起，只要半局結束（或下半局主隊領先）分差達 `10` 分以上且已啟用 `mercyRule`（預設開啟，好友房建房時可切換），比賽直接提前結束並標記 `mercyTriggered = true` 與 `endReason = 'mercy'`；線上對戰另區分 `disconnect`（對手斷線逾時）與 `resign`（對手棄權）。
 - **投球時鐘規則（`getPitchClockSeconds` / `applyPitchClockViolation`）**：壘上無人為 `15` 秒，壘上有跑者為 `20` 秒；超時判自動壞球（第 4 球四壞保送、支援滿壘再見保送）。
-- **1 局制模式（`tiebreak` / `populateTiebreakBases`）**：開局即為第 1 局上 0 出局滿壘，平手進入延長局亦延續 0 出局滿壘開局，1 下半局超前即再見勝利。
+- **1局制模式（`tiebreak` / `populateTiebreakBases`）**：開局即為第 1 局上 0 出局滿壘，平手進入延長局亦延續 0 出局滿壘開局，1 下半局超前即再見勝利。
 
 ---
 

@@ -833,7 +833,7 @@ export const MONITOR_JS = `(() => {
           ['online_queue', '線上配對排隊中', '#facc15'],
           ['friend_wait', '好友房等待加入', '#60a5fa'],
           ['spectating', '即時觀戰中', '#c084fc'],
-          ['cpu_match', 'CPU 三局對戰', '#4ade80'],
+          ['cpu_match', 'CPU 對戰', '#4ade80'],
           ['practice_bat', '打擊練習', '#34d399'],
           ['practice_pitch', '投球練習', '#2dd4bf'],
           ['pitch_lab', '3D 投球實驗室', '#f4c41c'],
