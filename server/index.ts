@@ -1055,6 +1055,7 @@ export function startServer(
         type: 'match_over',
         winner: oppSide,
         reason: 'disconnect_timeout',
+        disconnectCause: cause,
         match: room.match,
       });
     } else if (!room.players.away) {

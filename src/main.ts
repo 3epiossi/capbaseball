@@ -772,6 +772,25 @@ let onlineRoomCode: string | null = null;
 let onlineSpectatorCount = 0;
 let onlinePitchSeq = 1;
 let onlineTurnState: TurnState = 'awaiting_pitch';
+/** Why the losing side dropped, from match_over (server-classified); null when unknown. */
+let disconnectCause: string | null = null;
+
+function disconnectWinText(): string {
+  const base = t('labelDisconnectWin');
+  const cause =
+    disconnectCause === 'network_lost'
+      ? t('discCauseNetwork')
+      : disconnectCause === 'page_left'
+        ? t('discCausePageLeft')
+        : disconnectCause === 'client_closed'
+          ? t('discCauseClosed')
+          : disconnectCause === 'dead_pong'
+            ? t('discCauseDeadPong')
+            : disconnectCause && disconnectCause !== 'unknown'
+              ? t('discCauseOther')
+              : '';
+  return cause ? `${base}（${cause}）` : base;
+}
 let onlineWaitingQueue = false;
 let queueElapsedSec = 0;
 let visualInning = 1;
@@ -1036,8 +1055,10 @@ function enqueueWildPlayBanner(
   kind: 'uncaught_3rd' | 'wild_pitch' | 'passed_ball',
   batterName: string,
   customSub?: string,
+  pauseSec = 0.9, // let the catcher's block / miss play before the card (ABS replays pass 0)
 ): void {
   if (match.isGameOver) return;
+  if (pauseSec > 0) presentationQueue.push({ kind: 'brief_pause', remainingSec: pauseSec });
   if (kind === 'uncaught_3rd') {
     presentationQueue.push({
       kind: 'wild_play',
@@ -1096,7 +1117,7 @@ function enqueuePostAbsOutcome(opts: {
     if (match.isGameOver && !match.mercyTriggered) {
       walkOffSub = `${prevBatterName} · ${t('callUncaught3rd')}`;
     } else {
-      enqueueWildPlayBanner('uncaught_3rd', prevBatterName);
+      enqueueWildPlayBanner('uncaught_3rd', prevBatterName, undefined, 0);
     }
   } else if (outcome === 'STRIKEOUT') {
     if (!match.isGameOver) {
@@ -1117,13 +1138,13 @@ function enqueuePostAbsOutcome(opts: {
     if (match.isGameOver && !match.mercyTriggered) {
       walkOffSub = overturned ? t('callAbsPassedBallSub') : t('callPassedBall');
     } else {
-      enqueueWildPlayBanner('passed_ball', prevBatterName, overturned ? t('callAbsPassedBallSub') : undefined);
+      enqueueWildPlayBanner('passed_ball', prevBatterName, overturned ? t('callAbsPassedBallSub') : undefined, 0);
     }
   } else if (outcome === 'WILD_PITCH') {
     if (match.isGameOver && !match.mercyTriggered) {
       walkOffSub = overturned ? t('callAbsWildPitchSub') : t('callWildPitch');
     } else {
-      enqueueWildPlayBanner('wild_pitch', prevBatterName, overturned ? t('callAbsWildPitchSub') : undefined);
+      enqueueWildPlayBanner('wild_pitch', prevBatterName, overturned ? t('callAbsWildPitchSub') : undefined, 0);
     }
   } else if (outcome === 'OUT_OVERTURNED' && !match.isGameOver) {
     presentationQueue.push({
@@ -1204,6 +1225,24 @@ interface BounceRing {
   infield: boolean;
 }
 let bounceRings: BounceRing[] = [];
+
+/** Ring under a landed ball once a fielder is close: red = handled (out/block), green = he cannot get it. */
+function getFieldingRing(): { pos: FieldV3; handled: boolean } | null {
+  let pos: FieldV3 | null = null;
+  let handled = false;
+  if (phase === 'batted_flight' && capVisible && !battedCaughtInAir && !stoppedRetrieve.pickedUp && activeBatted) {
+    const landed = battedBouncesPlayed > 0 || (activeBatted.firstLandingPos !== null && battedFlightTime > 0.25);
+    if (landed && capPos[1] <= 0.12) {
+      pos = capPos;
+      handled = Boolean(activeCatchInfo && (activeCatchInfo.caught || activeCatchInfo.blocked));
+    }
+  } else if (stoppedRetrieve.active && !stoppedRetrieve.pickedUp) {
+    pos = stoppedRetrieve.target;
+  }
+  if (!pos) return null;
+  const near = allFielders.some((f) => Math.hypot(f.pos[0] - pos![0], f.pos[2] - pos![2]) <= 3.2);
+  return near ? { pos: [pos[0], 0.015, pos[2]], handled } : null;
+}
 let fenceImpact: { pos: FieldV3; ageSec: number; maxAgeSec: number } | null = null;
 let hrBurst: { pos: FieldV3; ageSec: number; maxAgeSec: number } | null = null;
 let fenceFlashAngle: number | undefined = undefined;
@@ -2975,7 +3014,7 @@ function showGameOverModal(): void {
 
   const endReasonText =
     match.endReason === 'disconnect'
-      ? t('labelDisconnectWin')
+      ? disconnectWinText()
       : match.endReason === 'resign'
         ? t('labelResignWin')
         : match.endReason === 'pitch_clock'
@@ -3011,7 +3050,7 @@ function showGameOverModal(): void {
     hr: t('bsHr'),
     diff10: t('bsDiff10'),
     coldGameLabel: t('labelColdGame'),
-    disconnectWinLabel: t('labelDisconnectWin'),
+    disconnectWinLabel: disconnectWinText(),
     disconnectTag: t('labelDisconnectTag'),
     resignWinLabel: t('labelResignWin'),
     resignTag: t('labelResignTag'),
@@ -3879,6 +3918,7 @@ function enterOnlineMatch(
   onlineTurnState = msg.turnState;
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
+  disconnectCause = null;
   match = msg.match;
   visualInning = match.inning;
   visualHalf = match.half;
@@ -3943,6 +3983,7 @@ function enterSpectateMatch(msg: Extract<ServerMessage, { type: 'spectate_sync' 
   onlineTurnState = msg.turnState;
   pendingOnlineResult = null;
   queuedOnlinePitchResult = null;
+  disconnectCause = null;
   match = msg.match;
   visualInning = match.inning;
   visualHalf = match.half;
@@ -4463,6 +4504,7 @@ onlineClient.onMessage((msg) => {
       pendingOnlineResult = null;
       resetOnlineFreezeState();
       match = msg.match;
+      disconnectCause = msg.disconnectCause ?? null;
       if (!match.endReason) {
         if (msg.reason === 'disconnect_timeout') match.endReason = 'disconnect';
         else if (msg.reason === 'resign') match.endReason = 'resign';
@@ -5693,6 +5735,7 @@ function step(now: number): void {
     fieldingFx: fieldingFxList,
     fenceItems,
     battedEffects: {
+      fieldingRing: getFieldingRing(),
       bounceRings,
       fenceImpact,
       hrBurst,

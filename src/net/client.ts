@@ -239,7 +239,7 @@ export type ServerMessage =
   | PitchResultMsg
   | { type: 'opponent_disconnected'; graceSec: number }
   | { type: 'opponent_reconnected' }
-  | { type: 'match_over'; winner: OnlineSide; reason: string; match: MatchState }
+  | { type: 'match_over'; winner: OnlineSide; reason: string; disconnectCause?: string; match: MatchState }
   | { type: 'room_list'; rooms: LiveRoomInfo[] }
   | {
       type: 'spectate_sync';

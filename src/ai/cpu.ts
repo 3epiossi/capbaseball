@@ -331,6 +331,14 @@ function clampFielderInsideFence(x: number, z: number, role: FielderId = 'LF'): 
       cx *= scale;
       cz *= scale;
     }
+  } else if (cz < 0) {
+    // Foul territory: stop at the fence extension line (perpendicular to the foul line) instead of running through it
+    const d = (Math.abs(cx) - cz) * Math.SQRT1_2;
+    if (d > MAX_FIELDER_R) {
+      const k = (d - MAX_FIELDER_R) * Math.SQRT1_2;
+      cx -= Math.sign(cx) * k;
+      cz += k;
+    }
   }
   return [cx, cz];
 }
@@ -366,6 +374,8 @@ export function updateOutfielders(
           retrieverId = cand.id;
         }
       }
+      // The retriever stops at the fence / fence extension instead of running through it to a ball lying behind it
+      if (retrieverId) retrieverGoal = clampFielderInsideFence(gx, gz, retrieverId);
     }
   }
 
@@ -468,7 +478,9 @@ export function updateOutfielders(
       const d = Math.hypot(dx, dz);
       const distToCap = Math.hypot(capPos[0] - f.pos[0], capPos[2] - f.pos[2]);
 
-      if (distToCap <= 0.48 && (!airborne || capPos[1] <= 0.42)) {
+      // Reaching over the wall: at the clamped goal with the ball just behind it still counts as picking it up
+      const reachesBall = distToCap <= 0.48 || (d <= 0.08 && distToCap <= 3.0);
+      if (reachesBall && (!airborne || capPos[1] <= 0.42)) {
         if (f.anim !== 'catch_ground') {
           f.anim = 'catch_ground';
           f.animTime = 0;

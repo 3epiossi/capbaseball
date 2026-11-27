@@ -674,6 +674,7 @@ describe('Online Multiplayer Server Integration', () => {
       const over = await guest.nextMsg((m) => m.type === 'match_over', 2000);
       expect(over.winner).toBe('away');
       expect(over.reason).toBe('disconnect_timeout');
+      expect(over.disconnectCause).toBe('client_closed');
       expect(shortSrv.rooms.has(code)).toBe(false);
     } finally {
       await guest.close();

@@ -14,6 +14,7 @@ import {
 } from './physics/batted';
 import { GameCamera } from './render/camera';
 import { buildFenceDepthItems, drawGymBackground, type PassLineState } from './render/gymScene';
+import { createTranslator } from './i18n/index';
 import { PASS_LINE_Z } from './rules/field';
 import {
   drawWorldEntities,
@@ -42,9 +43,13 @@ type ScenarioId =
   | 'bat_99_swing'
   | 'bat_18_swing'
   | 'bat_99_ready'
-  | 'bat_18_ready';
+  | 'bat_18_ready'
+  | 'rf_through'
+  | 'foul_wall_1b'
+  | 'foul_wall_3b'
+  | 'bat_switch';
 
-type ForcedPose = 'auto' | 'idle' | 'run' | 'catch_fly' | 'catch_ground' | 'catch_wp';
+type ForcedPose = 'auto' | 'idle' | 'run' | 'run_front' | 'run_back' | 'catch_fly' | 'catch_ground' | 'catch_wp';
 type CamOverride = 'auto' | 'home' | 'wild' | 'outfield';
 
 interface FieldingFx {
@@ -63,12 +68,18 @@ const speedVal = document.getElementById('val-speed') as HTMLElement;
 const btnPause = document.getElementById('btn-pause') as HTMLButtonElement;
 const btnStep = document.getElementById('btn-step') as HTMLButtonElement;
 const btnReplay = document.getElementById('btn-replay') as HTMLButtonElement;
+const timelineOut = document.getElementById('timeline-out') as HTMLElement;
+const cardEl = document.getElementById('card-preview') as HTMLElement;
+const cardDelayInput = document.getElementById('in-card-delay') as HTMLInputElement;
+const cardDelayVal = document.getElementById('val-card-delay') as HTMLElement;
 const btnTeamYellow = document.getElementById('btn-team-yellow') as HTMLButtonElement;
 const btnTeamBlack = document.getElementById('btn-team-black') as HTMLButtonElement;
 
 canvas.width = 480;
 canvas.height = 270;
 ctx.imageSmoothingEnabled = false;
+
+const tr = createTranslator('zh-TW');
 
 const cam = new GameCamera();
 cam.setViewport(canvas.width, canvas.height);
@@ -130,6 +141,21 @@ let capVisible = false;
 
 let hitFx: { active: boolean; pos: FieldV3; kind: 'hit' | 'hr_burst'; elapsedSec: number } | null = null;
 let fieldingFxList: FieldingFx[] = [];
+
+// Timeline of the current scenario (relative seconds) so the order of animation / camera / card / handedness steps is visible
+let labEvents: { t: number; text: string }[] = [];
+let labT0 = 0;
+let cardDelaySec = 0.9;
+let cardPending: { title: string; sub: string } | null = null;
+let cardHideAt = 0;
+let switchFlow: { start: number; switched: boolean; resultLogged: boolean } | null = null;
+let landingLogged = false;
+let maxExtDist = 0;
+const FOUL_EXT_LIMIT_M = 12.45; // MAX_FIELDER_RADIUS_M: fielders must stay inside this on the foul-side fence extension
+
+function logEv(text: string): void {
+  labEvents.push({ t: timeSec - labT0, text });
+}
 let bounceRings: { pos: FieldV3; ageSec: number; maxAgeSec: number; infield: boolean }[] = [];
 
 function spawnFx(pos: FieldV3, kind: 'catch_pop' | 'dive_dust'): void {
@@ -142,6 +168,13 @@ function spawnFx(pos: FieldV3, kind: 'catch_pop' | 'dive_dust'): void {
 }
 
 function clearDynamicPlay(): void {
+  labEvents = [];
+  labT0 = timeSec;
+  cardPending = null;
+  cardEl.hidden = true;
+  switchFlow = null;
+  landingLogged = false;
+  maxExtDist = 0;
   activeBatted = null;
   battedTime = 0;
   interception = null;
@@ -266,6 +299,25 @@ function launchFieldingScenario(
   hitFx = { active: true, pos: [0, 0.75, 0], kind: 'hit', elapsedSec: 0 };
   capVisible = true;
   capPos = [0, 0.72, 0];
+  logEv(`擊球（${kind === 'caught' ? '接殺' : kind === 'blocked' ? '擋下' : '漏接'}預定 ${targetT.toFixed(2)}s）`);
+}
+
+/** Batted ball with no planned interception: the nearest fielder chases it (foul balls, grounders that get through). */
+function launchFreeBall(id: ScenarioId, label: string, vel: [number, number, number], seed: number): void {
+  lastScenario = id;
+  scenarioLabel = label;
+  forcedPose = 'auto';
+  syncPoseButtons();
+  clearDynamicPlay();
+  activeBatted = simulateBattedCap({ position: [0, 0.68, -0.2], velocity: vel, spinRpm: 320, seed });
+  interception = null;
+  batterAnim = 'swing_contact';
+  batterAnimTime = 0;
+  batterSwinging = true;
+  hitFx = { active: true, pos: [0, 0.72, 0], kind: 'hit', elapsedSec: 0 };
+  capVisible = true;
+  capPos = [0, 0.68, -0.2];
+  logEv('擊球（無人可處理，最近守備員追球）');
 }
 
 function launchWildScenario(id: ScenarioId, label: string, sideDir: 1 | -1, isD3s: boolean): void {
@@ -296,6 +348,10 @@ function launchWildScenario(id: ScenarioId, label: string, sideDir: 1 | -1, isD3
   capVisible = true;
   capPos = [...wildPos];
   spawnFx([catcherFielder.pos[0], 0.02, catcherFielder.pos[2]], 'dive_dust');
+  logEv('暴投進壘，捕手開始撲擋、鏡頭拉遠');
+  cardPending = isD3s
+    ? { title: tr('callUncaught3rd'), sub: tr('callDropped3rd') }
+    : { title: tr('callWildPitch'), sub: tr('callWildPitchSub') };
   if (camOverride === 'auto') {
     cam.setWildPitchTarget([catcherFielder.pos[0] + sideDir * 0.45, 0.35, 1.65]);
   }
@@ -352,6 +408,28 @@ function triggerScenario(id: ScenarioId): void {
       capPos = [0, 0.68, -0.2];
       break;
     }
+    case 'rf_through':
+      launchFreeBall(id, 'RF 外野滾地穿越（綠圈：處理不到）', [5.2, 1.0, -12.5], 4242);
+      break;
+    case 'foul_wall_1b':
+      launchFreeBall(id, '界外球深入一壘側牆邊（檢查守備員不穿牆）', [17, 5, -3.5], 901);
+      break;
+    case 'foul_wall_3b':
+      launchFreeBall(id, '界外球深入三壘側牆邊（檢查守備員不穿牆）', [-17, 5, -3.5], 902);
+      break;
+    case 'bat_switch':
+      lastScenario = id;
+      scenarioLabel = '連續兩位打者：#99 左打 → #18 右打（換手等結果動畫後）';
+      forcedPose = 'auto';
+      syncPoseButtons();
+      clearDynamicPlay();
+      batterHandedness = 'left';
+      batterAnim = 'load';
+      batterAnimTime = 0;
+      batterSwinging = true;
+      switchFlow = { start: timeSec, switched: false, resultLogged: false };
+      logEv('#99 左打揮棒');
+      break;
     case 'wp_right':
       launchWildScenario(id, '暴投往右 → 鏡頭拉遠＋捕手右撲', 1, false);
       break;
@@ -429,8 +507,39 @@ function applyCameraOverride(): void {
   }
 }
 
+function extDist(f: OutfielderActor): number {
+  const x = f.pos[0];
+  const z = f.pos[2];
+  return z < 0 && Math.abs(x) > -z ? (Math.abs(x) - z) * Math.SQRT1_2 : 0;
+}
+
 function stepSim(dt: number): void {
   timeSec += dt;
+
+  if (cardPending && timeSec - labT0 >= cardDelaySec) {
+    cardEl.innerHTML = `<b>${cardPending.title}</b><small>${cardPending.sub}</small>`;
+    cardEl.hidden = false;
+    cardHideAt = timeSec + 1.8;
+    cardPending = null;
+    logEv('字卡顯示');
+  }
+  if (!cardEl.hidden && timeSec >= cardHideAt) cardEl.hidden = true;
+
+  if (switchFlow) {
+    const el = timeSec - switchFlow.start;
+    if (!switchFlow.resultLogged && el >= 0.6) {
+      switchFlow.resultLogged = true;
+      logEv('結果動畫開始（打者仍是左打）');
+    }
+    if (!switchFlow.switched && el >= 2.0) {
+      switchFlow.switched = true;
+      batterHandedness = 'right';
+      batterAnim = 'ready';
+      batterSwinging = false;
+      logEv('結果動畫結束 → 換成 #18 右打');
+    }
+  }
+  for (const f of allFielders) maxExtDist = Math.max(maxExtDist, extDist(f));
 
   // Forced pose showcase mode (instant side-by-side proportion check!)
   if (forcedPose !== 'auto') {
@@ -525,6 +634,10 @@ function stepSim(dt: number): void {
       cam.setFollowTarget(capPos);
     }
 
+    if (!landingLogged && battedTime > 0.25 && capPos[1] <= 0.04) {
+      landingLogged = true;
+      logEv('球落地');
+    }
     const landPt = activeBatted.firstLandingPos ?? activeBatted.stoppedPos;
     const landingTarget: FieldV3 = [landPt[0], 0, landPt[2]];
     const finalTarget: FieldV3 = activeBatted.stoppedPos;
@@ -545,6 +658,7 @@ function stepSim(dt: number): void {
       stoppedPickupDone = true;
       capVisible = false;
       spawnFx([capPos[0], 0.02, capPos[2]], 'dive_dust');
+      logEv('守備員追上並撿球');
     }
 
     // Pre-catch anticipation 0.26s before contact
@@ -577,6 +691,7 @@ function stepSim(dt: number): void {
 
     if (interception && !interceptResolved && battedTime >= interception.targetTimeSec) {
       interceptResolved = true;
+      logEv(`守備員${interceptKind === 'caught' ? '接殺' : interceptKind === 'blocked' ? '擋下' : '漏接'}（${interception.fielderId}）`);
       const f = findActor(interception.fielderId);
       const hitP = interception.targetPos;
       const isFly = !interception.isBlock && (airborne || hitP[1] >= 0.45);
@@ -639,6 +754,7 @@ function stepSim(dt: number): void {
         stoppedPickupDone = true;
         capVisible = false;
         spawnFx([stoppedTarget[0], 0.02, stoppedTarget[2]], 'dive_dust');
+        logEv('球停下後守備員撿起');
         catchHoldTimer = Math.max(catchHoldTimer, 0.72);
       }
     } else {
@@ -663,6 +779,7 @@ function stepSim(dt: number): void {
     if (!wildCrossed && wildPos[2] >= PASS_LINE_Z) {
       wildCrossed = true;
       wildCrossX = wildPos[0];
+      logEv('瓶蓋越過捕逸線');
       spawnFx([wildCrossX, 0.04, PASS_LINE_Z], 'catch_pop');
       spawnFx([wildCrossX, 0.02, PASS_LINE_Z], 'dive_dust');
     }
@@ -711,6 +828,7 @@ function stepSim(dt: number): void {
     if (wildElapsed >= wildDuration) {
       wildActive = false;
       capVisible = false;
+      logEv('撲擋演出結束，鏡頭回位');
       if (camOverride === 'auto') cam.setWildPitchTarget(null);
       resetOutfielders(allFielders);
     }
@@ -722,6 +840,25 @@ function stepSim(dt: number): void {
 
   if (camOverride !== 'auto') applyCameraOverride();
   cam.update(dt);
+}
+
+/** Red = the fielder handles the landed ball, green = he cannot (mirrors getFieldingRing in main.ts). */
+function labFieldingRing(): { pos: FieldV3; handled: boolean } | null {
+  let pos: FieldV3 | null = null;
+  let handled = false;
+  if (activeBatted && capVisible && !stoppedPickupDone) {
+    if (battedTime >= firstLandingTime(activeBatted) && capPos[1] <= 0.12) {
+      pos = capPos;
+      handled = interception !== null && interceptKind !== 'bobbled';
+    }
+  } else if (stoppedRetrieveActive && !stoppedPickupDone) {
+    pos = stoppedTarget;
+  }
+  if (!pos) return null;
+  const p = pos;
+  return allFielders.some((f) => Math.hypot(f.pos[0] - p[0], f.pos[2] - p[2]) <= 3.2)
+    ? { pos: [p[0], 0.015, p[2]], handled }
+    : null;
 }
 
 function render(): void {
@@ -797,6 +934,7 @@ function render(): void {
     fieldingFx: fieldingFxList,
     fenceItems,
     battedEffects: {
+      fieldingRing: labFieldingRing(),
       bounceRings,
       fenceImpact: null,
       hrBurst: null,
@@ -813,7 +951,13 @@ function render(): void {
     `P : ${pitcherFielder.anim} (${pitcherFielder.animTime.toFixed(2)}s) field=${pitcherActive}\n` +
     `C : ${catcherFielder.anim} (${catcherFielder.animTime.toFixed(2)}s) vis=${catcherVisible}\n` +
     `AB: ${batterHandedness === 'left' ? '#99 LHB' : '#18 RHB'} · ${batterAnim} (α=${batterAlpha.toFixed(2)})\n` +
-    `FX: ${fieldingFxList.map((x) => x.kind).join(', ') || 'none'}`;
+    `FX: ${fieldingFxList.map((x) => x.kind).join(', ') || 'none'}\n` +
+    `界外延伸線距離最大: ${maxExtDist.toFixed(2)} m（上限 ${FOUL_EXT_LIMIT_M}）${maxExtDist > FOUL_EXT_LIMIT_M + 0.01 ? '  穿牆!' : ''}`;
+  timelineOut.textContent =
+    labEvents
+      .slice(-14)
+      .map((e) => `+${e.t.toFixed(2)}s  ${e.text}`)
+      .join('\n') || '—';
 }
 
 function updatePauseBtn(): void {
@@ -830,7 +974,10 @@ function syncPoseButtons(): void {
 document.querySelectorAll<HTMLButtonElement>('.sc-btn[data-sc]').forEach((btn) => {
   btn.addEventListener('click', () => {
     const id = btn.dataset.sc as ScenarioId;
-    if (id) triggerScenario(id);
+    if (id) {
+      triggerScenario(id);
+      saveHash();
+    }
   });
 });
 
@@ -840,6 +987,7 @@ document.querySelectorAll<HTMLButtonElement>('.pose-btn').forEach((btn) => {
     scenarioLabel = forcedPose === 'auto' ? '正常模擬' : `原地比例對照: ${forcedPose}`;
     clearDynamicPlay();
     syncPoseButtons();
+    saveHash();
   });
 });
 
@@ -849,6 +997,7 @@ document.querySelectorAll<HTMLButtonElement>('.cam-btn').forEach((btn) => {
     document.querySelectorAll<HTMLButtonElement>('.cam-btn').forEach((b) => {
       b.classList.toggle('active', b.dataset.cam === camOverride);
     });
+    saveHash();
     if (camOverride === 'auto' && !activeBatted && !wildActive && catchHoldTimer <= 0) {
       cam.setFollowTarget(null);
       cam.setWildPitchTarget(null);
@@ -863,6 +1012,7 @@ btnTeamYellow.addEventListener('click', () => {
   battingTeam = 'black';
   btnTeamYellow.classList.add('active');
   btnTeamBlack.classList.remove('active');
+  saveHash();
 });
 
 btnTeamBlack.addEventListener('click', () => {
@@ -870,12 +1020,30 @@ btnTeamBlack.addEventListener('click', () => {
   battingTeam = 'yellow';
   btnTeamBlack.classList.add('active');
   btnTeamYellow.classList.remove('active');
+  saveHash();
 });
+
+function saveHash(): void {
+  const p = new URLSearchParams({
+    sc: lastScenario,
+    cam: camOverride,
+    speed: playbackSpeed.toFixed(2),
+    team: pitchingTeam,
+    pose: forcedPose,
+    card: cardDelaySec.toFixed(1),
+  });
+  try {
+    history.replaceState(null, '', `#${p.toString()}`);
+  } catch {
+    // ignore (sandboxed iframe)
+  }
+}
 
 function setSpeed(v: number): void {
   playbackSpeed = Math.max(0.1, Math.min(1.0, v));
   speedInput.value = playbackSpeed.toFixed(2);
   speedVal.textContent = `${playbackSpeed.toFixed(2)}x`;
+  saveHash();
   document.querySelectorAll<HTMLButtonElement>('.sp-btn').forEach((b) => {
     b.classList.toggle('active', Math.abs(Number(b.dataset.speed) - playbackSpeed) < 0.03);
   });
@@ -884,6 +1052,12 @@ function setSpeed(v: number): void {
 speedInput.addEventListener('input', () => setSpeed(Number(speedInput.value)));
 document.querySelectorAll<HTMLButtonElement>('.sp-btn').forEach((btn) => {
   btn.addEventListener('click', () => setSpeed(Number(btn.dataset.speed)));
+});
+
+cardDelayInput.addEventListener('input', () => {
+  cardDelaySec = Number(cardDelayInput.value);
+  cardDelayVal.textContent = `${cardDelaySec.toFixed(2)}s`;
+  saveHash();
 });
 
 btnPause.addEventListener('click', () => {
@@ -899,6 +1073,26 @@ btnStep.addEventListener('click', () => {
 });
 
 btnReplay.addEventListener('click', () => triggerScenario(lastScenario));
+
+function applyHash(): ScenarioId {
+  const p = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const want = p.get('sc');
+  if (want) lastScenario = want as ScenarioId; // keep saveHash() from overwriting it while the other options are applied
+  if (p.get('team') === 'black') btnTeamBlack.click();
+  const cam_ = p.get('cam');
+  if (cam_) document.querySelector<HTMLButtonElement>(`.cam-btn[data-cam="${cam_}"]`)?.click();
+  const sp = Number(p.get('speed'));
+  if (sp > 0) setSpeed(sp);
+  const cd = Number(p.get('card'));
+  if (p.has('card') && Number.isFinite(cd)) {
+    cardDelayInput.value = String(cd);
+    cardDelayInput.dispatchEvent(new Event('input'));
+  }
+  const pose = p.get('pose');
+  if (pose && pose !== 'auto') document.querySelector<HTMLButtonElement>(`.pose-btn[data-pose="${pose}"]`)?.click();
+  const sc = p.get('sc');
+  return (sc && document.querySelector(`.sc-btn[data-sc="${sc}"]`) ? sc : 'rf_ground') as ScenarioId;
+}
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
@@ -929,6 +1123,7 @@ function loop(ts: number): void {
 
 loadSprites().then((loaded) => {
   bank = loaded;
-  triggerScenario('rf_ground');
+  const initial = applyHash();
+  if (forcedPose === 'auto') triggerScenario(initial);
   requestAnimationFrame(loop);
 });

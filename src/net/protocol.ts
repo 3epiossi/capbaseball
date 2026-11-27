@@ -721,6 +721,7 @@ export function encodeServerMsgV2(msg: Record<string, unknown>): Record<string, 
         t: 'mo',
         w: msg.winner,
         rs: msg.reason,
+        ...(msg.disconnectCause ? { dc: msg.disconnectCause } : {}),
         cm: packMatch(msg.match as MatchState, { delta: true }),
       };
     case 'session_status':
@@ -1014,6 +1015,7 @@ export function decodeServerMsg(
         type: 'match_over',
         winner: raw.w,
         reason: raw.rs,
+        ...(typeof raw.dc === 'string' ? { disconnectCause: raw.dc } : {}),
         match: unpackMatch(raw.cm as CompactMatch, ctx),
       };
     case 'scs':
