@@ -569,6 +569,9 @@ export const MONITOR_JS = `(() => {
     in_progress: '對戰進行中',
   };
 
+  const DC_NAMES = { network_lost: '網路中斷', page_left: '離開頁面', client_closed: '主動關閉', dead_pong: '無回應', unknown: '未知' };
+  const dcName = (k) => DC_NAMES[k] || (k.startsWith('code_') ? '關閉碼 ' + k.slice(5) : k);
+
   const DEVICE_BADGE = {
     mobile: '手機',
     tablet: '平板',
@@ -1029,10 +1032,9 @@ export const MONITOR_JS = `(() => {
       );
       setText('a-stalled', (rh.stalledRooms || 0) + ' 間 / ' + (rh.disconnectedRooms || 0) + ' 間');
       setText('a-clocks', (gp.pitchClockViolations || out.clockViolations || 0) + ' / ' + (gp.swingTimeouts || 0));
-      const dcNames = { network_lost: '網路中斷', page_left: '離開頁面', client_closed: '主動關閉', dead_pong: '無回應', unknown: '未知' };
       setText(
         'a-dccause',
-        Object.entries(gp.disconnectCauses || {}).map(([k, v]) => (dcNames[k] || k) + ' ' + v).join(' / ') || '0'
+        Object.entries(gp.disconnectCauses || {}).map(([k, v]) => dcName(k) + ' ' + v).join(' / ') || '0'
       );
       setText(
         'a-reconn',
@@ -1242,7 +1244,7 @@ export const MONITOR_JS = `(() => {
             td((m.awayWalks ?? 0) + '/' + (m.homeWalks ?? 0)),
             td(m.pitches ?? m.totalPitches ?? '--'),
             td((m.durationSec ?? 0) + '秒'),
-            td(REASON_NAMES[rKey] || rKey)
+            td((REASON_NAMES[rKey] || rKey) + (m.disconnectCause ? '（' + dcName(m.disconnectCause) + '）' : ''))
           );
           mBody.appendChild(tr);
         }

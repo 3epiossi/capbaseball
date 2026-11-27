@@ -353,6 +353,7 @@ export function updateOutfielders(
   flightTimeSec = 1.0,
   interception: FielderInterceptionTarget | null = null,
   finalTarget: FieldV3 | null = null,
+  ballStopped = false,
 ): boolean {
   let didPickup = false;
   let retrieverId: FielderId | null = null;
@@ -387,23 +388,16 @@ export function updateOutfielders(
     }
 
     if (!capPos || !landingTarget || alreadyCaught) {
-      // Gently return home or idle
-      const dx = f.homePos[0] - f.pos[0];
-      const dz = f.homePos[2] - f.pos[2];
-      const d = Math.hypot(dx, dz);
-      if (d > 0.15) {
-        const step = Math.min(d, OUTFIELDER_SPRINT_SPEED * 0.75 * dt);
-        const [cx, cz] = clampFielderInsideFence(f.pos[0] + (dx / d) * step, f.pos[2] + (dz / d) * step, f.id);
-        f.pos[0] = cx;
-        f.pos[2] = cz;
-        f.anim = runAnimFor(dx, dz);
-        f.flipX = Math.abs(dx) > 0.06 ? dx < 0 : defaultIdleFlipX(f.pos[0]);
-      } else {
-        f.pos[0] = f.homePos[0];
-        f.pos[2] = f.homePos[2];
-        f.anim = 'idle';
-        f.flipX = defaultIdleFlipX(f.homePos[0]);
-      }
+      // Ball is dead (caught / picked up): nobody keeps running, stand still where you are
+      f.anim = 'idle';
+      f.flipX = defaultIdleFlipX(f.pos[0]);
+      continue;
+    }
+
+    // Ball lying still: only the retriever keeps moving, everyone else stands still immediately
+    if (ballStopped && retrieverId !== f.id) {
+      f.anim = 'idle';
+      f.flipX = Math.abs(capPos[0] - f.pos[0]) > 0.12 ? capPos[0] < f.pos[0] : defaultIdleFlipX(f.pos[0]);
       continue;
     }
 

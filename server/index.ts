@@ -2123,10 +2123,22 @@ export function startServer(
       return;
     }
 
-    // Support serving both at root "/" and subpath "/capbaseball/..."
+    // 3epiossi.com/field-lab/ is a dedicated public entry for the field lab; trailing slash keeps ./assets relative
+    if (isGetOrHead && parsedUrl.pathname === '/field-lab') {
+      monitor.recordHttp(301, 0);
+      res.writeHead(301, { Location: `/field-lab/${parsedUrl.search}` });
+      res.end();
+      return;
+    }
+
+    // Support serving both at root "/" and subpath "/capbaseball/..." or "/field-lab/..."
     const normalizedPath = parsedUrl.pathname.startsWith('/capbaseball/')
       ? parsedUrl.pathname.slice('/capbaseball'.length)
-      : parsedUrl.pathname;
+      : parsedUrl.pathname === '/field-lab/'
+        ? '/field-lab.html'
+        : parsedUrl.pathname.startsWith('/field-lab/')
+          ? parsedUrl.pathname.slice('/field-lab'.length)
+          : parsedUrl.pathname;
 
     if (
       isGetOrHead &&

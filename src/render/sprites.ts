@@ -237,6 +237,8 @@ export interface DrawEntityListParams {
     }[];
     /** Follows a landed ball near a fielder: red = fielder handles it, green = he cannot. */
     fieldingRing?: { pos: FieldV3; handled: boolean } | null;
+    /** Flash under the fielder's feet when the ball touches him: red = batter out, green = not. */
+    touchRing?: { pos: FieldV3; handled: boolean; ageSec: number; maxAgeSec: number } | null;
     fenceImpact: {
       pos: FieldV3;
       ageSec: number;
@@ -534,6 +536,21 @@ export function drawWorldEntities(
         items.push({
           depth: pr.depth + 0.08,
           draw: () => drawFloorRing3D(ctx, cam, fr.pos, rM, col, 3),
+        });
+      }
+    }
+
+    const tr = params.battedEffects.touchRing;
+    if (tr) {
+      const pr = cam.project(tr.pos);
+      if (pr.depth > 0.2) {
+        const k = tr.ageSec / tr.maxAgeSec;
+        const rM = 0.35 + 0.35 * k;
+        const a = (1 - k).toFixed(2);
+        const col = tr.handled ? `rgba(239, 68, 68, ${a})` : `rgba(74, 222, 128, ${a})`;
+        items.push({
+          depth: pr.depth + 0.08,
+          draw: () => drawFloorRing3D(ctx, cam, tr.pos, rM, col, 4),
         });
       }
     }

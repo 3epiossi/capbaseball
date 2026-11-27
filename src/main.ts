@@ -1226,22 +1226,44 @@ interface BounceRing {
 }
 let bounceRings: BounceRing[] = [];
 
-/** Ring under a landed ball once a fielder is close: red = handled (out/block), green = he cannot get it. */
+let touchRing: { pos: FieldV3; handled: boolean; ageSec: number; maxAgeSec: number } | null = null;
+
+/** Same verdict the match will apply: only an out counts as red. */
+function battedIsOut(): boolean {
+  return activeBatted !== null && judgeBattedCap(activeBatted, { caughtInAir: Boolean(activeCatchInfo?.caught) }) === 'OUT';
+}
+
+function startTouchRing(pos: FieldV3): void {
+  touchRing = { pos: [pos[0], 0.015, pos[2]], handled: battedIsOut(), ageSec: 0, maxAgeSec: 0.8 };
+}
+
+let ringLanded = false;
+let ringOutfield = false;
+let ringEndAtMs = 0;
+let ringLastPos: FieldV3 = [0, 0, 0];
+
+/** Ring under the ball from its first floor touch until fielding ends: red = handled (caught/blocked/picked up), green = not handled. */
 function getFieldingRing(): { pos: FieldV3; handled: boolean } | null {
-  let pos: FieldV3 | null = null;
-  let handled = false;
-  if (phase === 'batted_flight' && capVisible && !battedCaughtInAir && !stoppedRetrieve.pickedUp && activeBatted) {
-    const landed = battedBouncesPlayed > 0 || (activeBatted.firstLandingPos !== null && battedFlightTime > 0.25);
-    if (landed && capPos[1] <= 0.12) {
-      pos = capPos;
-      handled = Boolean(activeCatchInfo && (activeCatchInfo.caught || activeCatchInfo.blocked));
-    }
-  } else if (stoppedRetrieve.active && !stoppedRetrieve.pickedUp) {
-    pos = stoppedRetrieve.target;
+  const inFlight = phase === 'batted_flight' && capVisible && activeBatted !== null && !battedCaughtInAir;
+  if (!inFlight && !stoppedRetrieve.active) {
+    ringLanded = false;
+    ringOutfield = false;
+    ringEndAtMs = 0;
+    return null;
   }
-  if (!pos) return null;
-  const near = allFielders.some((f) => Math.hypot(f.pos[0] - pos![0], f.pos[2] - pos![2]) <= 3.2);
-  return near ? { pos: [pos[0], 0.015, pos[2]], handled } : null;
+  if (!ringLanded) {
+    const touched = battedBouncesPlayed > 0 || (activeBatted?.firstLandingPos != null && battedFlightTime > 0.25);
+    if (stoppedRetrieve.active || (inFlight && touched && capPos[1] <= 0.12)) ringLanded = true;
+    else return null;
+  }
+  const picked = stoppedRetrieve.pickedUp;
+  if (picked && ringEndAtMs === 0) ringEndAtMs = performance.now() + 600;
+  if (ringEndAtMs !== 0 && performance.now() > ringEndAtMs) return null;
+  if (!picked) ringLastPos = stoppedRetrieve.active ? stoppedRetrieve.target : capPos;
+  // Rule 5.07 A1: touching outfield floor makes it a hit, so the ring turns green for good.
+  if (capPos[1] <= 0.12 && !isInfield(ringLastPos[0], ringLastPos[2])) ringOutfield = true;
+  const handled = battedIsOut() && !ringOutfield;
+  return { pos: [ringLastPos[0], 0.015, ringLastPos[2]], handled };
 }
 let fenceImpact: { pos: FieldV3; ageSec: number; maxAgeSec: number } | null = null;
 let hrBurst: { pos: FieldV3; ageSec: number; maxAgeSec: number } | null = null;
@@ -2080,6 +2102,7 @@ function startMode(mode: GameMode, suppressStandbyNotice = false): void {
   absPromptTimer = 0;
   absReplay = null;
   bounceRings = [];
+  touchRing = null;
   fenceImpact = null;
   hrBurst = null;
   fenceFlashAlpha = 0;
@@ -2525,6 +2548,7 @@ function resolveContact(
   stoppedRetrieve.pickedUp = false;
   stoppedRetrieve.elapsedSec = 0;
   bounceRings = [];
+  touchRing = null;
   fenceImpact = null;
   hrBurst = null;
   fenceFlashAlpha = 0;
@@ -4149,6 +4173,7 @@ function applyOnlinePitchResult(msg: PitchResultMsg): void {
     stoppedRetrieve.pickedUp = false;
     stoppedRetrieve.elapsedSec = 0;
     bounceRings = [];
+    touchRing = null;
     fenceImpact = null;
     hrBurst = null;
     fenceFlashAlpha = 0;
@@ -4921,6 +4946,10 @@ function step(now: number): void {
       r.ageSec += dt;
       return r.ageSec < r.maxAgeSec;
     });
+    if (touchRing) {
+      touchRing.ageSec += dt;
+      if (touchRing.ageSec >= touchRing.maxAgeSec) touchRing = null;
+    }
     if (fenceImpact) {
       fenceImpact.ageSec += dt;
       if (fenceImpact.ageSec >= fenceImpact.maxAgeSec) fenceImpact = null;
@@ -5403,6 +5432,7 @@ function step(now: number): void {
         const f = findFielderActor(activeCatchInfo);
         const hitP = interception?.targetPos ?? capPos;
         const isFly = airborne || hitP[1] >= 0.45;
+        startTouchRing(hitP);
         if (f) {
           f.pos[0] = hitP[0];
           f.pos[2] = hitP[2];
@@ -5440,6 +5470,7 @@ function step(now: number): void {
         const f = findFielderActor(activeCatchInfo);
         const hitP = interception?.targetPos ?? capPos;
         const isFly = airborne || hitP[1] >= 0.45;
+        startTouchRing(hitP);
         if (f) {
           f.pos[0] = hitP[0];
           f.pos[2] = hitP[2];
@@ -5460,6 +5491,7 @@ function step(now: number): void {
         bobbledTriggered = true;
         const f = findFielderActor(activeCatchInfo);
         const hitP = interception?.targetPos ?? capPos;
+        startTouchRing(hitP);
         if (f) {
           f.pos[0] = hitP[0];
           f.pos[2] = hitP[2];
@@ -5493,6 +5525,7 @@ function step(now: number): void {
             stoppedRetrieve.elapsedSec,
             null,
             stoppedRetrieve.target,
+            true,
           );
           if (pickedUpStopped && !stoppedRetrieve.pickedUp) {
             stoppedRetrieve.pickedUp = true;
@@ -5507,6 +5540,8 @@ function step(now: number): void {
             f.animTime += dt;
             if (f.diveTimer > 0) {
               f.diveTimer = Math.max(0, f.diveTimer - dt);
+            } else if (f.anim.startsWith('run')) {
+              f.anim = 'idle'; // play is dead after a catch/block: stop running on the spot
             }
           }
         }
@@ -5736,6 +5771,7 @@ function step(now: number): void {
     fenceItems,
     battedEffects: {
       fieldingRing: getFieldingRing(),
+      touchRing,
       bounceRings,
       fenceImpact,
       hrBurst,

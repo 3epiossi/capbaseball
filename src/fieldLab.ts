@@ -15,7 +15,8 @@ import {
 import { GameCamera } from './render/camera';
 import { buildFenceDepthItems, drawGymBackground, type PassLineState } from './render/gymScene';
 import { createTranslator } from './i18n/index';
-import { PASS_LINE_Z } from './rules/field';
+import { PASS_LINE_Z, isInfield } from './rules/field';
+import { judgeBattedCap } from './rules/judge';
 import {
   drawWorldEntities,
   getFlyCatchHandPos,
@@ -192,6 +193,7 @@ function clearDynamicPlay(): void {
   capTrail = [];
   hitFx = null;
   fieldingFxList = [];
+  labTouchRing = null;
   bounceRings = [];
   pitcherPlaying = false;
   pitcherFrame = 0;
@@ -612,6 +614,11 @@ function stepSim(dt: number): void {
     fieldingFxList = fieldingFxList.filter((fx) => fx.elapsedSec < fx.durationSec);
   }
 
+  if (labTouchRing) {
+    labTouchRing.ageSec += dt;
+    if (labTouchRing.ageSec >= labTouchRing.maxAgeSec) labTouchRing = null;
+  }
+
   // Bounce rings tick
   if (bounceRings.length > 0) {
     for (const r of bounceRings) r.ageSec += dt;
@@ -694,6 +701,7 @@ function stepSim(dt: number): void {
       logEv(`守備員${interceptKind === 'caught' ? '接殺' : interceptKind === 'blocked' ? '擋下' : '漏接'}（${interception.fielderId}）`);
       const f = findActor(interception.fielderId);
       const hitP = interception.targetPos;
+      labTouchRing = { pos: [hitP[0], 0.015, hitP[2]], handled: labIsOut(), ageSec: 0, maxAgeSec: 0.8 };
       const isFly = !interception.isBlock && (airborne || hitP[1] >= 0.45);
       f.pos[0] = hitP[0];
       f.pos[2] = hitP[2];
@@ -749,6 +757,7 @@ function stepSim(dt: number): void {
         stoppedElapsed,
         null,
         stoppedTarget,
+        true,
       );
       if (picked && !stoppedPickupDone) {
         stoppedPickupDone = true;
@@ -761,6 +770,7 @@ function stepSim(dt: number): void {
       for (const f of allFielders) {
         f.animTime += dt;
         if (f.diveTimer > 0) f.diveTimer = Math.max(0, f.diveTimer - dt);
+        else if (f.anim.startsWith('run')) f.anim = 'idle';
       }
     }
     if (catchHoldTimer <= 0) {
@@ -842,23 +852,37 @@ function stepSim(dt: number): void {
   cam.update(dt);
 }
 
-/** Red = the fielder handles the landed ball, green = he cannot (mirrors getFieldingRing in main.ts). */
+let labTouchRing: { pos: FieldV3; handled: boolean; ageSec: number; maxAgeSec: number } | null = null;
+let labRingOutfield = false;
+
+/** Same verdict the match applies: only an out is red. */
+function labIsOut(): boolean {
+  return activeBatted !== null && judgeBattedCap(activeBatted, { caughtInAir: interceptKind === 'caught' }) === 'OUT';
+}
+
+let labRingLanded = false;
+let labRingEndAtMs = 0;
+let labRingLastPos: FieldV3 = [0, 0, 0];
+
+/** Red = handled (caught/blocked/picked up), green = not; from first floor touch until fielding ends (mirrors getFieldingRing in main.ts). */
 function labFieldingRing(): { pos: FieldV3; handled: boolean } | null {
-  let pos: FieldV3 | null = null;
-  let handled = false;
-  if (activeBatted && capVisible && !stoppedPickupDone) {
-    if (battedTime >= firstLandingTime(activeBatted) && capPos[1] <= 0.12) {
-      pos = capPos;
-      handled = interception !== null && interceptKind !== 'bobbled';
-    }
-  } else if (stoppedRetrieveActive && !stoppedPickupDone) {
-    pos = stoppedTarget;
+  const inFlight = activeBatted !== null && capVisible && !stoppedPickupDone;
+  if (!inFlight && !stoppedRetrieveActive) {
+    labRingLanded = false;
+    labRingOutfield = false;
+    labRingEndAtMs = 0;
+    return null;
   }
-  if (!pos) return null;
-  const p = pos;
-  return allFielders.some((f) => Math.hypot(f.pos[0] - p[0], f.pos[2] - p[2]) <= 3.2)
-    ? { pos: [p[0], 0.015, p[2]], handled }
-    : null;
+  if (!labRingLanded) {
+    if (stoppedRetrieveActive || (activeBatted && battedTime >= firstLandingTime(activeBatted) && capPos[1] <= 0.12)) labRingLanded = true;
+    else return null;
+  }
+  if (stoppedPickupDone && labRingEndAtMs === 0) labRingEndAtMs = performance.now() + 600;
+  if (labRingEndAtMs !== 0 && performance.now() > labRingEndAtMs) return null;
+  if (!stoppedPickupDone) labRingLastPos = stoppedRetrieveActive ? stoppedTarget : capPos;
+  if (capPos[1] <= 0.12 && !isInfield(labRingLastPos[0], labRingLastPos[2])) labRingOutfield = true;
+  const handled = labIsOut() && !labRingOutfield;
+  return { pos: [labRingLastPos[0], 0.015, labRingLastPos[2]], handled };
 }
 
 function render(): void {
@@ -935,6 +959,7 @@ function render(): void {
     fenceItems,
     battedEffects: {
       fieldingRing: labFieldingRing(),
+      touchRing: labTouchRing,
       bounceRings,
       fenceImpact: null,
       hrBurst: null,
